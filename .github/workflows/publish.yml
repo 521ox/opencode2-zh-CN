@@ -33,7 +33,7 @@ permissions:
   packages: write
 
 env:
-  OPENCODE_CHANNEL: ${{ (github.ref_name == 'v2' && 'tui-v2') || '' }}
+  OPENCODE_CHANNEL: ${{ (github.ref_name == 'v2' && 'v2') || '' }}
 
 jobs:
   version:
