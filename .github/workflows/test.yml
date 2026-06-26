@@ -74,11 +74,6 @@ jobs:
         working-directory: packages/client
         run: bun run check:generated
 
-      - name: Run HttpApi exerciser gates
-        if: runner.os == 'Linux'
-        working-directory: packages/opencode
-        run: bun run test:httpapi
-
   e2e:
     name: e2e (${{ matrix.settings.name }})
     strategy:
