@@ -25,6 +25,7 @@ import { createSignal, onCleanup, onMount } from "solid-js"
 import { createGlobalEmitter } from "@solid-primitives/event-bus"
 
 export type DataConnectionStatus = "connecting" | "connected" | "reconnecting"
+export type DataSessionStatus = "idle" | "running"
 
 export type DataEvent = V2Event
 type DataEventMap = { [T in DataEvent["type"]]: Extract<DataEvent, { type: T }> }
@@ -47,6 +48,7 @@ type Data = {
   }
   session: {
     info: Record<string, SessionV2Info>
+    status: Record<string, DataSessionStatus>
     message: Record<string, SessionMessage[]>
     permission: Record<string, PermissionV2Request[]>
     question: Record<string, QuestionV2Request[]>
@@ -75,6 +77,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       },
       session: {
         info: {},
+        status: {},
         message: {},
         permission: {},
         question: {},
@@ -88,7 +91,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     const sdk = useSDK()
     const events = createGlobalEmitter<DataEventMap>()
     const [defaultLocation, setDefaultLocation] = createSignal<LocationRef>({
-      directory: sdk.directory ?? process.cwd(),
+      directory: process.cwd(),
     })
     const messageIndex = new Map<string, Map<string, number>>()
 
@@ -179,6 +182,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           })
           break
         case "session.next.prompted": {
+          setStore("session", "status", event.data.sessionID, "running")
           message.update(event.data.sessionID, (draft, index) => {
             message.append(draft, index, {
               id: event.data.messageID,
@@ -215,6 +219,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           })
           break
         case "session.next.shell.started":
+          setStore("session", "status", event.data.sessionID, "running")
           message.update(event.data.sessionID, (draft, index) => {
             message.append(draft, index, {
               id: event.data.messageID,
@@ -227,6 +232,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           })
           break
         case "session.next.shell.ended":
+          setStore("session", "status", event.data.sessionID, "idle")
           message.update(event.data.sessionID, (draft, index) => {
             const match = message.activeShell(draft, event.data.callID)
             if (!match) return
@@ -235,6 +241,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           })
           break
         case "session.next.step.started":
+          setStore("session", "status", event.data.sessionID, "running")
           message.update(event.data.sessionID, (draft, index) => {
             if (index.has(event.data.assistantMessageID)) return
             const currentAssistant = message.activeAssistant(draft)
@@ -251,6 +258,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           })
           break
         case "session.next.step.ended":
+          setStore("session", "status", event.data.sessionID, event.data.finish === "tool-calls" ? "running" : "idle")
           message.update(event.data.sessionID, (draft, index) => {
             const currentAssistant = message.assistant(draft, index, event.data.assistantMessageID)
             if (!currentAssistant) return
@@ -263,6 +271,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           })
           break
         case "session.next.step.failed":
+          setStore("session", "status", event.data.sessionID, "idle")
           message.update(event.data.sessionID, (draft, index) => {
             const currentAssistant = message.assistant(draft, index, event.data.assistantMessageID)
             if (!currentAssistant) return
@@ -406,6 +415,8 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           break
         case "session.next.retried":
         case "session.next.compaction.started":
+          setStore("session", "status", event.data.sessionID, "running")
+          break
         case "session.next.compaction.delta":
           break
         case "session.next.compaction.ended":
@@ -489,6 +500,9 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         },
         get(sessionID: string) {
           return store.session.info[sessionID]
+        },
+        status(sessionID: string) {
+          return store.session.status[sessionID] ?? "idle"
         },
         async refresh(sessionID: string) {
           const result = await sdk.client.v2.session.get({ sessionID }, { throwOnError: true })
@@ -653,6 +667,13 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
               }),
             ),
           ),
+        sdk.client.v2.session.active({ throwOnError: true }).then((response) =>
+          setStore(
+            "session",
+            "status",
+            Object.fromEntries(Object.keys(response.data.data).map((sessionID) => [sessionID, "running" as const])),
+          ),
+        ),
         result.location.refresh(),
         result.location.agent.refresh(),
         result.location.integration.refresh(),

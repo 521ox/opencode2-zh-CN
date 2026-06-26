@@ -76,7 +76,7 @@ import {
   useOpencodeKeymap,
 } from "./keymap"
 
-import type { EventSource } from "./context/sdk"
+import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { DialogVariant } from "./component/dialog-variant"
 import { createTuiAttention } from "./attention"
 import * as TuiAudio from "./audio"
@@ -134,14 +134,10 @@ const appBindingCommands = [
 ] as const
 
 export type TuiInput = {
-  url: string
+  client: OpencodeClient
   args: Args
   config: TuiConfig.Resolved
   onSnapshot?: () => Promise<string[]>
-  directory?: string
-  fetch?: typeof fetch
-  headers?: RequestInit["headers"]
-  events?: EventSource
   pluginHost: TuiPluginHost
 }
 
@@ -293,13 +289,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                   >
                                     <TuiConfigProvider config={input.config}>
                                       <PluginRuntimeProvider value={pluginRuntime}>
-                                        <SDKProvider
-                                          url={input.url}
-                                          directory={input.directory}
-                                          fetch={input.fetch}
-                                          headers={input.headers}
-                                          events={input.events}
-                                        >
+                                        <SDKProvider client={input.client}>
                                           <ProjectProvider>
                                             <SyncProvider>
                                               <DataProvider>
@@ -394,6 +384,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       event,
       sdk,
       sync,
+      data,
       theme: themeState,
       toast,
       renderer,

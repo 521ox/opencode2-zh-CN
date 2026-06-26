@@ -16,7 +16,7 @@ export const { use: useProject, provider: ProjectProvider } = createSimpleContex
       state: "",
       config: "",
       worktree: "",
-      directory: sdk.directory ?? "",
+      directory: process.cwd(),
     } satisfies Path
 
     const [store, setStore] = createStore({

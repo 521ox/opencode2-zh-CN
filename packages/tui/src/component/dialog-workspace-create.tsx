@@ -54,7 +54,7 @@ async function loadWorkspaceAdapters(input: {
   sync: ReturnType<typeof useSync>
   toast: ReturnType<typeof useToast>
 }) {
-  const dir = input.sync.path.directory || input.sdk.directory
+  const dir = input.sync.path.directory || process.cwd()
   try {
     const response = await input.sdk.client.experimental.workspace.adapter.list({ directory: dir })
     if (response.error) throw response.error

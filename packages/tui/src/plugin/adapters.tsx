@@ -4,6 +4,7 @@ import type { useEvent } from "../context/event"
 import type { useRoute } from "../context/route"
 import type { useSDK } from "../context/sdk"
 import type { useSync } from "../context/sync"
+import type { useData } from "../context/data"
 import type { useTheme } from "../context/theme"
 import { Dialog as DialogUI, type useDialog } from "../ui/dialog"
 import type { useOpencodeKeymap } from "../keymap"
@@ -31,6 +32,7 @@ type Input = {
   event: ReturnType<typeof useEvent>
   sdk: ReturnType<typeof useSDK>
   sync: ReturnType<typeof useSync>
+  data: ReturnType<typeof useData>
   theme: ReturnType<typeof useTheme>
   toast: ReturnType<typeof useToast>
   renderer: TuiPluginApi["renderer"]
@@ -95,7 +97,7 @@ function mapOptionCb<Value>(cb?: (item: TuiDialogSelectOption<Value>) => void) {
   return (item: SelectOption<Value>) => cb(pickOption(item))
 }
 
-function stateApi(sync: ReturnType<typeof useSync>): TuiPluginApi["state"] {
+function stateApi(sync: ReturnType<typeof useSync>, data: ReturnType<typeof useData>): TuiPluginApi["state"] {
   return {
     get ready() {
       return sync.ready
@@ -135,7 +137,7 @@ function stateApi(sync: ReturnType<typeof useSync>): TuiPluginApi["state"] {
         return sync.data.message[sessionID] ?? []
       },
       status(sessionID) {
-        return sync.data.session_status[sessionID]
+        return data.session.status(sessionID) === "running" ? { type: "busy" } : { type: "idle" }
       },
       permission(sessionID) {
         return sync.data.permission[sessionID] ?? []
@@ -297,7 +299,7 @@ export function createTuiApiAdapters(input: Input): Omit<TuiPluginApi, "lifecycl
         return input.kv.ready
       },
     },
-    state: stateApi(input.sync),
+    state: stateApi(input.sync, input.data),
     get client() {
       return input.sdk.client
     },

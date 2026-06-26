@@ -3,6 +3,7 @@ import { UI } from "@/cli/ui"
 import { errorMessage } from "@opencode-ai/tui/util/error"
 import { validateSession } from "../tui/validate-session"
 import { ServerAuth } from "@/server/auth"
+import { createOpencodeClient } from "@opencode-ai/sdk/v2"
 
 export const AttachCommand = cmd({
   command: "attach <url>",
@@ -132,7 +133,7 @@ export const AttachCommand = cmd({
     const { createLegacyTuiPluginHost } = await import("@/plugin/tui/runtime")
     await Effect.runPromise(
       run({
-        url: args.url,
+        client: createOpencodeClient({ baseUrl: args.url, headers, directory }),
         config,
         pluginHost: createLegacyTuiPluginHost(),
         args: {
@@ -140,8 +141,6 @@ export const AttachCommand = cmd({
           sessionID: args.session,
           fork: args.fork,
         },
-        directory,
-        headers,
       }),
     )
   },

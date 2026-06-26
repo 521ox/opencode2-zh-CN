@@ -56,15 +56,12 @@ const tui: TuiPlugin = async (api) => {
     permissions.delete(event.properties.requestID)
   })
 
-  api.event.on("session.status", (event) => {
-    const sessionID = event.properties.sessionID
-    if (event.properties.status.type === "busy" || event.properties.status.type === "retry") {
-      active.add(sessionID)
-      errored.delete(sessionID)
-      return
-    }
+  const started = (sessionID: string) => {
+    active.add(sessionID)
+    errored.delete(sessionID)
+  }
 
-    if (event.properties.status.type !== "idle") return
+  const ended = (sessionID: string) => {
     if (!active.has(sessionID)) return
     active.delete(sessionID)
 
@@ -75,6 +72,24 @@ const tui: TuiPlugin = async (api) => {
 
     const session = api.state.session.get(sessionID)
     notify(api, sessionID, "Session done", session?.parentID ? "subagent_done" : "done")
+  }
+
+  api.event.on("session.next.prompted", (event) => started(event.properties.sessionID))
+  api.event.on("session.next.shell.started", (event) => started(event.properties.sessionID))
+  api.event.on("session.next.step.started", (event) => started(event.properties.sessionID))
+  api.event.on("session.next.retried", (event) => started(event.properties.sessionID))
+  api.event.on("session.next.compaction.started", (event) => started(event.properties.sessionID))
+  api.event.on("session.next.shell.ended", (event) => ended(event.properties.sessionID))
+  api.event.on("session.next.step.ended", (event) => {
+    if (event.properties.finish === "tool-calls") return
+    ended(event.properties.sessionID)
+  })
+  api.event.on("session.next.step.failed", (event) => {
+    const sessionID = event.properties.sessionID
+    if (!active.has(sessionID)) return
+    errored.add(sessionID)
+    notify(api, sessionID, "Session error", "error")
+    ended(sessionID)
   })
 
   api.event.on("session.error", (event) => {

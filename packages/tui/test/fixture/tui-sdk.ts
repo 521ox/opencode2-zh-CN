@@ -1,5 +1,5 @@
+import { createOpencodeClient } from "@opencode-ai/sdk/v2"
 import type { GlobalEvent } from "@opencode-ai/sdk/v2"
-import type { EventSource } from "../../src/context/sdk"
 
 export const worktree = "/tmp/opencode"
 export const directory = `${worktree}/packages/tui`
@@ -11,71 +11,83 @@ export function json(data: unknown, init?: ResponseInit) {
   })
 }
 
-export function eventSource(): EventSource {
-  return { subscribe: async () => () => {} }
-}
+export function createEventStream() {
+  const encoder = new TextEncoder()
+  const global = new Set<ReadableStreamDefaultController<Uint8Array>>()
+  const v2 = new Set<ReadableStreamDefaultController<Uint8Array>>()
+  const pending = {
+    global: [] as Uint8Array[],
+    v2: [] as Uint8Array[],
+  }
+  const response = (
+    controllers: Set<ReadableStreamDefaultController<Uint8Array>>,
+    queued: Uint8Array[],
+    initial?: unknown,
+  ) => {
+    let current: ReadableStreamDefaultController<Uint8Array> | undefined
+    return new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          current = controller
+          controllers.add(controller)
+          if (initial) controller.enqueue(encoder.encode(`data: ${JSON.stringify(initial)}\n\n`))
+          for (const chunk of queued.splice(0)) controller.enqueue(chunk)
+        },
+        cancel() {
+          if (current) controllers.delete(current)
+        },
+      }),
+      { headers: { "content-type": "text/event-stream" } },
+    )
+  }
+  const send = (
+    controllers: Set<ReadableStreamDefaultController<Uint8Array>>,
+    queued: Uint8Array[],
+    event: unknown,
+  ) => {
+    const chunk = encoder.encode(`data: ${JSON.stringify(event)}\n\n`)
+    if (controllers.size === 0) {
+      queued.push(chunk)
+      return
+    }
+    for (const controller of controllers) controller.enqueue(chunk)
+  }
 
-export function createEventSource() {
-  let fn: ((event: GlobalEvent) => void) | undefined
-  let stream: ReadableStreamDefaultController<Uint8Array> | undefined
-  const pending: Uint8Array[] = []
   return {
-    source: {
-      subscribe: async (handler: (event: GlobalEvent) => void) => {
-        fn = handler
-        return () => {
-          if (fn === handler) fn = undefined
-        }
-      },
-    } satisfies EventSource,
     emit(event: GlobalEvent) {
-      if (!fn) throw new Error("event source not ready")
-      fn(event)
+      send(global, pending.global, event)
       if (!("properties" in event.payload)) return
-      const chunk = new TextEncoder().encode(
-        `data: ${JSON.stringify({
-          ...event.payload,
-          location: { directory: event.directory, workspaceID: event.workspace },
-          data: event.payload.properties,
-        })}\n\n`,
-      )
-      if (stream) return stream.enqueue(chunk)
-      pending.push(chunk)
+      send(v2, pending.v2, {
+        ...event.payload,
+        location: { directory: event.directory, workspaceID: event.workspace },
+        data: event.payload.properties,
+      })
     },
-    response() {
-      return new Response(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            stream = controller
-            controller.enqueue(
-              new TextEncoder().encode(`data: ${JSON.stringify({ id: "evt_connected", type: "server.connected", data: {} })}\n\n`),
-            )
-            for (const chunk of pending.splice(0)) controller.enqueue(chunk)
-          },
-          cancel() {
-            stream = undefined
-          },
-        }),
-        { headers: { "content-type": "text/event-stream" } },
-      )
+    global() {
+      return response(global, pending.global)
+    },
+    v2() {
+      return response(v2, pending.v2, { id: "evt_connected", type: "server.connected", data: {} })
     },
     disconnect() {
-      stream?.close()
-      stream = undefined
+      for (const controller of [...global, ...v2]) controller.close()
+      global.clear()
+      v2.clear()
     },
   }
 }
 
 export type FetchHandler = (url: URL) => Response | Promise<Response> | undefined
 
-export function createFetch(override?: FetchHandler, events?: ReturnType<typeof createEventSource>) {
+export function createFetch(override?: FetchHandler, events?: ReturnType<typeof createEventStream>) {
   const session = [] as URL[]
   const fetch = (async (input: RequestInfo | URL) => {
     const url = new URL(input instanceof Request ? input.url : String(input))
     if (url.pathname === "/session") session.push(url)
     const overridden = await override?.(url)
     if (overridden) return overridden
-    if (url.pathname === "/api/event" && events) return events.response()
+    if (url.pathname === "/global/event" && events) return events.global()
+    if (url.pathname === "/api/event" && events) return events.v2()
 
     if (
       [
@@ -96,6 +108,7 @@ export function createFetch(override?: FetchHandler, events?: ReturnType<typeof 
     if (url.pathname === "/path") return json({ home: "", state: "", config: "", worktree, directory })
     if (url.pathname === "/api/location") return json({ directory, project: { id: "proj_test", directory: worktree } })
     if (url.pathname === "/api/session") return json({ data: [], cursor: {} })
+    if (url.pathname === "/api/session/active") return json({ data: {} })
     if (
       ["/api/agent", "/api/model", "/api/provider", "/api/integration", "/api/command", "/api/skill"].includes(
         url.pathname,
@@ -114,4 +127,8 @@ export function createFetch(override?: FetchHandler, events?: ReturnType<typeof 
     throw new Error(`unexpected request: ${url.pathname}`)
   }) as typeof globalThis.fetch
   return { fetch, session }
+}
+
+export function createClient(fetch: typeof globalThis.fetch) {
+  return createOpencodeClient({ baseUrl: "http://test", fetch })
 }

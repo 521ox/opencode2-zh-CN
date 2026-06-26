@@ -6,7 +6,7 @@ import { onMount } from "solid-js"
 import { ProjectProvider, useProject } from "../../../src/context/project"
 import { SDKProvider } from "../../../src/context/sdk"
 import { useEvent } from "../../../src/context/event"
-import { createEventSource, createFetch, directory } from "../../fixture/tui-sdk"
+import { createClient, createEventStream, createFetch, directory } from "../../fixture/tui-sdk"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 
 const projectID = "proj_test"
@@ -49,8 +49,8 @@ function update(version: string): Event {
 }
 
 async function mount() {
-  const events = createEventSource()
-  const calls = createFetch()
+  const events = createEventStream()
+  const calls = createFetch(undefined, events)
   const seen: Event[] = []
   const workspaces: Array<string | undefined> = []
   let project!: ReturnType<typeof useProject>
@@ -61,7 +61,7 @@ async function mount() {
 
   const app = await testRender(() => (
     <TestTuiContexts>
-      <SDKProvider url="http://test" directory={directory} events={events.source} fetch={calls.fetch}>
+      <SDKProvider client={createClient(calls.fetch)}>
         <ProjectProvider>
           <Probe
             onReady={async (ctx) => {

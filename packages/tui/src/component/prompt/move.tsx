@@ -40,7 +40,7 @@ export function usePromptMove(input: { projectID: () => string | undefined; sess
       const result = await sdk.client.v2.projectCopy.create(
         {
           projectID,
-          location: { directory: sdk.directory },
+          location: { directory: project.instance.directory() || paths.cwd },
           strategy: "git_worktree",
           directory: path.join(paths.worktree, projectID.slice(0, 6)),
           name: generated.data.name,

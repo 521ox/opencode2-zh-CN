@@ -13,6 +13,7 @@ import { useLocal } from "../context/local"
 import { createDebouncedSignal } from "../util/signal"
 import { useToast } from "../ui/toast"
 import { useCommandShortcut } from "../keymap"
+import { Spinner } from "./spinner"
 
 export function DialogSessionList() {
   const dialog = useDialog()
@@ -71,7 +72,12 @@ export function DialogSessionList() {
         value: session.id,
         category,
         footer,
-        gutter: slot === undefined ? undefined : () => <text fg={theme.accent}>{slot}</text>,
+        gutter:
+          data.session.status(session.id) === "running"
+            ? () => <Spinner />
+            : slot === undefined
+              ? undefined
+              : () => <text fg={theme.accent}>{slot}</text>,
       }
     }
 

@@ -83,6 +83,48 @@ function permission(id: string, sessionID = "session"): PermissionRequest {
   }
 }
 
+function stepStarted(id: string, sessionID = "session"): Event {
+  return {
+    id,
+    type: "session.next.step.started",
+    properties: {
+      sessionID,
+      assistantMessageID: `msg_${id}`,
+      timestamp: 0,
+      agent: "build",
+      model: { id: "model", providerID: "provider" },
+    },
+  }
+}
+
+function stepEnded(id: string, sessionID = "session", finish = "stop"): Event {
+  return {
+    id,
+    type: "session.next.step.ended",
+    properties: {
+      sessionID,
+      assistantMessageID: `msg_${id}`,
+      timestamp: 0,
+      finish,
+      cost: 0,
+      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    },
+  }
+}
+
+function stepFailed(id: string, sessionID = "session"): Event {
+  return {
+    id,
+    type: "session.next.step.failed",
+    properties: {
+      sessionID,
+      assistantMessageID: `msg_${id}`,
+      timestamp: 0,
+      error: { type: "unknown", message: "boom" },
+    },
+  }
+}
+
 const questionNotification: TuiAttentionNotifyInput = {
   title: "Demo session",
   message: "Question needs input",
@@ -139,21 +181,9 @@ describe("internal notifications TUI plugin", () => {
   test("notifies when an active session becomes idle and suppresses no-op idle", async () => {
     const harness = await setup()
 
-    harness.emit({
-      id: "event-1",
-      type: "session.status",
-      properties: { sessionID: "session", status: { type: "idle" } },
-    })
-    harness.emit({
-      id: "event-2",
-      type: "session.status",
-      properties: { sessionID: "session", status: { type: "busy" } },
-    })
-    harness.emit({
-      id: "event-3",
-      type: "session.status",
-      properties: { sessionID: "session", status: { type: "idle" } },
-    })
+    harness.emit(stepEnded("event-1"))
+    harness.emit(stepStarted("event-2"))
+    harness.emit(stepEnded("event-3"))
 
     expect(harness.notifications).toEqual([
       {
@@ -169,16 +199,8 @@ describe("internal notifications TUI plugin", () => {
     const harness = await setup()
 
     harness.emit({ id: "event-1", type: "question.asked", properties: question("question-1", "subagent") })
-    harness.emit({
-      id: "event-2",
-      type: "session.status",
-      properties: { sessionID: "subagent", status: { type: "busy" } },
-    })
-    harness.emit({
-      id: "event-3",
-      type: "session.status",
-      properties: { sessionID: "subagent", status: { type: "idle" } },
-    })
+    harness.emit(stepStarted("event-2", "subagent"))
+    harness.emit(stepEnded("event-3", "subagent"))
 
     expect(harness.notifications).toEqual([
       {
@@ -199,21 +221,9 @@ describe("internal notifications TUI plugin", () => {
   test("notifies session errors once and suppresses the following idle done notification", async () => {
     const harness = await setup()
 
-    harness.emit({
-      id: "event-1",
-      type: "session.status",
-      properties: { sessionID: "session", status: { type: "busy" } },
-    })
-    harness.emit({
-      id: "event-2",
-      type: "session.error",
-      properties: { sessionID: "session", error: { name: "UnknownError", data: { message: "boom" } } },
-    })
-    harness.emit({
-      id: "event-3",
-      type: "session.status",
-      properties: { sessionID: "session", status: { type: "idle" } },
-    })
+    harness.emit(stepStarted("event-1"))
+    harness.emit(stepFailed("event-2"))
+    harness.emit(stepEnded("event-3"))
 
     expect(harness.notifications).toEqual([
       {
@@ -228,21 +238,13 @@ describe("internal notifications TUI plugin", () => {
   test("special-cases aborts and model response timeouts", async () => {
     const harness = await setup()
 
-    harness.emit({
-      id: "event-1",
-      type: "session.status",
-      properties: { sessionID: "abort", status: { type: "busy" } },
-    })
+    harness.emit(stepStarted("event-1", "abort"))
     harness.emit({
       id: "event-2",
       type: "session.error",
       properties: { sessionID: "abort", error: { name: "MessageAbortedError", data: { message: "Aborted" } } },
     })
-    harness.emit({
-      id: "event-3",
-      type: "session.status",
-      properties: { sessionID: "timeout", status: { type: "busy" } },
-    })
+    harness.emit(stepStarted("event-3", "timeout"))
     harness.emit({
       id: "event-4",
       type: "session.error",
