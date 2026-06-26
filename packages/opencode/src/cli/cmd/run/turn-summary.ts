@@ -10,7 +10,7 @@ export function turnSummaryCommit(input: {
 }): StreamCommit {
   return {
     kind: "system",
-    text: `▣ ${input.agent} · ${input.model} · ${input.duration}`,
+    text: `${input.agent} · ${input.model} · ${input.duration}`,
     phase: "final",
     source: "system",
     summary: {

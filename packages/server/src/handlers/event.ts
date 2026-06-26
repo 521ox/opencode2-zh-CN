@@ -1,16 +1,25 @@
 import { EventV2 } from "@opencode-ai/core/event"
-import { Effect, Stream } from "effect"
+import { PublicEventManifest } from "@opencode-ai/core/public-event-manifest"
+import { Effect, Schema, Stream } from "effect"
 import { HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import * as Sse from "effect/unstable/encoding/Sse"
 import { Api } from "../api"
 
 function eventData(data: unknown): Sse.Event {
+  const event = data as EventV2.Payload
+  const definition = PublicEventManifest.Latest.get(event.type)
+  const encoded = definition
+    ? {
+        ...event,
+        data: Schema.encodeUnknownSync(definition.data as Schema.Codec<unknown, unknown, never, never>)(event.data),
+      }
+    : event
   return {
     _tag: "Event",
     event: "message",
     id: undefined,
-    data: JSON.stringify(data),
+    data: JSON.stringify(encoded),
   }
 }
 

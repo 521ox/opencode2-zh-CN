@@ -6,6 +6,7 @@ on:
     branches:
       - ci
       - dev
+      - v2
       - beta
       - fix/npm-native-binary-install
       - snapshot-*
@@ -30,6 +31,9 @@ permissions:
   id-token: write
   contents: write
   packages: write
+
+env:
+  OPENCODE_CHANNEL: ${{ (github.ref_name == 'v2' && 'tui-v2') || '' }}
 
 jobs:
   version:
@@ -122,7 +126,7 @@ jobs:
       - build-cli
       - version
     runs-on: blacksmith-4vcpu-windows-2025
-    if: github.repository == 'anomalyco/opencode'
+    if: github.repository == 'anomalyco/opencode' && github.ref_name != 'v2'
     env:
       AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
       AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
@@ -221,7 +225,7 @@ jobs:
     needs:
       - build-cli
       - version
-    if: github.repository == 'anomalyco/opencode'
+    if: github.repository == 'anomalyco/opencode' && github.ref_name != 'v2'
     continue-on-error: false
     env:
       AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
@@ -447,6 +451,7 @@ jobs:
           path: packages/opencode/dist
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: github.ref_name != 'v2'
         with:
           name: opencode-cli-signed-windows
           path: packages/opencode/dist

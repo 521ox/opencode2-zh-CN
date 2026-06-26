@@ -44,6 +44,14 @@ test("refreshes resources into reactive getters", async () => {
           location: { directory },
         },
       })
+    if (url.pathname === "/api/session/ses_test/message")
+      return json({
+        data: [
+          { id: "msg_second", type: "user", text: "Second", time: { created: 2 } },
+          { id: "msg_first", type: "user", text: "First", time: { created: 1 } },
+        ],
+        cursor: {},
+      })
     if (url.pathname === "/api/agent")
       return json({
         location,
@@ -60,7 +68,7 @@ test("refreshes resources into reactive getters", async () => {
   function Probe() {
     data = useData()
     onMount(ready)
-    return <box />
+    return <text>{data.session.message.get("ses_test", "msg_second")?.id ?? "missing"}</text>
   }
 
   const app = await testRender(() => (
@@ -82,11 +90,84 @@ test("refreshes resources into reactive getters", async () => {
     expect(data.location.agent.list(location)).toBeUndefined()
 
     await data.session.refresh("ses_test")
+    await data.session.message.refresh("ses_test")
     await data.location.agent.refresh()
 
     expect(data.session.get("ses_test")?.title).toBe("Test session")
+    expect(data.session.message.ids("ses_test")).toEqual(["msg_first", "msg_second"])
+    expect(data.session.message.get("ses_test", "msg_second")?.id).toBe("msg_second")
+    await app.renderOnce()
+    expect(app.captureCharFrame()).toContain("msg_second")
     expect(data.location.default()).toEqual({ directory, workspaceID: undefined })
     expect(data.location.agent.list(location)?.map((agent) => agent.id)).toEqual(["build"])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("reconnects the event stream and bootstraps fresh data", async () => {
+  const events = createEventSource()
+  const requests = { event: 0, model: 0 }
+  const calls = createFetch((url) => {
+    if (url.pathname === "/api/event") {
+      requests.event++
+      return events.response()
+    }
+    if (url.pathname !== "/api/model") return
+    requests.model++
+    return json({
+      location: { directory, project: { id: "proj_test", directory } },
+      data: [
+        {
+          id: `model-${requests.model}`,
+          providerID: "provider",
+          name: `Model ${requests.model}`,
+          api: { type: "native" },
+          capabilities: { tools: false, input: [], output: [] },
+          cost: [],
+          limit: { context: 1, output: 1 },
+          request: { headers: {}, body: {} },
+          status: "active",
+          time: { released: 0 },
+          variants: [],
+        },
+      ],
+    })
+  }, events)
+  let data!: ReturnType<typeof useData>
+
+  function Probe() {
+    data = useData()
+    return <box />
+  }
+
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <SDKProvider url="http://test" directory={directory} events={events.source} fetch={calls.fetch}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </SDKProvider>
+    </TestTuiContexts>
+  ))
+
+  try {
+    await wait(() => data.location.model.list()?.[0]?.id === "model-1")
+    expect(data.connection.status()).toBe("connected")
+    expect(data.connection.attempt()).toBe(0)
+
+    events.disconnect()
+    await wait(() => data.connection.status() === "reconnecting")
+    expect(data.connection.attempt()).toBe(1)
+    expect(data.connection.error()).toBe("Event stream disconnected")
+
+    await wait(() => data.location.model.list()?.[0]?.id === "model-2", 4000)
+    expect(requests.event).toBe(2)
+    expect(data.connection.status()).toBe("connected")
+    expect(data.connection.attempt()).toBe(0)
+    expect(data.connection.error()).toBeUndefined()
   } finally {
     app.renderer.destroy()
   }
@@ -241,6 +322,134 @@ test("refreshes references after updates", async () => {
   }
 })
 
+test("adds and dismisses permission requests from live events", async () => {
+  const events = createEventSource()
+  const calls = createFetch(undefined, events)
+  let data!: ReturnType<typeof useData>
+
+  function Probe() {
+    data = useData()
+    return <box />
+  }
+
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <SDKProvider url="http://test" directory={directory} events={events.source} fetch={calls.fetch}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </SDKProvider>
+    </TestTuiContexts>
+  ))
+
+  try {
+    await wait(() => data.connection.status() === "connected")
+    emitEvent(events, {
+      id: "evt_permission_asked_1",
+      type: "permission.v2.asked",
+      properties: {
+        id: "per_1",
+        sessionID: "ses_1",
+        action: "bash",
+        resources: ["bun test"],
+      },
+    })
+    emitEvent(events, {
+      id: "evt_permission_asked_2",
+      type: "permission.v2.asked",
+      properties: {
+        id: "per_2",
+        sessionID: "ses_1",
+        action: "read",
+        resources: [".env"],
+      },
+    })
+    await wait(() => data.session.permission.list("ses_1")?.length === 2)
+
+    emitEvent(events, {
+      id: "evt_permission_replied_1",
+      type: "permission.v2.replied",
+      properties: { sessionID: "ses_1", requestID: "per_1", reply: "once" },
+    })
+    await wait(() => data.session.permission.list("ses_1")?.length === 1)
+    expect(data.session.permission.list("ses_1")?.[0]?.id).toBe("per_2")
+
+    emitEvent(events, {
+      id: "evt_permission_replied_2",
+      type: "permission.v2.replied",
+      properties: { sessionID: "ses_1", requestID: "per_2", reply: "reject" },
+    })
+    await wait(() => data.session.permission.list("ses_1")?.length === 0)
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("adds and dismisses question requests from live events", async () => {
+  const events = createEventSource()
+  const calls = createFetch(undefined, events)
+  let data!: ReturnType<typeof useData>
+
+  function Probe() {
+    data = useData()
+    return <box />
+  }
+
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <SDKProvider url="http://test" directory={directory} events={events.source} fetch={calls.fetch}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </SDKProvider>
+    </TestTuiContexts>
+  ))
+
+  try {
+    await wait(() => data.connection.status() === "connected")
+    emitEvent(events, {
+      id: "evt_question_asked_1",
+      type: "question.v2.asked",
+      properties: {
+        id: "que_1",
+        sessionID: "ses_1",
+        questions: [{ question: "Which option?", header: "Option", options: [], multiple: false }],
+      },
+    })
+    emitEvent(events, {
+      id: "evt_question_asked_2",
+      type: "question.v2.asked",
+      properties: {
+        id: "que_2",
+        sessionID: "ses_1",
+        questions: [{ question: "Which environment?", header: "Environment", options: [], multiple: false }],
+      },
+    })
+    await wait(() => data.session.question.list("ses_1")?.length === 2)
+
+    emitEvent(events, {
+      id: "evt_question_replied_1",
+      type: "question.v2.replied",
+      properties: { sessionID: "ses_1", requestID: "que_1", answers: [["First"]] },
+    })
+    await wait(() => data.session.question.list("ses_1")?.length === 1)
+    expect(data.session.question.list("ses_1")?.[0]?.id).toBe("que_2")
+
+    emitEvent(events, {
+      id: "evt_question_rejected_2",
+      type: "question.v2.rejected",
+      properties: { sessionID: "ses_1", requestID: "que_2" },
+    })
+    await wait(() => data.session.question.list("ses_1")?.length === 0)
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("settles pending tools when a live failure arrives", async () => {
   const events = createEventSource()
   const calls = createFetch(undefined, events)
@@ -334,7 +543,7 @@ test("settles pending tools when a live failure arrives", async () => {
     })
 
     await wait(() => {
-      const assistant = sync.session.message.list("session-1")?.[0]
+      const assistant = sync.session.message.get("session-1", "msg_explicit_assistant_9")
       return (
         assistant?.type === "assistant" &&
         assistant.content[0]?.type === "tool" &&
@@ -342,7 +551,7 @@ test("settles pending tools when a live failure arrives", async () => {
       )
     })
 
-    const assistant = sync.session.message.list("session-1")?.[0]
+    const assistant = sync.session.message.get("session-1", "msg_explicit_assistant_9")
     expect(assistant?.type).toBe("assistant")
     if (assistant?.type !== "assistant") return
     expect(assistant.id).toBe("msg_explicit_assistant_9")
@@ -360,10 +569,10 @@ test("settles pending tools when a live failure arrives", async () => {
       metadata: { fake: { call: true } },
       resultMetadata: { fake: { result: true } },
     })
-    expect((sync.session.message.list("session-1") ?? []).map((message) => message.type)).toEqual([
-      "assistant",
-      "model-switched",
+    expect(sync.session.message.list("session-1").map((message) => message.type)).toEqual([
       "agent-switched",
+      "model-switched",
+      "assistant",
     ])
   } finally {
     app.renderer.destroy()
@@ -399,6 +608,8 @@ test("renders admitted prompts only after they become model-visible", async () =
 
   try {
     await mounted
+    const received: string[] = []
+    const unsubscribe = sync.listen((event) => received.push(event.name))
     emitEvent(events, {
       id: "evt_admitted_1",
       type: "session.next.prompt.admitted",
@@ -425,10 +636,17 @@ test("renders admitted prompts only after they become model-visible", async () =
     })
 
     await wait(() => sync.session.message.list("session-1")?.length === 1)
+    expect(received.slice(-2)).toEqual(["session.next.prompt.admitted", "session.next.prompted"])
+    unsubscribe()
     const message = sync.session.message.list("session-1")?.[0]
     expect(message?.type).toBe("user")
     if (message?.type !== "user") return
     expect(message).toMatchObject({ id: "msg_user_1", text: "hello" })
+    expect(sync.session.message.ids("session-1")).toEqual(["msg_user_1"])
+    expect(sync.session.message.ids("missing")).toEqual([])
+    expect(sync.session.message.get("session-1", "msg_user_1")).toBe(message)
+    expect(sync.session.message.get("session-1", "missing")).toBeUndefined()
+    expect(received).toHaveLength(3)
   } finally {
     app.renderer.destroy()
   }

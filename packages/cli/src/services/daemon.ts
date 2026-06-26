@@ -28,6 +28,10 @@ const Registration = Schema.Struct({
 })
 type Registration = typeof Registration.Type
 
+const Config = Schema.Struct({
+  password: Schema.optional(Schema.String),
+})
+
 function sameRegistration(left: Registration, right: Registration) {
   return left.id === right.id && left.version === right.version && left.url === right.url && left.pid === right.pid
 }
@@ -38,21 +42,29 @@ export const layer = Layer.effect(
     const fs = yield* FileSystem.FileSystem
     const directory = Global.Path.state
     const file = path.join(directory, "server.json")
-    const passwordFile = path.join(directory, "password")
+    const configFile = path.join(Global.Path.config, "service.json")
+    const legacyPasswordFile = path.join(directory, "password")
     const decodeRegistration = Schema.decodeUnknownEffect(Schema.fromJsonString(Registration))
+    const decodeConfig = Schema.decodeUnknownEffect(Schema.fromJsonString(Config))
 
     const password = Effect.fn("cli.daemon.password")(function* (value?: string) {
-      const existing = yield* fs.readFileString(passwordFile).pipe(Effect.catch(() => Effect.succeed(undefined)))
-      if (value === undefined && existing) return existing
+      const config = yield* fs
+        .readFileString(configFile)
+        .pipe(Effect.flatMap(decodeConfig), Effect.catch(() => Effect.succeed(undefined)))
+      if (value === undefined && config?.password) return config.password
+
+      const legacy = yield* fs
+        .readFileString(legacyPasswordFile)
+        .pipe(Effect.catch(() => Effect.succeed(undefined)))
+      const next = value ?? legacy ?? randomBytes(32).toString("base64url")
 
       // Keep one private credential across server restarts so discovered clients
       // can reconnect without exposing a password flag or environment variable.
-      const generated = value ?? randomBytes(32).toString("base64url")
-      const temp = passwordFile + ".tmp"
-      yield* fs.makeDirectory(directory, { recursive: true })
-      yield* fs.writeFileString(temp, generated, { mode: 0o600 })
-      yield* fs.rename(temp, passwordFile)
-      return generated
+      const temp = configFile + ".tmp"
+      yield* fs.writeFileString(temp, JSON.stringify({ password: next }, null, 2) + "\n", { mode: 0o600 })
+      yield* fs.rename(temp, configFile)
+      if (legacy) yield* fs.remove(legacyPasswordFile).pipe(Effect.ignore)
+      return next
     })
 
     const registration = Effect.fnUntraced(function* () {
@@ -111,7 +123,7 @@ export const layer = Layer.effect(
       const existing = yield* healthy().pipe(Effect.option)
       const found = Option.getOrUndefined(existing)
       const compiled = path.basename(process.execPath).replace(/\.exe$/, "") !== "bun"
-      if (found?.version === InstallationVersion && compiled) return found.url
+      if (found?.version === InstallationVersion) return found.url
       if (found) yield* stopProcess(found).pipe(Effect.ignore)
 
       const entrypoint = compiled ? undefined : process.argv[1]

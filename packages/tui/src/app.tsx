@@ -21,11 +21,10 @@ import {
   onCleanup,
   batch,
   Show,
-  on,
 } from "solid-js"
 import { TuiPathsProvider, TuiStartupProvider, TuiTerminalEnvironmentProvider, useTuiStartup } from "./context/runtime"
 import { DialogProvider, useDialog } from "./ui/dialog"
-import { DialogProvider as DialogProviderList } from "./component/dialog-provider"
+import { DialogIntegration } from "./component/dialog-integration"
 import { ErrorComponent } from "./component/error-component"
 import { PluginRouteMissing } from "./component/plugin-route-missing"
 import { ProjectProvider, useProject } from "./context/project"
@@ -33,8 +32,9 @@ import { EditorContextProvider } from "./context/editor"
 import { useEvent } from "./context/event"
 import { SDKProvider, useSDK } from "./context/sdk"
 import { StartupLoading } from "./component/startup-loading"
+import { Reconnecting } from "./component/reconnecting"
 import { SyncProvider, useSync } from "./context/sync"
-import { DataProvider } from "./context/data"
+import { DataProvider, useData } from "./context/data"
 import { LocationProvider } from "./context/location"
 import { LocalProvider, useLocal } from "./context/local"
 import { DialogModel } from "./component/dialog-model"
@@ -268,7 +268,11 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                     >
                       <TuiStartupProvider
                         value={{
-                          initialRoute: process.env.OPENCODE_ROUTE ? JSON.parse(process.env.OPENCODE_ROUTE) : undefined,
+                          initialRoute: process.env.OPENCODE_SCRAP
+                            ? { type: "plugin", id: "scrap" }
+                            : process.env.OPENCODE_ROUTE
+                              ? JSON.parse(process.env.OPENCODE_ROUTE)
+                              : undefined,
                           skipInitialLoading: Boolean(process.env.OPENCODE_FAST_BOOT),
                         }}
                       >
@@ -370,6 +374,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
   const themeState = useTheme()
   const { theme, mode, setMode, locked, lock, unlock } = themeState
   const sync = useSync()
+  const data = useData()
   const project = useProject()
   const exit = useExit()
   const promptRef = usePromptRef()
@@ -494,9 +499,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
   createEffect(() => {
     // When using -c, session list is loaded in blocking phase, so we can navigate at "partial"
     if (continued || sync.status === "loading" || !args.continue) return
-    const match = sync.data.session
-      .toSorted((a, b) => b.time.updated - a.time.updated)
-      .find((x) => x.parentID === undefined)?.id
+    const match = data.session.list().find((session) => !session.parentID)?.id
     if (match) {
       continued = true
       if (args.fork) {
@@ -529,17 +532,6 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     })
   })
 
-  createEffect(
-    on(
-      () => sync.status === "complete" && sync.data.provider.length === 0,
-      (isEmpty, wasEmpty) => {
-        // only trigger when we transition into an empty-provider state
-        if (!isEmpty || wasEmpty) return
-        dialog.replace(() => <DialogProviderList />)
-      },
-    ),
-  )
-
   const connected = useConnected()
   const currentWorktreeWorkspace = createMemo(() => {
     const workspaceID = project.workspace.current()
@@ -563,7 +555,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         name: "session.list",
         title: "Switch session",
         category: "Session",
-        suggested: sync.data.session.length > 0,
+        suggested: data.session.list().length > 0,
         slashName: "sessions",
         slashAliases: ["resume", "continue"],
         run: () => {
@@ -729,13 +721,13 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       },
       {
         name: "provider.connect",
-        title: "Connect provider",
+        title: "Connect integration",
         suggested: !connected(),
         slashName: "connect",
         run: () => {
-          dialog.replace(() => <DialogProviderList />)
+          dialog.replace(() => <DialogIntegration />)
         },
-        category: "Provider",
+        category: "Integration",
       },
       ...(sync.data.console_state.switchableOrgCount > 1
         ? [
@@ -1101,6 +1093,9 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       </Show>
       <Show when={!startup.skipInitialLoading}>
         <StartupLoading ready={ready} />
+      </Show>
+      <Show when={data.connection.status() === "reconnecting"}>
+        <Reconnecting attempt={data.connection.attempt()} error={data.connection.error()} />
       </Show>
     </box>
   )

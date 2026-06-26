@@ -4,11 +4,10 @@ import { createMemo, For, Match, Show, Switch } from "solid-js"
 import { Portal, useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
 import type { TextareaRenderable } from "@opentui/core"
 import { useTheme, selectedForeground } from "../../context/theme"
-import type { PermissionRequest } from "@opencode-ai/sdk/v2"
+import type { PermissionV2Request } from "@opencode-ai/sdk/v2"
 import { useSDK } from "../../context/sdk"
 import { SplitBorder } from "../../ui/border"
-import { useSync } from "../../context/sync"
-import { useProject } from "../../context/project"
+import { useData } from "../../context/data"
 import { filetype } from "../../util/filetype"
 import { Locale } from "../../util/locale"
 import { webSearchProviderLabel } from "../../util/tool-display"
@@ -19,7 +18,7 @@ import { usePathFormatter } from "../../context/path-format"
 
 type PermissionStage = "permission" | "always" | "reject"
 
-function EditBody(props: { request: PermissionRequest }) {
+function EditBody(props: { request: PermissionV2Request; patch?: string }) {
   const themeState = useTheme()
   const theme = themeState.theme
   const syntax = themeState.syntax
@@ -27,8 +26,7 @@ function EditBody(props: { request: PermissionRequest }) {
   const dimensions = useTerminalDimensions()
 
   const filepath = createMemo(() => {
-    const value = props.request.metadata?.filepath
-    return typeof value === "string" ? value : ""
+    return props.request.resources[0] ?? ""
   })
   const diff = createMemo(() => {
     const value = props.request.metadata?.diff
@@ -79,9 +77,36 @@ function EditBody(props: { request: PermissionRequest }) {
         </scrollbox>
       </Show>
       <Show when={!diff()}>
-        <box paddingLeft={1}>
-          <text fg={theme.textMuted}>No diff provided</text>
-        </box>
+        <Show
+          when={props.patch}
+          fallback={
+            <box paddingLeft={1}>
+              <text fg={theme.textMuted}>No diff provided</text>
+            </box>
+          }
+        >
+          {(patch) => (
+            <scrollbox
+              height="100%"
+              scrollAcceleration={scrollAcceleration()}
+              verticalScrollbarOptions={{
+                trackOptions: {
+                  backgroundColor: theme.background,
+                  foregroundColor: theme.borderActive,
+                },
+              }}
+            >
+              <code
+                filetype="diff"
+                drawUnstyledText={false}
+                streaming={true}
+                syntaxStyle={syntax()}
+                content={patch()}
+                fg={theme.textMuted}
+              />
+            </scrollbox>
+          )}
+        </Show>
       </Show>
     </box>
   )
@@ -108,26 +133,22 @@ function TextBody(props: { title: string; description?: string; icon?: string })
   )
 }
 
-export function PermissionPrompt(props: { request: PermissionRequest; directory?: string }) {
+export function PermissionPrompt(props: { request: PermissionV2Request; directory?: string }) {
   const sdk = useSDK()
-  const project = useProject()
-  const sync = useSync()
+  const data = useData()
   const [store, setStore] = createStore({
     stage: "permission" as PermissionStage,
   })
   const pathFormatter = usePathFormatter()
-
-  const session = createMemo(() => sync.data.session.find((s) => s.id === props.request.sessionID))
+  const session = createMemo(() => data.session.get(props.request.sessionID))
 
   const input = createMemo(() => {
-    const tool = props.request.tool
+    const tool = props.request.source
     if (!tool) return {}
-    const parts = sync.data.part[tool.messageID] ?? []
-    for (const part of parts) {
-      if (part.type === "tool" && part.callID === tool.callID && part.state.status !== "pending") {
-        return part.state.input ?? {}
-      }
-    }
+    const message = data.session.message.get(props.request.sessionID, tool.messageID)
+    if (message?.type !== "assistant") return {}
+    const part = message.content.find((part) => part.type === "tool" && part.id === tool.callID)
+    if (part?.type === "tool" && part.state.status !== "pending") return part.state.input
     return {}
   })
 
@@ -140,14 +161,14 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
           title="Always allow"
           body={
             <Switch>
-              <Match when={props.request.always.length === 1 && props.request.always[0] === "*"}>
-                <TextBody title={"This will allow " + props.request.permission + " until OpenCode is restarted."} />
+              <Match when={props.request.save?.length === 1 && props.request.save[0] === "*"}>
+                <TextBody title={"This will allow " + props.request.action + " until OpenCode is restarted."} />
               </Match>
               <Match when={true}>
                 <box paddingLeft={1} gap={1}>
                   <text fg={theme.textMuted}>This will allow the following patterns until OpenCode is restarted</text>
                   <box>
-                    <For each={props.request.always}>
+                    <For each={props.request.save ?? []}>
                       {(pattern) => (
                         <text fg={theme.text}>
                           {"- "}
@@ -165,11 +186,10 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
           onSelect={(option) => {
             setStore("stage", "permission")
             if (option === "cancel") return
-            void sdk.client.permission.reply({
+            void sdk.client.v2.session.permission.reply({
+              sessionID: props.request.sessionID,
               reply: "always",
               requestID: props.request.id,
-              directory: props.directory,
-              workspace: project.workspace.current(),
             })
           }}
         />
@@ -177,12 +197,11 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
       <Match when={store.stage === "reject"}>
         <RejectPrompt
           onConfirm={(message) => {
-            void sdk.client.permission.reply({
+            void sdk.client.v2.session.permission.reply({
+              sessionID: props.request.sessionID,
               reply: "reject",
               requestID: props.request.id,
-              directory: props.directory,
               message: message || undefined,
-              workspace: project.workspace.current(),
             })
           }}
           onCancel={() => {
@@ -193,21 +212,21 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
       <Match when={store.stage === "permission"}>
         {(() => {
           const info = () => {
-            const permission = props.request.permission
+            const permission = props.request.action
             const data = input()
 
             if (permission === "edit") {
-              const raw = props.request.metadata?.filepath
-              const filepath = typeof raw === "string" ? raw : ""
+              const filepath = props.request.resources[0] ?? ""
+              const patch = typeof data.patchText === "string" ? data.patchText : undefined
               return {
                 icon: "→",
                 title: `Edit ${pathFormatter.format(filepath)}`,
-                body: <EditBody request={props.request} />,
+                body: <EditBody request={props.request} patch={patch} />,
               }
             }
 
             if (permission === "read") {
-              const raw = data.filePath
+              const raw = data.path
               const filePath = typeof raw === "string" ? raw : ""
               return {
                 icon: "→",
@@ -271,8 +290,6 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
             if (permission === "bash") {
               const command = typeof data.command === "string" ? data.command : ""
               return {
-                icon: "#",
-                title: "Shell command",
                 body: (
                   <Show when={command}>
                     <box paddingLeft={1}>
@@ -333,13 +350,13 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               const meta = props.request.metadata ?? {}
               const parent = typeof meta["parentDir"] === "string" ? meta["parentDir"] : undefined
               const filepath = typeof meta["filepath"] === "string" ? meta["filepath"] : undefined
-              const pattern = props.request.patterns?.[0]
+              const pattern = props.request.resources[0]
               const derived =
                 typeof pattern === "string" ? (pattern.includes("*") ? dirname(pattern) : pattern) : undefined
 
               const raw = parent ?? filepath ?? derived
               const dir = pathFormatter.format(raw)
-              const patterns = (props.request.patterns ?? []).filter((p): p is string => typeof p === "string")
+              const patterns = props.request.resources.filter((p): p is string => typeof p === "string")
 
               return {
                 icon: "←",
@@ -388,12 +405,14 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
                 <text fg={theme.warning}>{"△"}</text>
                 <text fg={theme.text}>Permission required</text>
               </box>
-              <box flexDirection="row" gap={1} paddingLeft={2} flexShrink={0}>
-                <text fg={theme.textMuted} flexShrink={0}>
-                  {current.icon}
-                </text>
-                <text fg={theme.text}>{current.title}</text>
-              </box>
+              <Show when={current.title}>
+                <box flexDirection="row" gap={1} paddingLeft={2} flexShrink={0}>
+                  <text fg={theme.textMuted} flexShrink={0}>
+                    {current.icon}
+                  </text>
+                  <text fg={theme.text}>{current.title}</text>
+                </box>
+              </Show>
             </box>
           )
 
@@ -402,7 +421,11 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               title="Permission required"
               header={header()}
               body={current.body}
-              options={{ once: "Allow once", always: "Allow always", reject: "Reject" }}
+              options={
+                props.request.save?.length
+                  ? { once: "Allow once", always: "Allow always", reject: "Reject" }
+                  : { once: "Allow once", reject: "Reject" }
+              }
               escapeKey="reject"
               fullscreen
               onSelect={(option) => {
@@ -415,19 +438,17 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
                     setStore("stage", "reject")
                     return
                   }
-                  void sdk.client.permission.reply({
+                  void sdk.client.v2.session.permission.reply({
+                    sessionID: props.request.sessionID,
                     reply: "reject",
                     requestID: props.request.id,
-                    directory: props.directory,
-                    workspace: project.workspace.current(),
                   })
                   return
                 }
-                void sdk.client.permission.reply({
+                void sdk.client.v2.session.permission.reply({
+                  sessionID: props.request.sessionID,
                   reply: "once",
                   requestID: props.request.id,
-                  directory: props.directory,
-                  workspace: project.workspace.current(),
                 })
               }}
             />

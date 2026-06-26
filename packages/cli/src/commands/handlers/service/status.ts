@@ -8,6 +8,6 @@ export default Runtime.handler(
   Commands.commands.service.commands.status,
   Effect.fn("cli.service.status")(function* () {
     const url = yield* (yield* Daemon.Service).status()
-    process.stdout.write((url ? `running ${url}` : "stopped") + EOL)
+    process.stdout.write((url ? url : "stopped") + EOL)
   }),
 )

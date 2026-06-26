@@ -119,7 +119,7 @@ test("turn summary starts at the left edge", async () => {
 
     const commits = claim(out.renderer)
     try {
-      expect(renderRows(commits.at(-1)!)[0]).toBe("▣ Build · Little Frank · 2.2s")
+      expect(renderRows(commits.at(-1)!)[0]).toBe("Build · Little Frank · 2.2s")
     } finally {
       destroy(commits)
     }

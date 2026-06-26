@@ -1089,7 +1089,7 @@ async function load(input: {
     if (Flag.OPENCODE_PURE && pluginOrigins.length) {
     }
 
-    for (const item of internalTuiPlugins(flags)) {
+    for (const item of internalTuiPlugins()) {
       const entry = loadInternalPlugin(item)
       const meta = createMeta(entry.source, entry.spec, entry.target, undefined, entry.id)
       addPluginEntry(next, {

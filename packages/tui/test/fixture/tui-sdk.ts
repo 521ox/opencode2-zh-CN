@@ -47,6 +47,9 @@ export function createEventSource() {
         new ReadableStream<Uint8Array>({
           start(controller) {
             stream = controller
+            controller.enqueue(
+              new TextEncoder().encode(`data: ${JSON.stringify({ id: "evt_connected", type: "server.connected", data: {} })}\n\n`),
+            )
             for (const chunk of pending.splice(0)) controller.enqueue(chunk)
           },
           cancel() {
@@ -55,6 +58,10 @@ export function createEventSource() {
         }),
         { headers: { "content-type": "text/event-stream" } },
       )
+    },
+    disconnect() {
+      stream?.close()
+      stream = undefined
     },
   }
 }
@@ -88,6 +95,7 @@ export function createFetch(override?: FetchHandler, events?: ReturnType<typeof 
     if (url.pathname === "/experimental/capabilities") return json({ backgroundSubagents: false })
     if (url.pathname === "/path") return json({ home: "", state: "", config: "", worktree, directory })
     if (url.pathname === "/api/location") return json({ directory, project: { id: "proj_test", directory: worktree } })
+    if (url.pathname === "/api/session") return json({ data: [], cursor: {} })
     if (
       ["/api/agent", "/api/model", "/api/provider", "/api/integration", "/api/command", "/api/skill"].includes(
         url.pathname,
