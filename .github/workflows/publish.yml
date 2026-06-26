@@ -32,9 +32,6 @@ permissions:
   contents: write
   packages: write
 
-env:
-  OPENCODE_CHANNEL: ${{ (github.ref_name == 'v2' && 'v2') || '' }}
-
 jobs:
   version:
     runs-on: blacksmith-4vcpu-ubuntu-2404
