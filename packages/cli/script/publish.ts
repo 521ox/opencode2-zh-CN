@@ -25,13 +25,14 @@ for (const filepath of new Bun.Glob("*/package.json").scanSync({ cwd: "./dist" }
 }
 console.log("binaries", binaries)
 const version = Object.values(binaries)[0]
+const name = "opencode-ai"
 
-await $`mkdir -p ./dist/${pkg.name}/bin`
-await $`cp ./bin/opencode2.cjs ./dist/${pkg.name}/bin/opencode2`
-await Bun.file(`./dist/${pkg.name}/package.json`).write(
+await $`mkdir -p ./dist/${name}/bin`
+await $`cp ./bin/opencode2.cjs ./dist/${name}/bin/opencode2`
+await Bun.file(`./dist/${name}/package.json`).write(
   JSON.stringify(
     {
-      name: pkg.name,
+      name,
       bin: { opencode2: "./bin/opencode2" },
       version,
       license: pkg.license,
@@ -50,4 +51,4 @@ await Promise.all(
     publish(`./dist/${name.replace("@opencode-ai/", "")}`, name, version),
   ),
 )
-await publish(`./dist/${pkg.name}`, pkg.name, version)
+await publish(`./dist/${name}`, name, version)
