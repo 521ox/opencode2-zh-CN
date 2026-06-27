@@ -224,6 +224,31 @@ test("tracks session status from active sessions and execution events", async ()
       },
     })
     await wait(() => data.session.status("session-live") === "idle")
+
+    emitEvent(events, {
+      id: "evt_failed_step_started",
+      type: "session.next.step.started",
+      data: {
+        sessionID: "session-failed",
+        assistantMessageID: "message-failed",
+        timestamp: 3,
+        agent: "build",
+        model: { id: "model", providerID: "provider" },
+      },
+    })
+    await wait(() => data.session.status("session-failed") === "running")
+
+    emitEvent(events, {
+      id: "evt_step_failed",
+      type: "session.next.step.failed",
+      data: {
+        sessionID: "session-failed",
+        assistantMessageID: "message-failed",
+        timestamp: 4,
+        error: { type: "unknown", message: "Provider unavailable" },
+      },
+    })
+    await wait(() => data.session.status("session-failed") === "idle")
   } finally {
     app.renderer.destroy()
   }

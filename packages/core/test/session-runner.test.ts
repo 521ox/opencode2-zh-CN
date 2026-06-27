@@ -371,6 +371,18 @@ const messageTexts = (request: LLMRequest, role: "user" | "system") =>
 const userTexts = (request: LLMRequest) => messageTexts(request, "user")
 const systemTexts = (request: LLMRequest) => messageTexts(request, "system")
 
+const recordedEventTypes = (id: SessionV2.ID) =>
+  Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    return yield* db
+      .select({ type: EventTable.type })
+      .from(EventTable)
+      .where(eq(EventTable.aggregate_id, id))
+      .orderBy(asc(EventTable.seq))
+      .all()
+      .pipe(Effect.orDie, Effect.map((rows) => rows.map((row) => row.type)))
+  })
+
 const replaySessionProjection = (id: SessionV2.ID) =>
   Effect.gen(function* () {
     const { db } = yield* Database.Service
@@ -2772,6 +2784,11 @@ describe("SessionRunnerLLM", () => {
 
       expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBeTrue()
       expect(requests).toHaveLength(1)
+      expect(yield* session.context(sessionID)).toMatchObject([
+        { type: "user", text: "Interrupt provider" },
+        { type: "assistant", finish: "error", error: { type: "unknown", message: "Provider turn interrupted" } },
+      ])
+      expect(yield* recordedEventTypes(sessionID)).toContain("session.next.step.failed.2")
       yield* session.interrupt(sessionID)
     }),
   )
@@ -2801,6 +2818,8 @@ describe("SessionRunnerLLM", () => {
         { type: "user", text: "Interrupt tool settlement" },
         {
           type: "assistant",
+          finish: "error",
+          error: { type: "unknown", message: "Provider turn interrupted" },
           content: [
             {
               type: "tool",
@@ -2810,6 +2829,9 @@ describe("SessionRunnerLLM", () => {
           ],
         },
       ])
+      const eventTypes = yield* recordedEventTypes(sessionID)
+      expect(eventTypes).toContain("session.next.step.failed.2")
+      expect(eventTypes).not.toContain("session.next.step.ended.2")
     }),
   )
 
