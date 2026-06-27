@@ -1870,7 +1870,16 @@ function Shell(props: ToolProps) {
   return (
     <BlockTool part={props.part} onClick={collapsed().overflow ? () => setExpanded((prev) => !prev) : undefined}>
       <box gap={1}>
-        <Show when={command()} fallback={<Spinner color={color()}>Writing command...</Spinner>}>
+        <Show
+          when={command()}
+          fallback={
+            isRunning() || props.part.state.status === "pending" ? (
+              <Spinner color={color()}>Writing command...</Spinner>
+            ) : (
+              <text fg={theme.textMuted}>Writing command...</text>
+            )
+          }
+        >
           <Show
             when={isRunning()}
             fallback={
