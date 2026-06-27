@@ -407,7 +407,7 @@ export function Prompt(props: PromptProps) {
           }, 5000)
 
           if (store.interrupt >= 2) {
-            void sdk.client.session.abort({
+            void sdk.client.v2.session.interrupt({
               sessionID: props.sessionID,
             })
             setStore("interrupt", 0)
