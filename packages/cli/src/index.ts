@@ -10,7 +10,7 @@ import { Runtime } from "./framework/runtime"
 import { Daemon } from "./services/daemon"
 import { Logging } from "@opencode-ai/core/observability/logging"
 import { Updater } from "./services/updater"
-import { InstallationVersion } from "@opencode-ai/core/installation/version"
+import { InstallationChannel, InstallationVersion, InstallationLocal } from "@opencode-ai/core/installation/version"
 
 const LoggingLayer = Logger.layer(Logging.loggers(), { mergeWithExisting: false }).pipe(
   Layer.provide(NodeFileSystem.layer),
@@ -35,7 +35,8 @@ const Handlers = Runtime.handlers(Commands, {
   serve: () => import("./commands/handlers/serve"),
 })
 
-Runtime.run(Commands, Handlers, { version: InstallationVersion }).pipe(
+Effect.logInfo("cli starting", { version: InstallationVersion, channel: InstallationChannel, local: InstallationLocal }).pipe(
+  Effect.flatMap(() => Runtime.run(Commands, Handlers, { version: InstallationVersion })),
   Effect.annotateLogs({ role: "cli" }),
   Effect.provide(Daemon.defaultLayer),
   Effect.provide(Updater.defaultLayer),
