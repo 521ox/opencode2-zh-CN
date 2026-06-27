@@ -1,5 +1,5 @@
 import { Global } from "@opencode-ai/core/global"
-import { InstallationVersion } from "@opencode-ai/core/installation/version"
+import { InstallationChannel, InstallationVersion } from "@opencode-ai/core/installation/version"
 import { createOpencodeClient } from "@opencode-ai/sdk/v2/client"
 import { ServerAuth } from "@opencode-ai/server/auth"
 import { Context, Effect, FileSystem, Layer, Option, Schedule, Schema, Scope } from "effect"
@@ -41,7 +41,7 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const directory = Global.Path.state
-    const file = path.join(directory, "server.json")
+    const file = path.join(directory, InstallationChannel === "local" ? "server-local.json" : "server.json")
     const configFile = path.join(Global.Path.config, "service.json")
     const legacyPasswordFile = path.join(directory, "password")
     const decodeRegistration = Schema.decodeUnknownEffect(Schema.fromJsonString(Registration))

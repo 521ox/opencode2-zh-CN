@@ -32,11 +32,26 @@ export default Runtime.handler(
         if (input.register) yield* daemon.register(address)
         const url = HttpServer.formatAddress(address)
         console.log(input.stdio ? JSON.stringify({ url }) : `server listening on ${url}`)
-        return yield* Effect.never
+        return yield* (input.stdio ? waitForStdinClose() : Effect.never)
       }).pipe(Effect.annotateLogs({ role: "server" })),
     )
   }),
 )
+
+function waitForStdinClose() {
+  return Effect.callback<void>((resume) => {
+    const close = () => resume(Effect.void)
+    process.stdin.once("end", close)
+    process.stdin.once("close", close)
+    process.stdin.resume()
+    if (process.stdin.readableEnded || process.stdin.destroyed) close()
+    return Effect.sync(() => {
+      process.stdin.off("end", close)
+      process.stdin.off("close", close)
+      process.stdin.pause()
+    })
+  })
+}
 
 function listen(hostname: string, port: Option.Option<number>, password: string) {
   if (Option.isSome(port)) return bind(hostname, port.value, password)

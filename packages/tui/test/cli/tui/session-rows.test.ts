@@ -89,6 +89,39 @@ test("groups across empty assistant reasoning parts", () => {
   ])
 })
 
+test("completes exploration groups when another row follows", () => {
+  const finished = assistant("assistant-2", [
+    { type: "tool", id: "grep-1", name: "grep", state: pending(), time: { created: 3 } },
+  ])
+  finished.finish = "stop"
+  const messages: SessionMessage[] = [
+    assistant("assistant-1", [
+      { type: "tool", id: "read-1", name: "read", state: pending(), time: { created: 1 } },
+    ]),
+    { type: "user", id: "user-1", text: "Continue", time: { created: 2 } },
+    finished,
+  ]
+
+  expect(reduceSessionRows(messages)).toEqual([
+    {
+      type: "group",
+      kind: "exploration",
+      pending: [],
+      completed: true,
+      refs: [{ messageID: "assistant-1", partID: "read-1" }],
+    },
+    { type: "message", messageID: "user-1" },
+    {
+      type: "group",
+      kind: "exploration",
+      pending: [],
+      completed: true,
+      refs: [{ messageID: "assistant-2", partID: "grep-1" }],
+    },
+    { type: "assistant-footer", messageID: "assistant-2" },
+  ])
+})
+
 function assistant(id: string, content: SessionMessageAssistant["content"]): SessionMessageAssistant {
   return {
     type: "assistant",

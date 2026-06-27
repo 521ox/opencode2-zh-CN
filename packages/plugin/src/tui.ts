@@ -1,7 +1,7 @@
 import type {
   AgentPart,
   OpencodeClient,
-  Event,
+  V2Event,
   FilePart,
   LspStatus,
   McpStatus,
@@ -517,7 +517,10 @@ export type TuiSlots = {
 }
 
 export type TuiEventBus = {
-  on: <Type extends Event["type"]>(type: Type, handler: (event: Extract<Event, { type: Type }>) => void) => () => void
+  on: <Type extends V2Event["type"]>(
+    type: Type,
+    handler: (event: Extract<V2Event, { type: Type }>) => void,
+  ) => () => void
 }
 
 export type TuiDispose = () => void | Promise<void>

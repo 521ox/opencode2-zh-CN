@@ -21,14 +21,9 @@ import type {
 import { createStore, produce } from "solid-js/store"
 import { createSimpleContext } from "./helper"
 import { useSDK } from "./sdk"
-import { createSignal, onCleanup, onMount } from "solid-js"
-import { createGlobalEmitter } from "@solid-primitives/event-bus"
+import { createSignal, onCleanup } from "solid-js"
 
-export type DataConnectionStatus = "connecting" | "connected" | "reconnecting"
 export type DataSessionStatus = "idle" | "running"
-
-export type DataEvent = V2Event
-type DataEventMap = { [T in DataEvent["type"]]: Extract<DataEvent, { type: T }> }
 
 type LocationData = {
   agent?: AgentV2Info[]
@@ -41,11 +36,6 @@ type LocationData = {
 }
 
 type Data = {
-  connection: {
-    status: DataConnectionStatus
-    attempt: number
-    error?: string
-  }
   session: {
     info: Record<string, SessionV2Info>
     status: Record<string, DataSessionStatus>
@@ -71,10 +61,6 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
   name: "Data",
   init: () => {
     const [store, setStore] = createStore<Data>({
-      connection: {
-        status: "connecting",
-        attempt: 0,
-      },
       session: {
         info: {},
         status: {},
@@ -89,7 +75,6 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     })
 
     const sdk = useSDK()
-    const events = createGlobalEmitter<DataEventMap>()
     const [defaultLocation, setDefaultLocation] = createSignal<LocationRef>({
       directory: process.cwd(),
     })
@@ -151,6 +136,9 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
 
     function handleEvent(event: V2Event) {
       switch (event.type) {
+        case "session.created":
+          void result.session.refresh(event.data.sessionID)
+          break
         case "catalog.updated":
           void Promise.all([
             result.location.model.refresh(event.location),
@@ -477,21 +465,20 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           ])
           break
       }
-      events.emit(event.type, event)
     }
 
     const result = {
-      on: events.on,
-      listen: events.listen,
+      on: sdk.event.on,
+      listen: sdk.event.listen,
       connection: {
         status() {
-          return store.connection.status
+          return sdk.connection.status()
         },
         attempt() {
-          return store.connection.attempt
+          return sdk.connection.attempt()
         },
         error() {
-          return store.connection.error
+          return sdk.connection.error()
         },
       },
       session: {
@@ -687,52 +674,13 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         console.error("Failed to refresh default location data", failure.reason)
     }
 
-    onMount(() => {
-      const controller = new AbortController()
-      onCleanup(() => controller.abort())
-      void (async () => {
-        while (!controller.signal.aborted) {
-          const error = await (async () => {
-            const events = await sdk.client.v2.event.subscribe({
-              signal: controller.signal,
-              sseMaxRetryAttempts: 0,
-              throwOnError: true,
-            })
-            const stream = events.stream[Symbol.asyncIterator]()
-            const first = await stream.next()
-            if (first.done) return new Error("Event stream disconnected")
-            setStore("connection", { status: "connected", attempt: 0, error: undefined })
-            handleEvent(first.value)
-            await bootstrap()
-            while (!controller.signal.aborted) {
-              const event = await stream.next()
-              if (event.done) return new Error("Event stream disconnected")
-              handleEvent(event.value)
-            }
-          })().catch((error) => error)
-          if (controller.signal.aborted) return
-          setStore("connection", {
-            status: "reconnecting",
-            attempt: store.connection.status === "connected" ? 1 : store.connection.attempt + 1,
-            error: error instanceof Error ? error.message : String(error),
-          })
-          await wait(250, controller.signal)
-        }
-      })()
-    })
+    onCleanup(
+      sdk.event.listen(({ details }) => {
+        handleEvent(details)
+        if (details.type === "server.connected") void bootstrap()
+      }),
+    )
 
     return result
   },
 })
-
-function wait(delay: number, signal: AbortSignal) {
-  return new Promise<void>((resolve) => {
-    const timer = setTimeout(done, delay)
-    signal.addEventListener("abort", done, { once: true })
-    function done() {
-      clearTimeout(timer)
-      signal.removeEventListener("abort", done)
-      resolve()
-    }
-  })
-}

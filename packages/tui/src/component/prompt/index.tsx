@@ -158,6 +158,12 @@ export function Prompt(props: PromptProps) {
   const dialog = useDialog()
   const toast = useToast()
   const status = createMemo(() => data.session.status(props.sessionID ?? ""))
+  const activeSubagents = createMemo(() =>
+    data.session
+      .list()
+      .filter((session) => session.parentID === props.sessionID && data.session.status(session.id) === "running")
+      .length,
+  )
   const history = usePromptHistory()
   const stash = usePromptStash()
   const keymap = useOpencodeKeymap()
@@ -235,7 +241,7 @@ export function Prompt(props: PromptProps) {
   event.on("tui.prompt.append", (evt, { workspace }) => {
     if (workspace !== project.workspace.current()) return
     if (!input || input.isDestroyed) return
-    input.insertText(evt.properties.text)
+    input.insertText(evt.data.text)
     setTimeout(() => {
       // setTimeout is a workaround and needs to be addressed properly
       if (!input || input.isDestroyed) return
@@ -1534,6 +1540,13 @@ export function Prompt(props: PromptProps) {
                     <spinner color={spinnerDef().color} frames={spinnerDef().frames} interval={40} />
                   </Show>
                 </box>
+                <Show when={activeSubagents()}>
+                  {(count) => (
+                    <Spinner color={theme.textMuted}>
+                      {count()} active subagent{count() === 1 ? "" : "s"}
+                    </Spinner>
+                  )}
+                </Show>
                 <text fg={store.interrupt > 0 ? theme.primary : theme.text}>
                   esc{" "}
                   <span style={{ fg: store.interrupt > 0 ? theme.primary : theme.textMuted }}>

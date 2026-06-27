@@ -1,89 +1,145 @@
-import type { GlobalEvent, OpencodeClient } from "@opencode-ai/sdk/v2"
-import { Flag } from "@opencode-ai/core/flag/flag"
+import type { OpencodeClient, V2Event } from "@opencode-ai/sdk/v2"
+import { createGlobalEmitter } from "@solid-primitives/event-bus"
+import { onCleanup, onMount } from "solid-js"
+import { createStore } from "solid-js/store"
 import { createSimpleContext } from "./helper"
-import { batch, onCleanup, onMount } from "solid-js"
+
+export type SDKConnectionStatus = "connecting" | "connected" | "reconnecting"
+
+type SDKEventMap = { [Type in V2Event["type"]]: Extract<V2Event, { type: Type }> }
+const connectTimeout = 2_000
 
 export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
   name: "SDK",
-  init: (props: { client: OpencodeClient }) => {
+  init: (props: { client: OpencodeClient; reload?: () => Promise<OpencodeClient> }) => {
     const abort = new AbortController()
-    const handlers = new Set<(event: GlobalEvent) => void>()
-    const emitter = {
-      emit(_type: "event", event: GlobalEvent) {
-        for (const handler of handlers) handler(event)
-      },
-      on(_type: "event", handler: (event: GlobalEvent) => void) {
-        handlers.add(handler)
-        return () => {
-          handlers.delete(handler)
-        }
-      },
-    }
+    let client = props.client
+    const events = createGlobalEmitter<SDKEventMap>()
+    const [connection, setConnection] = createStore<{
+      status: SDKConnectionStatus
+      attempt: number
+      error?: string
+    }>({
+      status: "connecting",
+      attempt: 0,
+    })
+    let stream: AbortController | undefined
+    let pending: Promise<void> | undefined
 
-    let queue: GlobalEvent[] = []
-    let timer: Timer | undefined
-    let last = 0
-    const retryDelay = 1000
-    const maxRetryDelay = 30000
-
-    const flush = () => {
-      if (queue.length === 0) return
-      const events = queue
-      queue = []
-      timer = undefined
-      last = Date.now()
-      batch(() => {
-        for (const event of events) emitter.emit("event", event)
+    function start() {
+      stream?.abort()
+      const controller = new AbortController()
+      const current = client
+      let connected!: () => void
+      const ready = new Promise<void>((resolve) => {
+        connected = resolve
       })
-    }
-
-    const handleEvent = (event: GlobalEvent) => {
-      queue.push(event)
-      const elapsed = Date.now() - last
-      if (timer) return
-      if (elapsed < 16) {
-        timer = setTimeout(flush, 16)
-        return
-      }
-      flush()
-    }
-
-    onMount(() => {
+      stream = controller
       void (async () => {
         let attempt = 0
-        while (!abort.signal.aborted) {
-          const events = await props.client.global.event({
-            signal: abort.signal,
-            sseMaxRetryAttempts: 0,
-          })
-
-          if (Flag.OPENCODE_EXPERIMENTAL_WORKSPACES) await props.client.sync.start().catch(() => {})
-
-          for await (const event of events.stream) {
-            if (abort.signal.aborted) break
-            handleEvent(event)
-          }
-
-          if (timer) clearTimeout(timer)
-          if (queue.length > 0) flush()
+        while (!abort.signal.aborted && !controller.signal.aborted) {
+          const connection = new AbortController()
+          const cancel = () => connection.abort(controller.signal.reason)
+          const timeout = setTimeout(() => connection.abort(new Error("Timed out connecting to server")), connectTimeout)
+          controller.signal.addEventListener("abort", cancel, { once: true })
+          const error = await (async () => {
+            const response = await current.v2.event.subscribe({
+              signal: connection.signal,
+              sseMaxRetryAttempts: 0,
+              throwOnError: true,
+            })
+            const iterator = response.stream[Symbol.asyncIterator]()
+            const first = await iterator.next()
+            if (abort.signal.aborted || controller.signal.aborted) return
+            if (first.done)
+              return connection.signal.reason instanceof Error
+                ? connection.signal.reason
+                : new Error("Event stream disconnected")
+            clearTimeout(timeout)
+            attempt = 0
+            setConnection({ status: "connected", attempt: 0, error: undefined })
+            events.emit(first.value.type, first.value)
+            connected()
+            while (!abort.signal.aborted && !controller.signal.aborted) {
+              const event = await iterator.next()
+              if (abort.signal.aborted || controller.signal.aborted) return
+              if (event.done) return new Error("Event stream disconnected")
+              events.emit(event.value.type, event.value)
+            }
+          })()
+            .catch((error) => error)
+            .finally(() => {
+              clearTimeout(timeout)
+              controller.signal.removeEventListener("abort", cancel)
+            })
+          if (abort.signal.aborted || controller.signal.aborted) return
           attempt += 1
-          if (abort.signal.aborted) break
-          await new Promise((resolve) =>
-            setTimeout(resolve, Math.min(retryDelay * 2 ** (attempt - 1), maxRetryDelay)),
-          )
+          setConnection({
+            status: "reconnecting",
+            attempt,
+            error: error instanceof Error ? error.message : String(error),
+          })
+          await wait(250, controller.signal)
         }
-      })().catch(() => {})
-    })
+      })()
+      return ready
+    }
 
+    const reload = props.reload
+      ? () => {
+          if (pending) return pending
+          pending = Promise.resolve()
+            .then(props.reload)
+            .then(async (next) => {
+              client = next
+              if (!abort.signal.aborted) await start()
+            })
+            .finally(() => {
+              pending = undefined
+            })
+          return pending
+        }
+      : undefined
+
+    onMount(() => void start())
     onCleanup(() => {
       abort.abort()
-      if (timer) clearTimeout(timer)
-      handlers.clear()
+      stream?.abort()
+      events.clear()
     })
 
     return {
-      client: props.client,
-      event: emitter,
+      get client() {
+        return client
+      },
+      event: {
+        on: events.on,
+        listen: events.listen,
+      },
+      connection: {
+        status() {
+          return connection.status
+        },
+        attempt() {
+          return connection.attempt
+        },
+        error() {
+          return connection.error
+        },
+      },
+      reload,
     }
   },
 })
+
+function wait(delay: number, signal: AbortSignal) {
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(done, delay)
+    signal.addEventListener("abort", done, { once: true })
+    function done() {
+      clearTimeout(timer)
+      signal.removeEventListener("abort", done)
+      resolve()
+    }
+  })
+}

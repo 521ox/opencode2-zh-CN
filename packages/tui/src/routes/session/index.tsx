@@ -1091,32 +1091,15 @@ function AssistantFooter(props: { message: SessionMessageAssistant }) {
     props.message.time.completed ? props.message.time.completed - props.message.time.created : 0,
   )
   return (
-    <>
-      <Show when={props.message.error}>
-        <box
-          border={["left"]}
-          paddingTop={1}
-          paddingBottom={1}
-          paddingLeft={2}
-          backgroundColor={theme.backgroundPanel}
-          customBorderChars={SplitBorder.customBorderChars}
-          borderColor={theme.error}
-        >
-          <text fg={theme.textMuted}>{errorMessage(props.message.error)}</text>
-        </box>
-      </Show>
-      <box paddingLeft={3} marginTop={props.message.error ? 1 : 0}>
-        <text>
-          <span style={{ fg: props.message.error ? theme.textMuted : local.agent.color(props.message.agent) }}>
-            {Locale.titlecase(props.message.agent)}
-          </span>
-          <span style={{ fg: theme.textMuted }}> · {model()}</span>
-          <Show when={duration()}>
-            <span style={{ fg: theme.textMuted }}> · {Locale.duration(duration())}</span>
-          </Show>
-        </text>
-      </box>
-    </>
+    <box paddingLeft={3}>
+      <text>
+        <span style={{ fg: local.agent.color(props.message.agent) }}>{Locale.titlecase(props.message.agent)}</span>
+        <span style={{ fg: theme.textMuted }}> · {model()}</span>
+        <Show when={duration()}>
+          <span style={{ fg: theme.textMuted }}> · {Locale.duration(duration())}</span>
+        </Show>
+      </text>
+    </box>
   )
 }
 
@@ -1868,13 +1851,19 @@ function Shell(props: ToolProps) {
   const color = createMemo(() => (permission() ? theme.warning : theme.text))
   const isRunning = createMemo(() => props.part.state.status === "running")
   const command = createMemo(() => stringValue(props.input.command))
-  const output = createMemo(() => stripAnsi(stringValue(props.metadata.output)?.trim() ?? ""))
+  const output = createMemo(() => {
+    if (props.part.state.status === "pending") return ""
+    const content = props.part.state.content[0]
+    return stripAnsi(content?.type === "text" ? content.text.trim() : "")
+  })
   const [expanded, setExpanded] = createSignal(false)
   const maxLines = 10
   const maxChars = createMemo(() => maxLines * Math.max(20, ctx.width - 6))
-  const collapsed = createMemo(() => collapseToolOutput(output(), maxLines, maxChars()))
+  const input = createMemo(() => (command() ? `$ ${command()}` : ""))
+  const content = createMemo(() => [input(), output()].filter(Boolean).join("\n\n"))
+  const collapsed = createMemo(() => collapseToolOutput(content(), maxLines, maxChars()))
   const limited = createMemo(() => {
-    if (expanded() || !collapsed().overflow) return output()
+    if (expanded() || !collapsed().overflow) return content()
     return collapsed().output
   })
 
@@ -1882,12 +1871,20 @@ function Shell(props: ToolProps) {
     <BlockTool part={props.part} onClick={collapsed().overflow ? () => setExpanded((prev) => !prev) : undefined}>
       <box gap={1}>
         <Show when={command()} fallback={<Spinner color={color()}>Writing command...</Spinner>}>
-          <Show when={isRunning()} fallback={<text fg={permission() ? theme.warning : theme.textMuted}>$ {command()}</text>}>
-            <Spinner color={color()}>{command()}</Spinner>
+          <Show
+            when={isRunning()}
+            fallback={
+              <text>
+                <span style={{ fg: theme.text }}>{limited().slice(0, input().length)}</span>
+                <span style={{ fg: theme.textMuted }}>{limited().slice(input().length)}</span>
+              </text>
+            }
+          >
+            <Spinner color={color()}>
+              <span style={{ fg: theme.text }}>{limited().slice(0, input().length)}</span>
+              <span style={{ fg: theme.textMuted }}>{limited().slice(input().length)}</span>
+            </Spinner>
           </Show>
-        </Show>
-        <Show when={output()}>
-          <text fg={theme.text}>{limited()}</text>
         </Show>
         <Show when={collapsed().overflow}>
           <text fg={theme.textMuted}>{expanded() ? "Click to collapse" : "Click to expand"}</text>

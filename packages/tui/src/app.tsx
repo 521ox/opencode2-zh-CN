@@ -135,6 +135,7 @@ const appBindingCommands = [
 
 export type TuiInput = {
   client: OpencodeClient
+  reload?: () => Promise<OpencodeClient>
   args: Args
   config: TuiConfig.Resolved
   onSnapshot?: () => Promise<string[]>
@@ -289,7 +290,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                   >
                                     <TuiConfigProvider config={input.config}>
                                       <PluginRuntimeProvider value={pluginRuntime}>
-                                        <SDKProvider client={input.client}>
+                                        <SDKProvider client={input.client} reload={input.reload}>
                                           <ProjectProvider>
                                             <SyncProvider>
                                               <DataProvider>
@@ -360,6 +361,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
   const keymap = useOpencodeKeymap()
   const event = useEvent()
   const sdk = useSDK()
+  const reload = sdk.reload
   const toast = useToast()
   const themeState = useTheme()
   const { theme, mode, setMode, locked, lock, unlock } = themeState
@@ -744,6 +746,33 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         },
         category: "System",
       },
+      ...(reload
+        ? [
+            {
+              name: "server.reload",
+              title: "Reload server",
+              slashName: "reload",
+              slashAliases: ["restart"],
+              run: async () => {
+                dialog.clear()
+                toast.show({
+                  variant: "info",
+                  message: "Reloading server...",
+                  duration: 30000,
+                })
+                await reload()
+                  .then(() =>
+                    toast.show({
+                      variant: "success",
+                      message: "Server reloaded",
+                    }),
+                  )
+                  .catch(toast.error)
+              },
+              category: "System",
+            },
+          ]
+        : []),
       {
         name: "theme.switch",
         title: "Switch theme",
@@ -940,16 +969,16 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
 
   event.on("tui.command.execute", (evt, { workspace }) => {
     if (workspace !== project.workspace.current()) return
-    keymap.dispatchCommand(evt.properties.command)
+    keymap.dispatchCommand(evt.data.command)
   })
 
   event.on("tui.toast.show", (evt, { workspace }) => {
     if (workspace !== project.workspace.current()) return
     toast.show({
-      title: evt.properties.title,
-      message: evt.properties.message,
-      variant: evt.properties.variant,
-      duration: evt.properties.duration,
+      title: evt.data.title,
+      message: evt.data.message,
+      variant: evt.data.variant,
+      duration: evt.data.duration,
     })
   })
 
@@ -957,12 +986,12 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     if (workspace !== project.workspace.current()) return
     route.navigate({
       type: "session",
-      sessionID: evt.properties.sessionID,
+      sessionID: evt.data.sessionID,
     })
   })
 
   event.on("session.deleted", (evt) => {
-    if (route.data.type === "session" && route.data.sessionID === evt.properties.info.id) {
+    if (route.data.type === "session" && route.data.sessionID === evt.data.info.id) {
       route.navigate({ type: "home" })
       toast.show({
         variant: "info",
@@ -973,7 +1002,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
 
   event.on("session.error", (evt, { workspace }) => {
     if (workspace !== project.workspace.current()) return
-    const error = evt.properties.error
+    const error = evt.data.error
     if (error && typeof error === "object" && error.name === "MessageAbortedError") return
     const message = errorMessage(error)
 
@@ -986,7 +1015,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
 
   event.on("installation.update-available", async (evt) => {
     console.log("installation.update-available", evt)
-    const version = evt.properties.version
+    const version = evt.data.version
 
     const skipped = kv.get("skipped_version")
     if (skipped && !isVersionGreater(version, skipped)) return
@@ -1085,8 +1114,8 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       <Show when={!startup.skipInitialLoading}>
         <StartupLoading ready={ready} />
       </Show>
-      <Show when={data.connection.status() === "reconnecting"}>
-        <Reconnecting attempt={data.connection.attempt()} error={data.connection.error()} />
+      <Show when={sdk.connection.status() === "reconnecting"}>
+        <Reconnecting attempt={sdk.connection.attempt()} error={sdk.connection.error()} />
       </Show>
     </box>
   )

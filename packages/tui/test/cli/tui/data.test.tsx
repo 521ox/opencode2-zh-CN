@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
 import { testRender } from "@opentui/solid"
-import type { Event, GlobalEvent } from "@opencode-ai/sdk/v2"
+import type { V2Event } from "@opencode-ai/sdk/v2"
 import { onMount } from "solid-js"
 import { ProjectProvider } from "../../../src/context/project"
 import { SDKProvider } from "../../../src/context/sdk"
@@ -17,12 +17,8 @@ async function wait(fn: () => boolean, timeout = 2000) {
   }
 }
 
-function global(payload: Event): GlobalEvent {
-  return { directory, project: "proj_test", payload }
-}
-
-function emitEvent(events: ReturnType<typeof createEventStream>, payload: Event) {
-  events.emit(global(payload))
+function emitEvent(events: ReturnType<typeof createEventStream>, event: V2Event) {
+  events.emit({ ...event, location: { directory } })
 }
 
 test("refreshes resources into reactive getters", async () => {
@@ -205,7 +201,7 @@ test("tracks session status from active sessions and execution events", async ()
     emitEvent(events, {
       id: "evt_step_started",
       type: "session.next.step.started",
-      properties: {
+      data: {
         sessionID: "session-live",
         assistantMessageID: "message-live",
         timestamp: 1,
@@ -218,7 +214,7 @@ test("tracks session status from active sessions and execution events", async ()
     emitEvent(events, {
       id: "evt_step_ended",
       type: "session.next.step.ended",
-      properties: {
+      data: {
         sessionID: "session-live",
         assistantMessageID: "message-live",
         timestamp: 2,
@@ -291,7 +287,7 @@ test("refreshes integrations after integration updates", async () => {
     expect(data.location.integration.list()).toEqual([])
     const before = { ...requests }
 
-    emitEvent(events, { id: "evt_integration", type: "integration.updated", properties: {} })
+    emitEvent(events, { id: "evt_integration", type: "integration.updated", data: {} })
     await wait(() => data.location.integration.list()?.length === 1)
     await wait(() => requests.model > before.model && requests.provider > before.provider)
     expect(data.location.integration.list()?.[0]).toMatchObject({ id: "openai", name: "OpenAI" })
@@ -329,7 +325,7 @@ test("refreshes effective catalog data after catalog updates", async () => {
   try {
     await wait(() => requests.model > 0 && requests.provider > 0)
     const before = { ...requests }
-    emitEvent(events, { id: "evt_catalog", type: "catalog.updated", properties: {} })
+    emitEvent(events, { id: "evt_catalog", type: "catalog.updated", data: {} })
     await wait(() => requests.model > before.model && requests.provider > before.provider)
   } finally {
     app.renderer.destroy()
@@ -374,7 +370,7 @@ test("refreshes references after updates", async () => {
   try {
     await mounted
     await wait(() => requests === 1)
-    emitEvent(events, { id: "evt_reference_1", type: "reference.updated", properties: {} })
+    emitEvent(events, { id: "evt_reference_1", type: "reference.updated", data: {} })
     await wait(() => data.location.reference.list()?.length === 1)
     expect(data.location.reference.list()?.[0]?.name).toBe("docs")
   } finally {
@@ -409,7 +405,7 @@ test("adds and dismisses permission requests from live events", async () => {
     emitEvent(events, {
       id: "evt_permission_asked_1",
       type: "permission.v2.asked",
-      properties: {
+      data: {
         id: "per_1",
         sessionID: "ses_1",
         action: "bash",
@@ -419,7 +415,7 @@ test("adds and dismisses permission requests from live events", async () => {
     emitEvent(events, {
       id: "evt_permission_asked_2",
       type: "permission.v2.asked",
-      properties: {
+      data: {
         id: "per_2",
         sessionID: "ses_1",
         action: "read",
@@ -431,7 +427,7 @@ test("adds and dismisses permission requests from live events", async () => {
     emitEvent(events, {
       id: "evt_permission_replied_1",
       type: "permission.v2.replied",
-      properties: { sessionID: "ses_1", requestID: "per_1", reply: "once" },
+      data: { sessionID: "ses_1", requestID: "per_1", reply: "once" },
     })
     await wait(() => data.session.permission.list("ses_1")?.length === 1)
     expect(data.session.permission.list("ses_1")?.[0]?.id).toBe("per_2")
@@ -439,7 +435,7 @@ test("adds and dismisses permission requests from live events", async () => {
     emitEvent(events, {
       id: "evt_permission_replied_2",
       type: "permission.v2.replied",
-      properties: { sessionID: "ses_1", requestID: "per_2", reply: "reject" },
+      data: { sessionID: "ses_1", requestID: "per_2", reply: "reject" },
     })
     await wait(() => data.session.permission.list("ses_1")?.length === 0)
   } finally {
@@ -474,7 +470,7 @@ test("adds and dismisses question requests from live events", async () => {
     emitEvent(events, {
       id: "evt_question_asked_1",
       type: "question.v2.asked",
-      properties: {
+      data: {
         id: "que_1",
         sessionID: "ses_1",
         questions: [{ question: "Which option?", header: "Option", options: [], multiple: false }],
@@ -483,7 +479,7 @@ test("adds and dismisses question requests from live events", async () => {
     emitEvent(events, {
       id: "evt_question_asked_2",
       type: "question.v2.asked",
-      properties: {
+      data: {
         id: "que_2",
         sessionID: "ses_1",
         questions: [{ question: "Which environment?", header: "Environment", options: [], multiple: false }],
@@ -494,7 +490,7 @@ test("adds and dismisses question requests from live events", async () => {
     emitEvent(events, {
       id: "evt_question_replied_1",
       type: "question.v2.replied",
-      properties: { sessionID: "ses_1", requestID: "que_1", answers: [["First"]] },
+      data: { sessionID: "ses_1", requestID: "que_1", answers: [["First"]] },
     })
     await wait(() => data.session.question.list("ses_1")?.length === 1)
     expect(data.session.question.list("ses_1")?.[0]?.id).toBe("que_2")
@@ -502,7 +498,7 @@ test("adds and dismisses question requests from live events", async () => {
     emitEvent(events, {
       id: "evt_question_rejected_2",
       type: "question.v2.rejected",
-      properties: { sessionID: "ses_1", requestID: "que_2" },
+      data: { sessionID: "ses_1", requestID: "que_2" },
     })
     await wait(() => data.session.question.list("ses_1")?.length === 0)
   } finally {
@@ -542,12 +538,12 @@ test("settles pending tools when a live failure arrives", async () => {
     emitEvent(events, {
       id: "evt_agent_1",
       type: "session.next.agent.switched",
-      properties: { sessionID: "session-1", messageID: "msg_agent_1", timestamp: 0, agent: "build" },
+      data: { sessionID: "session-1", messageID: "msg_agent_1", timestamp: 0, agent: "build" },
     })
     emitEvent(events, {
       id: "evt_model_1",
       type: "session.next.model.switched",
-      properties: {
+      data: {
         sessionID: "session-1",
         messageID: "msg_model_1",
         timestamp: 0,
@@ -557,7 +553,7 @@ test("settles pending tools when a live failure arrives", async () => {
     emitEvent(events, {
       id: "evt_step_started_1",
       type: "session.next.step.started",
-      properties: {
+      data: {
         sessionID: "session-1",
         assistantMessageID: "msg_explicit_assistant_9",
         timestamp: 1,
@@ -568,7 +564,7 @@ test("settles pending tools when a live failure arrives", async () => {
     emitEvent(events, {
       id: "evt_input_1",
       type: "session.next.tool.input.started",
-      properties: {
+      data: {
         sessionID: "session-1",
         assistantMessageID: "msg_explicit_assistant_9",
         timestamp: 2,
@@ -579,7 +575,7 @@ test("settles pending tools when a live failure arrives", async () => {
     emitEvent(events, {
       id: "evt_called_1",
       type: "session.next.tool.called",
-      properties: {
+      data: {
         sessionID: "session-1",
         timestamp: 2,
         assistantMessageID: "msg_explicit_assistant_9",
@@ -592,7 +588,7 @@ test("settles pending tools when a live failure arrives", async () => {
     emitEvent(events, {
       id: "evt_failed_1",
       type: "session.next.tool.failed",
-      properties: {
+      data: {
         sessionID: "session-1",
         timestamp: 3,
         assistantMessageID: "msg_explicit_assistant_9",
@@ -673,7 +669,7 @@ test("renders admitted prompts only after they become model-visible", async () =
     emitEvent(events, {
       id: "evt_admitted_1",
       type: "session.next.prompt.admitted",
-      properties: {
+      data: {
         sessionID: "session-1",
         messageID: "msg_user_1",
         timestamp: 0,
@@ -686,7 +682,7 @@ test("renders admitted prompts only after they become model-visible", async () =
     emitEvent(events, {
       id: "evt_prompted_1",
       type: "session.next.prompted",
-      properties: {
+      data: {
         sessionID: "session-1",
         messageID: "msg_user_1",
         timestamp: 0,
@@ -744,7 +740,7 @@ test("projects live context updates with their message ID", async () => {
     emitEvent(events, {
       id: "evt_context_1",
       type: "session.next.context.updated",
-      properties: {
+      data: {
         sessionID: "session-1",
         messageID: "msg_context_1",
         timestamp: 1,

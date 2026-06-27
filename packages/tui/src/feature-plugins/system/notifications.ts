@@ -1,10 +1,10 @@
-import type { Event } from "@opencode-ai/sdk/v2"
+import type { V2Event } from "@opencode-ai/sdk/v2"
 import type { TuiAttentionSoundName, TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
 
 const id = "internal:notifications"
 
-type SessionError = Extract<Event, { type: "session.error" }>["properties"]["error"]
+type SessionError = Extract<V2Event, { type: "session.error" }>["data"]["error"]
 
 function notify(api: TuiPluginApi, sessionID: string | undefined, message: string, sound: TuiAttentionSoundName) {
   const session = sessionID ? api.state.session.get(sessionID) : undefined
@@ -33,27 +33,27 @@ const tui: TuiPlugin = async (api) => {
   const permissions = new Set<string>()
 
   api.event.on("question.asked", (event) => {
-    if (questions.has(event.properties.id)) return
-    questions.add(event.properties.id)
-    notify(api, event.properties.sessionID, "Question needs input", "question")
+    if (questions.has(event.data.id)) return
+    questions.add(event.data.id)
+    notify(api, event.data.sessionID, "Question needs input", "question")
   })
 
   api.event.on("question.replied", (event) => {
-    questions.delete(event.properties.requestID)
+    questions.delete(event.data.requestID)
   })
 
   api.event.on("question.rejected", (event) => {
-    questions.delete(event.properties.requestID)
+    questions.delete(event.data.requestID)
   })
 
   api.event.on("permission.asked", (event) => {
-    if (permissions.has(event.properties.id)) return
-    permissions.add(event.properties.id)
-    notify(api, event.properties.sessionID, "Permission needs input", "permission")
+    if (permissions.has(event.data.id)) return
+    permissions.add(event.data.id)
+    notify(api, event.data.sessionID, "Permission needs input", "permission")
   })
 
   api.event.on("permission.replied", (event) => {
-    permissions.delete(event.properties.requestID)
+    permissions.delete(event.data.requestID)
   })
 
   const started = (sessionID: string) => {
@@ -74,18 +74,18 @@ const tui: TuiPlugin = async (api) => {
     notify(api, sessionID, "Session done", session?.parentID ? "subagent_done" : "done")
   }
 
-  api.event.on("session.next.prompted", (event) => started(event.properties.sessionID))
-  api.event.on("session.next.shell.started", (event) => started(event.properties.sessionID))
-  api.event.on("session.next.step.started", (event) => started(event.properties.sessionID))
-  api.event.on("session.next.retried", (event) => started(event.properties.sessionID))
-  api.event.on("session.next.compaction.started", (event) => started(event.properties.sessionID))
-  api.event.on("session.next.shell.ended", (event) => ended(event.properties.sessionID))
+  api.event.on("session.next.prompted", (event) => started(event.data.sessionID))
+  api.event.on("session.next.shell.started", (event) => started(event.data.sessionID))
+  api.event.on("session.next.step.started", (event) => started(event.data.sessionID))
+  api.event.on("session.next.retried", (event) => started(event.data.sessionID))
+  api.event.on("session.next.compaction.started", (event) => started(event.data.sessionID))
+  api.event.on("session.next.shell.ended", (event) => ended(event.data.sessionID))
   api.event.on("session.next.step.ended", (event) => {
-    if (event.properties.finish === "tool-calls") return
-    ended(event.properties.sessionID)
+    if (event.data.finish === "tool-calls") return
+    ended(event.data.sessionID)
   })
   api.event.on("session.next.step.failed", (event) => {
-    const sessionID = event.properties.sessionID
+    const sessionID = event.data.sessionID
     if (!active.has(sessionID)) return
     errored.add(sessionID)
     notify(api, sessionID, "Session error", "error")
@@ -93,11 +93,11 @@ const tui: TuiPlugin = async (api) => {
   })
 
   api.event.on("session.error", (event) => {
-    const sessionID = event.properties.sessionID
+    const sessionID = event.data.sessionID
     if (!sessionID) return
     if (!active.has(sessionID)) return
     errored.add(sessionID)
-    notify(api, sessionID, sessionErrorMessage(event.properties.error), "error")
+    notify(api, sessionID, sessionErrorMessage(event.data.error), "error")
   })
 }
 

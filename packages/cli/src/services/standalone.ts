@@ -16,9 +16,12 @@ function command(password: string) {
     cwd: process.cwd(),
     env: { OPENCODE_SERVER_PASSWORD: password },
     extendEnv: true,
-    stdin: "ignore",
+    // The server treats EOF on this pipe as the end of its ownership lease.
+    // The OS closes it even when the TUI is killed before Effect finalizers run.
+    stdin: "pipe",
     stderr: "ignore",
-    killSignal: "SIGKILL",
+    killSignal: "SIGTERM",
+    forceKillAfter: "3 seconds",
   })
 }
 
@@ -30,7 +33,7 @@ export const transport = Effect.fn("cli.standalone.transport")(
     const output = yield* proc.stdout.pipe(Stream.decodeText(), Stream.splitLines, Stream.take(1), Stream.mkString)
     if (!output) return yield* Effect.fail(new Error("Standalone server exited before reporting readiness"))
     const ready = yield* Effect.tryPromise(() => decodeReady(output))
-    return { url: ready.url, headers: ServerAuth.headers({ password }) }
+    return { url: ready.url, headers: ServerAuth.headers({ password }), pid: proc.pid }
   },
   Effect.provide(CrossSpawnSpawner.defaultLayer),
 )

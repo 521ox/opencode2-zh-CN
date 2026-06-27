@@ -969,7 +969,11 @@ export function ContextToolGroup(props: { parts: ToolPart[]; busy?: boolean; onS
         <div data-component="context-tool-group-trigger">
           <span
             data-slot="context-tool-group-title"
-            class="min-w-0 flex items-center gap-2 text-14-medium text-text-strong"
+            class="min-w-0 flex items-center gap-2 text-14-medium"
+            classList={{
+              "text-text-strong": pending(),
+              "text-text-weak": !pending(),
+            }}
           >
             <span data-slot="context-tool-group-label" class="shrink-0">
               <ToolStatusTitle
@@ -981,7 +985,11 @@ export function ContextToolGroup(props: { parts: ToolPart[]; busy?: boolean; onS
             </span>
             <span
               data-slot="context-tool-group-summary"
-              class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-normal text-text-base"
+              class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-normal"
+              classList={{
+                "text-text-base": pending(),
+                "text-text-weak": !pending(),
+              }}
             >
               <AnimatedCountList
                 items={[

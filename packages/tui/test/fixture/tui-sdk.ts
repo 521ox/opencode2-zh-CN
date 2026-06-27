@@ -1,5 +1,5 @@
 import { createOpencodeClient } from "@opencode-ai/sdk/v2"
-import type { GlobalEvent } from "@opencode-ai/sdk/v2"
+import type { V2Event } from "@opencode-ai/sdk/v2"
 
 export const worktree = "/tmp/opencode"
 export const directory = `${worktree}/packages/tui`
@@ -13,12 +13,8 @@ export function json(data: unknown, init?: ResponseInit) {
 
 export function createEventStream() {
   const encoder = new TextEncoder()
-  const global = new Set<ReadableStreamDefaultController<Uint8Array>>()
   const v2 = new Set<ReadableStreamDefaultController<Uint8Array>>()
-  const pending = {
-    global: [] as Uint8Array[],
-    v2: [] as Uint8Array[],
-  }
+  const pending: Uint8Array[] = []
   const response = (
     controllers: Set<ReadableStreamDefaultController<Uint8Array>>,
     queued: Uint8Array[],
@@ -54,24 +50,14 @@ export function createEventStream() {
   }
 
   return {
-    emit(event: GlobalEvent) {
-      send(global, pending.global, event)
-      if (!("properties" in event.payload)) return
-      send(v2, pending.v2, {
-        ...event.payload,
-        location: { directory: event.directory, workspaceID: event.workspace },
-        data: event.payload.properties,
-      })
-    },
-    global() {
-      return response(global, pending.global)
+    emit(event: V2Event) {
+      send(v2, pending, event)
     },
     v2() {
-      return response(v2, pending.v2, { id: "evt_connected", type: "server.connected", data: {} })
+      return response(v2, pending, { id: "evt_connected", type: "server.connected", data: {} })
     },
     disconnect() {
-      for (const controller of [...global, ...v2]) controller.close()
-      global.clear()
+      for (const controller of v2) controller.close()
       v2.clear()
     },
   }
@@ -86,7 +72,6 @@ export function createFetch(override?: FetchHandler, events?: ReturnType<typeof 
     if (url.pathname === "/session") session.push(url)
     const overridden = await override?.(url)
     if (overridden) return overridden
-    if (url.pathname === "/global/event" && events) return events.global()
     if (url.pathname === "/api/event" && events) return events.v2()
 
     if (

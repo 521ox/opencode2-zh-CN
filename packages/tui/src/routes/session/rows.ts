@@ -145,6 +145,7 @@ export function createSessionRows(sessionID: Accessor<string>) {
 export function reduceSessionRows(messages: SessionMessage[]) {
   return messages.reduce<SessionRow[]>((rows, message) => {
     if (message.type !== "assistant") {
+      completePrevious(rows)
       rows.push({ type: "message", messageID: message.id })
       return rows
     }
@@ -152,8 +153,10 @@ export function reduceSessionRows(messages: SessionMessage[]) {
       if ((part.type === "text" || part.type === "reasoning") && !part.text.trim()) return
       append(rows, { messageID: message.id, partID: part.id }, part)
     })
-    if ((message.finish && !["tool-calls", "unknown"].includes(message.finish)) || message.error)
+    if ((message.finish && !["tool-calls", "unknown"].includes(message.finish)) || message.error) {
+      completePrevious(rows)
       rows.push({ type: "assistant-footer", messageID: message.id })
+    }
     return rows
   }, [])
 }
