@@ -165,34 +165,46 @@ export const layer = Layer.effect(
       )
 
     const check = Effect.fn("cli.updater.check")(function* (options: { interactive: boolean }) {
-      if (InstallationLocal || Flag.OPENCODE_DISABLE_AUTOUPDATE) return
+      if (InstallationLocal || Flag.OPENCODE_DISABLE_AUTOUPDATE)
+        return yield* Effect.logInfo("update check skipped", {
+          reason: InstallationLocal ? "local-install" : "disabled",
+          version: InstallationVersion,
+          channel: InstallationChannel,
+        })
       const policy = yield* readPolicy()
-      if (policy === false) return
+      if (policy === false) return yield* Effect.logInfo("update check skipped", { reason: "policy-disabled" })
 
       return yield* Effect.scoped(
         Effect.gen(function* () {
           yield* Flock.effect(`opencode-cli-updater-${channel}`, { dir: path.join(global.state, "locks") })
           const previous = yield* readState()
           const now = Date.now()
-          const version =
-            previous && now - previous.checked < checkInterval
-              ? previous.latest
-              : yield* latest().pipe(
-                  Effect.tap((value) =>
-                    writeState({ checked: now, latest: value, dismissed: previous?.dismissed }),
-                  ),
-                )
+          const cached = previous && now - previous.checked < checkInterval
+          const version = cached
+            ? previous!.latest
+            : yield* latest().pipe(
+                Effect.tap((value) =>
+                  writeState({ checked: now, latest: value, dismissed: previous?.dismissed }),
+                ),
+              )
+          yield* Effect.logInfo("update check", {
+            current: InstallationVersion,
+            latest: version,
+            source: cached ? "cached" : "registry",
+          })
           const next = action(
             InstallationVersion,
             version,
             Flag.OPENCODE_ALWAYS_NOTIFY_UPDATE ? "notify" : policy,
             options.interactive && process.stdin.isTTY && process.stdout.isTTY,
           )
-          if (next === "none" || (next === "confirm" && previous?.dismissed === version)) return
+          if (next === "none") return yield* Effect.logInfo("update check done", { action: "up-to-date" })
+          if (next === "confirm" && previous?.dismissed === version)
+            return yield* Effect.logInfo("update check done", { action: "dismissed", version })
           const install = next === "upgrade" || (yield* confirm(version))
           if (!install) {
             yield* writeState({ checked: previous?.checked ?? now, latest: version, dismissed: version })
-            return
+            return yield* Effect.logInfo("update check done", { action: "declined", version })
           }
           const detected = yield* method()
           if (!detected) return yield* Effect.logWarning("automatic update skipped: installation method not found")
