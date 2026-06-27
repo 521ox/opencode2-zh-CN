@@ -1859,7 +1859,7 @@ function Shell(props: ToolProps) {
   const [expanded, setExpanded] = createSignal(false)
   const maxLines = 10
   const maxChars = createMemo(() => maxLines * Math.max(20, ctx.width - 6))
-  const input = createMemo(() => (command() ? `$ ${command()}` : ""))
+  const input = createMemo(() => (command() ? `${isRunning() ? "" : "$ "}${command()}` : ""))
   const content = createMemo(() => [input(), output()].filter(Boolean).join("\n\n"))
   const collapsed = createMemo(() => collapseToolOutput(content(), maxLines, maxChars()))
   const limited = createMemo(() => {
