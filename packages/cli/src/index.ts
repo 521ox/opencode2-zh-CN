@@ -9,6 +9,7 @@ import { Commands } from "./commands/commands"
 import { Runtime } from "./framework/runtime"
 import { Daemon } from "./services/daemon"
 import { Logging } from "@opencode-ai/core/observability/logging"
+import { Updater } from "./services/updater"
 
 const LoggingLayer = Logger.layer(Logging.loggers(), { mergeWithExisting: false }).pipe(
   Layer.provide(NodeFileSystem.layer),
@@ -36,6 +37,7 @@ const Handlers = Runtime.handlers(Commands, {
 Runtime.run(Commands, Handlers, { version: "local" }).pipe(
   Effect.annotateLogs({ role: "cli" }),
   Effect.provide(Daemon.defaultLayer),
+  Effect.provide(Updater.defaultLayer),
   Effect.provide(LoggingLayer),
   Effect.provide(NodeServices.layer),
   Effect.scoped,

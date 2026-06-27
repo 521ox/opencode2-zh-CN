@@ -25,12 +25,15 @@
     "@opentui/solid": "catalog:",
     "@parcel/watcher": "2.5.1",
     "effect": "catalog:",
+    "jsonc-parser": "3.3.1",
+    "semver": "catalog:",
     "solid-js": "catalog:"
   },
   "devDependencies": {
     "@opencode-ai/script": "workspace:*",
     "@tsconfig/bun": "catalog:",
     "@types/bun": "catalog:",
+    "@types/semver": "catalog:",
     "@typescript/native-preview": "catalog:"
   }
 }

@@ -3,11 +3,14 @@ import { Runtime } from "../../framework/runtime"
 import { Effect, Option } from "effect"
 import { Daemon } from "../../services/daemon"
 import { Standalone } from "../../services/standalone"
+import { Updater } from "../../services/updater"
 
 export default Runtime.handler(Commands, (input) =>
   Effect.gen(function* () {
     const directory = Option.getOrUndefined(input.directory)
     if (directory !== undefined) process.chdir(directory)
+    const updater = yield* Updater.Service
+    yield* updater.check({ interactive: true })
     const daemon = yield* Daemon.Service
     const transport = yield* (input.standalone ? Standalone.transport() : daemon.transport())
     const { runTui } = yield* Effect.promise(() => import("../../tui"))

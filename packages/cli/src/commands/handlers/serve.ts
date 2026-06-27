@@ -11,6 +11,7 @@ import { createOpencodeClient } from "@opencode-ai/sdk/v2/client"
 import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
 import { Daemon } from "../../services/daemon"
+import { Updater } from "../../services/updater"
 
 export default Runtime.handler(
   Commands.commands.serve,
@@ -32,6 +33,8 @@ export default Runtime.handler(
         if (input.register) yield* daemon.register(address)
         const url = HttpServer.formatAddress(address)
         console.log(input.stdio ? JSON.stringify({ url }) : `server listening on ${url}`)
+        const updater = yield* Updater.Service
+        yield* updater.check({ interactive: false }).pipe(Effect.forkScoped)
         return yield* (input.stdio ? waitForStdinClose() : Effect.never)
       }).pipe(Effect.annotateLogs({ role: "server" })),
     )
