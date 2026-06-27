@@ -63,6 +63,22 @@ termctrl show opencode-v2-dev
 termctrl stop opencode-v2-dev
 ```
 
+## Server/API debugging
+
+- Use `bun dev api --help` from `packages/cli` to inspect the API debugging command. It sends one request to the V2 server using the same daemon discovery/auth path as the CLI.
+- Use `bun dev api` to introspect the server-side data backing the TUI. This is useful when debugging UI bugs: compare what the screen renders with the raw session, message, event, agent, or health data returned by the API to determine whether the bug is in the server state, the client data layer, or the TUI rendering.
+- `bun dev api` accepts either an OpenAPI operation ID or a raw HTTP method plus path:
+
+```bash
+bun dev api get /health
+bun dev api get /openapi.json
+bun dev api <operationId> --param key=value
+```
+
+- Pass JSON request bodies with `--data`/`-d`; the command sets `content-type: application/json` automatically unless you provide a header. Add extra headers with `--header`/`-H name:value`.
+- If no compatible background server is registered, `bun dev api` starts one through the daemon service. Use `bun dev service status`, `bun dev service restart`, and `bun dev service stop` when you need explicit lifecycle control.
+- Prefer raw method/path calls for quick server debugging and operation IDs when exercising documented OpenAPI routes with path or query parameters.
+
 ## Debugger
 
 - To debug the V2 CLI or TUI with Bun's inspector, launch the CLI entrypoint through Terminal Control with an inspector URL, then attach a debugger to that URL:
