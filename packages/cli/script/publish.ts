@@ -25,7 +25,7 @@ for (const filepath of new Bun.Glob("*/package.json").scanSync({ cwd: "./dist" }
 }
 console.log("binaries", binaries)
 const version = Object.values(binaries)[0]
-const name = "opencode-ai"
+const name = pkg.name
 
 await $`mkdir -p ./dist/${name}/bin`
 await $`cp ./bin/opencode2.cjs ./dist/${name}/bin/opencode2`
