@@ -66,7 +66,7 @@ import { nextThinkingMode, reasoningSummary, useThinkingMode, type ThinkingMode 
 import { getScrollAcceleration } from "../../util/scroll"
 import { collapseToolOutput } from "../../util/collapse-tool-output"
 import { usePluginRuntime } from "../../plugin/runtime"
-import { OPENCODE_BASE_MODE, useBindings } from "../../keymap"
+import { OPENCODE_BASE_MODE, useBindings, useCommandShortcut } from "../../keymap"
 import { usePathFormatter } from "../../context/path-format"
 import { LocationProvider } from "../../context/location"
 import { createSessionRows, type PartRef, type SessionRow } from "./rows"
@@ -1189,6 +1189,7 @@ function RevertMessage(props: {
   const toast = useToast()
   const renderer = useRenderer()
   const [hover, setHover] = createSignal(false)
+  const redoKey = useCommandShortcut("session.redo")
   return (
     <box
       onMouseOver={() => setHover(true)}
@@ -1211,7 +1212,7 @@ function RevertMessage(props: {
           {props.count} message{props.count === 1 ? "" : "s"} reverted
         </text>
         <Show when={props.files.length > 0}>
-          <box marginTop={1} flexDirection="column">
+          <box paddingTop={1} paddingBottom={1} flexDirection="column">
             <For each={props.files}>
               {(file) => (
                 <box flexDirection="row" gap={1} flexShrink={0}>
@@ -1230,6 +1231,7 @@ function RevertMessage(props: {
             </For>
           </box>
         </Show>
+        <text fg={theme.textMuted}>{redoKey()} or /redo to restore</text>
       </box>
     </box>
   )
