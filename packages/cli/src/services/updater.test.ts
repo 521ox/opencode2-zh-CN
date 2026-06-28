@@ -8,18 +8,26 @@ describe("updater", () => {
     expect(decodePolicy('{ "autoupdate": "invalid" }')).toBeUndefined()
   })
 
-  test("automatically updates patches", () => {
-    expect(action("1.2.3", "1.2.4", true, false)).toBe("upgrade")
-    expect(action("1.2.3", "1.2.4", "notify", true)).toBe("confirm")
-    expect(action("1.2.3", "1.2.4", false, true)).toBe("none")
+  test("automatically updates patches and minors", () => {
+    expect(action("1.2.3", "1.2.4", true)).toBe("upgrade")
+    expect(action("1.2.3", "1.3.0", true)).toBe("upgrade")
+    expect(action("1.2.3", "1.2.4", "notify")).toBe("upgrade")
+    expect(action("1.2.3", "1.3.0", "notify")).toBe("upgrade")
   })
 
-  test("requires an interactive confirmation for minors", () => {
-    expect(action("1.2.3", "1.3.0", true, true)).toBe("confirm")
-    expect(action("1.2.3", "1.3.0", true, false)).toBe("none")
+  test("skips when autoupdate is disabled", () => {
+    expect(action("1.2.3", "1.2.4", false)).toBe("none")
   })
 
   test("never automatically updates majors", () => {
-    expect(action("1.2.3", "2.0.0", true, true)).toBe("none")
+    expect(action("1.2.3", "2.0.0", true)).toBe("none")
+  })
+
+  test("reports up-to-date only when versions match", () => {
+    expect(action("1.2.3", "1.2.3", true)).toBe("none")
+  })
+
+  test("upgrades when latest is lower (rollback)", () => {
+    expect(action("1.2.4", "1.2.3", true)).toBe("upgrade")
   })
 })

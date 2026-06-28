@@ -1,35 +1,25 @@
 import { Global } from "@opencode-ai/core/global"
 import { Flag } from "@opencode-ai/core/flag/flag"
 import { AppProcess } from "@opencode-ai/core/process"
-import { Flock } from "@opencode-ai/core/util/flock"
 import {
   InstallationChannel,
   InstallationLocal,
   InstallationVersion,
 } from "@opencode-ai/core/installation/version"
-import { Context, Duration, Effect, FileSystem, Layer, Option, Path, Schema, Terminal } from "effect"
-import { Prompt } from "effect/unstable/cli"
+import { Context, Duration, Effect, FileSystem, Layer } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { parse, type ParseError } from "jsonc-parser"
 import path from "node:path"
 import semver from "semver"
 
 export type Policy = boolean | "notify"
-export type Action = "none" | "confirm" | "upgrade"
+export type Action = "none" | "upgrade"
 type Method = "npm" | "pnpm" | "bun" | "yarn"
 
 const packageName = "@opencode-ai/cli"
-const checkInterval = 24 * 60 * 60 * 1_000
-
-const State = Schema.Struct({
-  checked: Schema.Number,
-  latest: Schema.String,
-  dismissed: Schema.optional(Schema.String),
-})
-type State = typeof State.Type
 
 export interface Interface {
-  readonly check: (options: { interactive: boolean }) => Effect.Effect<void>
+  readonly check: () => Effect.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/cli/Updater") {}
@@ -44,13 +34,11 @@ export function decodePolicy(text: string): Policy | undefined {
   if (typeof value === "boolean" || value === "notify") return value
 }
 
-export function action(current: string, latest: string, policy: Policy, interactive: boolean): Action {
+export function action(current: string, latest: string, policy: Policy): Action {
   if (policy === false) return "none"
-  if (!semver.valid(current) || !semver.valid(latest) || !semver.gt(latest, current)) return "none"
-  // Major upgrades are never offered or installed automatically.
+  if (!semver.valid(current) || !semver.valid(latest) || semver.eq(latest, current)) return "none"
+  // Major upgrades are never installed automatically.
   if (semver.major(latest) !== semver.major(current)) return "none"
-  if (semver.minor(latest) !== semver.minor(current)) return interactive ? "confirm" : "none"
-  if (policy === "notify") return interactive ? "confirm" : "none"
   return "upgrade"
 }
 
@@ -60,11 +48,7 @@ export const layer = Layer.effect(
     const fs = yield* FileSystem.FileSystem
     const global = yield* Global.Service
     const appProcess = yield* AppProcess.Service
-    const effectPath = yield* Path.Path
-    const terminal = yield* Terminal.Terminal
     const channel = InstallationChannel.replace(/[^a-zA-Z0-9._-]/g, "-")
-    const stateFile = path.join(global.state, `updater-${channel}.json`)
-    const decodeState = Schema.decodeUnknownOption(Schema.fromJsonString(State))
 
     const readPolicy = Effect.fnUntraced(function* () {
       const values = yield* Effect.forEach(["config.json", "opencode.json", "opencode.jsonc"], (name) =>
@@ -73,19 +57,6 @@ export const layer = Layer.effect(
           .pipe(Effect.map(decodePolicy), Effect.catch(() => Effect.succeed(undefined))),
       )
       return values.findLast((value) => value !== undefined) ?? true
-    })
-
-    const readState = Effect.fnUntraced(function* () {
-      const text = yield* fs.readFileString(stateFile).pipe(Effect.catch(() => Effect.succeed(undefined)))
-      if (!text) return
-      return Option.getOrUndefined(decodeState(text))
-    })
-
-    const writeState = Effect.fnUntraced(function* (state: State) {
-      const temp = stateFile + ".tmp"
-      yield* fs.makeDirectory(global.state, { recursive: true })
-      yield* fs.writeFileString(temp, JSON.stringify(state, null, 2) + "\n", { mode: 0o600 })
-      yield* fs.rename(temp, stateFile)
     })
 
     const run = Effect.fnUntraced(function* (command: string[], timeout: Duration.Input = "10 seconds") {
@@ -153,18 +124,7 @@ export const layer = Layer.effect(
       return yield* Effect.fail(new Error(result.stderr.trim() || `Failed to update with ${method}`))
     })
 
-    const confirm = (version: string) =>
-      Prompt.confirm({
-        message: `Update OpenCode from ${InstallationVersion} to ${version}?`,
-        initial: true,
-      }).pipe(
-        Effect.provideService(FileSystem.FileSystem, fs),
-        Effect.provideService(Path.Path, effectPath),
-        Effect.provideService(Terminal.Terminal, terminal),
-        Effect.orElseSucceed(() => false),
-      )
-
-    const check = Effect.fn("cli.updater.check")(function* (options: { interactive: boolean }) {
+    const check = Effect.fn("cli.updater.check")(function* () {
       if (InstallationLocal || Flag.OPENCODE_DISABLE_AUTOUPDATE)
         return yield* Effect.logInfo("update check skipped", {
           reason: InstallationLocal ? "local-install" : "disabled",
@@ -174,44 +134,19 @@ export const layer = Layer.effect(
       const policy = yield* readPolicy()
       if (policy === false) return yield* Effect.logInfo("update check skipped", { reason: "policy-disabled" })
 
-      return yield* Effect.scoped(
-        Effect.gen(function* () {
-          yield* Flock.effect(`opencode-cli-updater-${channel}`, { dir: path.join(global.state, "locks") })
-          const previous = yield* readState()
-          const now = Date.now()
-          const cached = previous && now - previous.checked < checkInterval
-          const version = cached
-            ? previous!.latest
-            : yield* latest().pipe(
-                Effect.tap((value) =>
-                  writeState({ checked: now, latest: value, dismissed: previous?.dismissed }),
-                ),
-              )
-          yield* Effect.logInfo("update check", {
-            current: InstallationVersion,
-            latest: version,
-            source: cached ? "cached" : "registry",
-          })
-          const next = action(
-            InstallationVersion,
-            version,
-            Flag.OPENCODE_ALWAYS_NOTIFY_UPDATE ? "notify" : policy,
-            options.interactive && process.stdin.isTTY && process.stdout.isTTY,
-          )
-          if (next === "none") return yield* Effect.logInfo("update check done", { action: "up-to-date" })
-          if (next === "confirm" && previous?.dismissed === version)
-            return yield* Effect.logInfo("update check done", { action: "dismissed", version })
-          const install = next === "upgrade" || (yield* confirm(version))
-          if (!install) {
-            yield* writeState({ checked: previous?.checked ?? now, latest: version, dismissed: version })
-            return yield* Effect.logInfo("update check done", { action: "declined", version })
-          }
-          const detected = yield* method()
-          if (!detected) return yield* Effect.logWarning("automatic update skipped: installation method not found")
-          yield* upgrade(detected, version)
-          yield* Effect.logInfo("updated OpenCode", { from: InstallationVersion, to: version, method: detected })
-        }),
-      )
+      return yield* Effect.gen(function* () {
+        const version = yield* latest()
+        yield* Effect.logInfo("update check", {
+          current: InstallationVersion,
+          latest: version,
+        })
+        const next = action(InstallationVersion, version, policy)
+        if (next === "none") return yield* Effect.logInfo("update check done", { action: "up-to-date" })
+        const detected = yield* method()
+        if (!detected) return yield* Effect.logWarning("automatic update skipped: installation method not found")
+        yield* upgrade(detected, version)
+        yield* Effect.logInfo("updated OpenCode", { from: InstallationVersion, to: version, method: detected })
+      })
     }, Effect.catchCause((cause) => Effect.logWarning("automatic update failed", { cause })))
 
     return Service.of({ check })

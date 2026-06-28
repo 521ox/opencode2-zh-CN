@@ -34,7 +34,7 @@ export default Runtime.handler(
         const url = HttpServer.formatAddress(address)
         console.log(input.stdio ? JSON.stringify({ url }) : `server listening on ${url}`)
         const updater = yield* Updater.Service
-        yield* updater.check({ interactive: false }).pipe(Effect.forkScoped)
+        yield* updater.check().pipe(Effect.forkScoped)
         return yield* (input.stdio ? waitForStdinClose() : Effect.never)
       }).pipe(Effect.annotateLogs({ role: "server" })),
     )
