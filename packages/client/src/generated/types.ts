@@ -56,6 +56,14 @@ export type MessageNotFoundError = {
 export const isMessageNotFoundError = (value: unknown): value is MessageNotFoundError =>
   typeof value === "object" && value !== null && "_tag" in value && value._tag === "MessageNotFoundError"
 
+export type SessionBusyError = {
+  readonly _tag: "SessionBusyError"
+  readonly sessionID: string
+  readonly message: string
+}
+export const isSessionBusyError = (value: unknown): value is SessionBusyError =>
+  typeof value === "object" && value !== null && "_tag" in value && value._tag === "SessionBusyError"
+
 export type UnknownError = {
   readonly _tag: "UnknownError"
   readonly message: string
@@ -296,6 +304,13 @@ export type SessionsSwitchModelInput = {
 }
 
 export type SessionsSwitchModelOutput = void
+
+export type SessionsRenameInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly title: { readonly title: string }["title"]
+}
+
+export type SessionsRenameOutput = void
 
 export type SessionsPromptInput = {
   readonly sessionID: { readonly sessionID: string }["sessionID"]
@@ -636,6 +651,14 @@ export type SessionsEventsOutput =
         readonly location: { readonly directory: string; readonly workspaceID?: string }
         readonly subdirectory?: string
       }
+    }
+  | {
+      readonly id: string
+      readonly metadata?: { readonly [x: string]: unknown }
+      readonly type: "session.next.renamed"
+      readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+      readonly location?: { readonly directory: string; readonly workspaceID?: string }
+      readonly data: { readonly timestamp: number; readonly sessionID: string; readonly title: string }
     }
   | {
       readonly id: string

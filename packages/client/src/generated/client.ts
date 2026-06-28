@@ -10,6 +10,8 @@ import type {
   SessionsSwitchAgentOutput,
   SessionsSwitchModelInput,
   SessionsSwitchModelOutput,
+  SessionsRenameInput,
+  SessionsRenameOutput,
   SessionsPromptInput,
   SessionsPromptOutput,
   SessionsCompactInput,
@@ -245,6 +247,18 @@ export function make(options: ClientOptions) {
           },
           requestOptions,
         ),
+      rename: (input: SessionsRenameInput, requestOptions?: RequestOptions) =>
+        request<SessionsRenameOutput>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/rename`,
+            body: { title: input.title },
+            successStatus: 204,
+            declaredStatuses: [404, 400, 401],
+            empty: true,
+          },
+          requestOptions,
+        ),
       prompt: (input: SessionsPromptInput, requestOptions?: RequestOptions) =>
         request<{ readonly data: SessionsPromptOutput }>(
           {
@@ -286,7 +300,7 @@ export function make(options: ClientOptions) {
             path: `/api/session/${encodeURIComponent(input.sessionID)}/revert/stage`,
             body: { messageID: input.messageID, files: input.files },
             successStatus: 200,
-            declaredStatuses: [404, 500, 400, 401],
+            declaredStatuses: [404, 409, 500, 400, 401],
             empty: false,
           },
           requestOptions,
@@ -297,7 +311,7 @@ export function make(options: ClientOptions) {
             method: "POST",
             path: `/api/session/${encodeURIComponent(input.sessionID)}/revert/clear`,
             successStatus: 204,
-            declaredStatuses: [404, 500, 400, 401],
+            declaredStatuses: [404, 409, 500, 400, 401],
             empty: true,
           },
           requestOptions,
@@ -308,7 +322,7 @@ export function make(options: ClientOptions) {
             method: "POST",
             path: `/api/session/${encodeURIComponent(input.sessionID)}/revert/commit`,
             successStatus: 204,
-            declaredStatuses: [404, 400, 401],
+            declaredStatuses: [404, 409, 400, 401],
             empty: true,
           },
           requestOptions,

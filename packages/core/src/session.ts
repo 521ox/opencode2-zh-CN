@@ -102,6 +102,9 @@ export class PromptConflictError extends Schema.TaggedErrorClass<PromptConflictE
   sessionID: SessionSchema.ID,
   messageID: SessionMessage.ID,
 }) {}
+export class BusyError extends Schema.TaggedErrorClass<BusyError>()("Session.BusyError", {
+  sessionID: SessionSchema.ID,
+}) {}
 export const MessageNotFoundError = SessionRevert.MessageNotFoundError
 export type MessageNotFoundError = SessionRevert.MessageNotFoundError
 
@@ -136,6 +139,10 @@ export interface Interface {
     sessionID: SessionSchema.ID
     model: ModelV2.Ref
   }) => Effect.Effect<void, NotFoundError>
+  readonly rename: (input: {
+    sessionID: SessionSchema.ID
+    title: string
+  }) => Effect.Effect<void, NotFoundError>
   readonly prompt: (input: {
     id?: SessionMessage.ID
     sessionID: SessionSchema.ID
@@ -165,9 +172,9 @@ export interface Interface {
       sessionID: SessionSchema.ID
       messageID: SessionMessage.ID
       files?: boolean
-    }) => Effect.Effect<Revert.State, NotFoundError | MessageNotFoundError | Snapshot.Error>
-    readonly clear: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | Snapshot.Error>
-    readonly commit: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
+    }) => Effect.Effect<Revert.State, NotFoundError | MessageNotFoundError | BusyError | Snapshot.Error>
+    readonly clear: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | BusyError | Snapshot.Error>
+    readonly commit: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | BusyError>
   }
 }
 
@@ -404,6 +411,14 @@ export const layer = Layer.unwrap(
                 model: input.model,
               })
             }),
+            rename: Effect.fn("V2Session.rename")(function* (input) {
+              yield* result.get(input.sessionID)
+              yield* events.publish(SessionEvent.Renamed, {
+                sessionID: input.sessionID,
+                timestamp: yield* DateTime.now,
+                title: input.title,
+              })
+            }),
             compact: Effect.fn("V2Session.compact")(function* (input) {
               yield* result.get(input.sessionID)
               return yield* new OperationUnavailableError({ operation: "compact" })
@@ -423,6 +438,8 @@ export const layer = Layer.unwrap(
             revert: {
               stage: Effect.fn("V2Session.revert.stage")(function* (input) {
                 const session = yield* result.get(input.sessionID)
+                if ((yield* execution.active).has(input.sessionID))
+                  return yield* new BusyError({ sessionID: input.sessionID })
                 return yield* SessionRevert.stage({ session, messageID: input.messageID, files: input.files }).pipe(
                   Effect.provideService(Database.Service, database),
                   Effect.provideService(EventV2.Service, events),
@@ -431,6 +448,8 @@ export const layer = Layer.unwrap(
               }),
               clear: Effect.fn("V2Session.revert.clear")(function* (sessionID) {
                 const session = yield* result.get(sessionID)
+                if ((yield* execution.active).has(sessionID))
+                  return yield* new BusyError({ sessionID })
                 yield* SessionRevert.clear(session).pipe(
                   Effect.provideService(EventV2.Service, events),
                   Effect.provide(locations.get(session.location)),
@@ -438,6 +457,8 @@ export const layer = Layer.unwrap(
               }),
               commit: Effect.fn("V2Session.revert.commit")(function* (sessionID) {
                 const session = yield* result.get(sessionID)
+                if ((yield* execution.active).has(sessionID))
+                  return yield* new BusyError({ sessionID })
                 yield* SessionRevert.commit(session).pipe(Effect.provideService(EventV2.Service, events))
               }),
             },
