@@ -878,7 +878,8 @@ export function Session() {
                 </For>
                 <Show when={session()?.revert?.messageID}>
                   <RevertMessage
-                    count={messages().filter((message) => message.id > session()!.revert!.messageID).length}
+                    count={messages().filter((message) => message.id >= session()!.revert!.messageID && message.type === "user").length}
+                    files={session()!.revert!.files ?? []}
                   />
                 </Show>
               </scrollbox>
@@ -1167,7 +1168,21 @@ function CompactionMessage() {
   )
 }
 
-function RevertMessage(props: { count: number }) {
+function statusLabel(status: "added" | "modified" | "deleted") {
+  if (status === "added") return "A"
+  if (status === "deleted") return "D"
+  return "M"
+}
+
+function RevertMessage(props: {
+  count: number
+  files: ReadonlyArray<{
+    readonly path: string
+    readonly status: "added" | "modified" | "deleted"
+    readonly additions: number
+    readonly deletions: number
+  }>
+}) {
   const { theme } = useTheme()
   const route = useRouteData("session")
   const sdk = useSDK()
@@ -1186,13 +1201,35 @@ function RevertMessage(props: { count: number }) {
         })()
       }}
       flexShrink={0}
+      marginTop={1}
       border={["left"]}
       customBorderChars={SplitBorder.customBorderChars}
       borderColor={theme.backgroundPanel}
     >
       <box paddingTop={1} paddingBottom={1} paddingLeft={2} backgroundColor={hover() ? theme.backgroundElement : theme.backgroundPanel}>
-        <text fg={theme.textMuted}>{props.count} message{props.count === 1 ? "" : "s"} reverted</text>
-        <text fg={theme.textMuted}>Click to redo</text>
+        <text fg={theme.textMuted}>
+          {props.count} message{props.count === 1 ? "" : "s"} reverted
+        </text>
+        <Show when={props.files.length > 0}>
+          <box marginTop={1} flexDirection="column">
+            <For each={props.files}>
+              {(file) => (
+                <box flexDirection="row" gap={1} flexShrink={0}>
+                  <text fg={theme.textMuted}>{statusLabel(file.status)}</text>
+                  <text fg={theme.text} wrapMode="none">
+                    {Locale.truncateLeft(file.path, 60)}
+                  </text>
+                  <Show when={file.additions > 0}>
+                    <text fg={theme.diffAdded}>+{file.additions}</text>
+                  </Show>
+                  <Show when={file.deletions > 0}>
+                    <text fg={theme.diffRemoved}>-{file.deletions}</text>
+                  </Show>
+                </box>
+              )}
+            </For>
+          </box>
+        </Show>
       </box>
     </box>
   )

@@ -28,7 +28,7 @@ export function createSessionRows(sessionID: Accessor<string>) {
   function reduce() {
     const messages = data.session.message.list(sessionID())
     const boundary = revertBoundary()
-    return reduceSessionRows(boundary ? messages.filter((message) => message.id <= boundary) : messages)
+    return reduceSessionRows(boundary ? messages.filter((message) => message.id < boundary) : messages)
   }
 
   createEffect(() => {
