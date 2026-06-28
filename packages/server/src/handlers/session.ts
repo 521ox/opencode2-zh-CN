@@ -236,6 +236,11 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.revert.stage",
         Effect.fn(function* (ctx) {
+          yield* Effect.log("session.revert.stage", {
+            sessionID: ctx.params.sessionID,
+            messageID: ctx.payload.messageID,
+            files: ctx.payload.files,
+          })
           return {
             data: yield* session.revert.stage({ ...ctx.params, ...ctx.payload }).pipe(
               Effect.catchTag(
@@ -283,6 +288,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.revert.clear",
         Effect.fn(function* (ctx) {
+          yield* Effect.log("session.revert.clear", { sessionID: ctx.params.sessionID })
           yield* session.revert.clear(ctx.params.sessionID).pipe(
             Effect.catchTag(
               "Session.NotFoundError",
@@ -320,6 +326,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.revert.commit",
         Effect.fn(function* (ctx) {
+          yield* Effect.log("session.revert.commit", { sessionID: ctx.params.sessionID })
           yield* session.revert.commit(ctx.params.sessionID).pipe(
             Effect.catchTag(
               "Session.NotFoundError",
