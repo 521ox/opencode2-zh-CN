@@ -15,6 +15,7 @@ import type {
   SessionMessageAssistantText,
   SessionMessageAssistantTool,
   SessionV2Info,
+  Shell,
   SkillV2Info,
   V2Event,
 } from "@opencode-ai/sdk/v2"
@@ -47,6 +48,9 @@ type Data = {
     permission: Record<string, PermissionSavedInfo[]>
   }
   location: Record<string, LocationData>
+  // Currently running shell commands, keyed by shell id. Entries are removed once the command
+  // exits or is deleted, so this only ever holds in-flight shells.
+  shell: Record<string, Shell>
 }
 
 function locationKey(location: LocationRef) {
@@ -72,6 +76,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         permission: {},
       },
       location: {},
+      shell: {},
     })
 
     const sdk = useSDK()
@@ -467,6 +472,18 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             ),
           )
           break
+        case "shell.created":
+          setStore("shell", event.data.info.id, event.data.info)
+          break
+        case "shell.exited":
+        case "shell.deleted":
+          setStore(
+            "shell",
+            produce((draft) => {
+              delete draft[event.data.id]
+            }),
+          )
+          break
         case "reference.updated":
           void result.location.reference.refresh()
           break
@@ -565,6 +582,23 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             const result = await sdk.client.v2.permission.saved.list({ projectID }, { throwOnError: true })
             setStore("project", "permission", projectID, result.data.data)
           },
+        },
+      },
+      shell: {
+        list() {
+          return Object.values(store.shell)
+        },
+        get(id: string) {
+          return store.shell[id]
+        },
+        async refresh(ref?: LocationRef) {
+          const result = await sdk.client.v2.shell.list({ location: locationQuery(ref) }, { throwOnError: true })
+          setStore(
+            "shell",
+            produce((draft) => {
+              for (const info of result.data.data) draft[info.id] = info
+            }),
+          )
         },
       },
       location: {
@@ -682,6 +716,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         result.location.reference.refresh(),
         result.location.command.refresh(),
         result.location.skill.refresh(),
+        result.shell.refresh(),
       ])
       for (const failure of settled.filter((item) => item.status === "rejected"))
         console.error("Failed to refresh default location data", failure.reason)

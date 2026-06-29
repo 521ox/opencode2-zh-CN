@@ -65,6 +65,9 @@ export type Event =
   | EventPtyUpdated
   | EventPtyExited
   | EventPtyDeleted
+  | EventShellCreated
+  | EventShellExited
+  | EventShellDeleted
   | EventQuestionV2Asked
   | EventQuestionV2Replied
   | EventQuestionV2Rejected
@@ -643,6 +646,7 @@ export type Prompt = {
   text: string
   files?: Array<PromptFileAttachment>
   agents?: Array<PromptAgentAttachment>
+  system?: string
 }
 
 export type Pty = {
@@ -654,6 +658,24 @@ export type Pty = {
   status: "running" | "exited"
   pid: number
   exitCode?: number
+}
+
+export type Shell = {
+  id: string
+  status: "running" | "exited" | "timeout" | "killed"
+  command: string
+  cwd: string
+  shell: string
+  file: string
+  pid?: number
+  exit?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  metadata: {
+    [key: string]: unknown
+  }
+  time: {
+    started: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    completed?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
 }
 
 export type Todo = {
@@ -1334,6 +1356,29 @@ export type GlobalEvent = {
     | {
         id: string
         type: "pty.deleted"
+        properties: {
+          id: string
+        }
+      }
+    | {
+        id: string
+        type: "shell.created"
+        properties: {
+          info: Shell
+        }
+      }
+    | {
+        id: string
+        type: "shell.exited"
+        properties: {
+          id: string
+          exit?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          status: "running" | "exited" | "timeout" | "killed"
+        }
+      }
+    | {
+        id: string
+        type: "shell.deleted"
         properties: {
           id: string
         }
@@ -2715,6 +2760,7 @@ export type PromptInput = {
   text: string
   files?: Array<PromptInputFileAttachment>
   agents?: Array<PromptAgentAttachment>
+  system?: string
 }
 
 export type ConflictError = {
@@ -2803,6 +2849,24 @@ export type OutputFormat1 =
       schema: JsonSchema
       retryCount?: number
     }
+
+export type Shell1 = {
+  id: string
+  status: "running" | "exited" | "timeout" | "killed"
+  command: string
+  cwd: string
+  shell: string
+  file: string
+  pid?: number
+  exit?: number | "NaN" | "Infinity" | "-Infinity"
+  metadata: {
+    [key: string]: unknown
+  }
+  time: {
+    started: number | "NaN" | "Infinity" | "-Infinity"
+    completed?: number | "NaN" | "Infinity" | "-Infinity"
+  }
+}
 
 export type SessionStatus2 = {
   id: string
@@ -2920,6 +2984,9 @@ export type V2Event =
   | PtyUpdated
   | PtyExited
   | PtyDeleted
+  | ShellCreated
+  | ShellExited
+  | ShellDeleted
   | QuestionV2Asked
   | QuestionV2Replied
   | QuestionV2Rejected
@@ -2957,6 +3024,12 @@ export type ForbiddenError = {
   message: string
 }
 
+export type ShellNotFoundError = {
+  _tag: "ShellNotFoundError"
+  id: string
+  message: string
+}
+
 export type ProjectCopyError = {
   name: "ProjectCopyError"
   data: {
@@ -2967,6 +3040,24 @@ export type ProjectCopyError = {
 
 export type EffectHttpApiErrorForbidden = {
   _tag: "Forbidden"
+}
+
+export type Shell2 = {
+  id: string
+  status: "running" | "exited" | "timeout" | "killed"
+  command: string
+  cwd: string
+  shell: string
+  file: string
+  pid?: number
+  exit?: number | "NaN" | "Infinity" | "-Infinity"
+  metadata: {
+    [key: string]: unknown
+  }
+  time: {
+    started: number | "NaN" | "Infinity" | "-Infinity"
+    completed?: number | "NaN" | "Infinity" | "-Infinity"
+  }
 }
 
 export type EventTuiPromptAppend2 = {
@@ -4005,6 +4096,7 @@ export type SessionMessageUser = {
   text: string
   files?: Array<PromptFileAttachment>
   agents?: Array<PromptAgentAttachment>
+  system?: string
   type: "user"
 }
 
@@ -5641,6 +5733,59 @@ export type PtyDeleted = {
   }
 }
 
+export type ShellCreated = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "shell.created"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    info: Shell1
+  }
+}
+
+export type ShellExited = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "shell.exited"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    id: string
+    exit?: number | "NaN" | "Infinity" | "-Infinity"
+    status: "running" | "exited" | "timeout" | "killed"
+  }
+}
+
+export type ShellDeleted = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "shell.deleted"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    id: string
+  }
+}
+
 export type QuestionV2Asked = {
   id: string
   metadata?: {
@@ -6854,6 +6999,32 @@ export type EventPtyExited = {
 export type EventPtyDeleted = {
   id: string
   type: "pty.deleted"
+  properties: {
+    id: string
+  }
+}
+
+export type EventShellCreated = {
+  id: string
+  type: "shell.created"
+  properties: {
+    info: Shell2
+  }
+}
+
+export type EventShellExited = {
+  id: string
+  type: "shell.exited"
+  properties: {
+    id: string
+    exit?: number | "NaN" | "Infinity" | "-Infinity"
+    status: "running" | "exited" | "timeout" | "killed"
+  }
+}
+
+export type EventShellDeleted = {
+  id: string
+  type: "shell.deleted"
   properties: {
     id: string
   }
@@ -13408,6 +13579,220 @@ export type V2PtyConnectResponses = {
 }
 
 export type V2PtyConnectResponse = V2PtyConnectResponses[keyof V2PtyConnectResponses]
+
+export type V2ShellListData = {
+  body?: never
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/shell"
+}
+
+export type V2ShellListErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2ShellListError = V2ShellListErrors[keyof V2ShellListErrors]
+
+export type V2ShellListResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: Array<Shell>
+  }
+}
+
+export type V2ShellListResponse = V2ShellListResponses[keyof V2ShellListResponses]
+
+export type V2ShellCreateData = {
+  body: {
+    command: string
+    cwd?: string
+    timeout?: number
+    metadata?: {
+      [key: string]: unknown
+    }
+  }
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/shell"
+}
+
+export type V2ShellCreateErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2ShellCreateError = V2ShellCreateErrors[keyof V2ShellCreateErrors]
+
+export type V2ShellCreateResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: Shell
+  }
+}
+
+export type V2ShellCreateResponse = V2ShellCreateResponses[keyof V2ShellCreateResponses]
+
+export type V2ShellRemoveData = {
+  body?: never
+  path: {
+    id: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/shell/{id}"
+}
+
+export type V2ShellRemoveErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ShellNotFoundError
+   */
+  404: ShellNotFoundError
+}
+
+export type V2ShellRemoveError = V2ShellRemoveErrors[keyof V2ShellRemoveErrors]
+
+export type V2ShellRemoveResponses = {
+  /**
+   * <No Content>
+   */
+  204: void
+}
+
+export type V2ShellRemoveResponse = V2ShellRemoveResponses[keyof V2ShellRemoveResponses]
+
+export type V2ShellGetData = {
+  body?: never
+  path: {
+    id: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/shell/{id}"
+}
+
+export type V2ShellGetErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ShellNotFoundError
+   */
+  404: ShellNotFoundError
+}
+
+export type V2ShellGetError = V2ShellGetErrors[keyof V2ShellGetErrors]
+
+export type V2ShellGetResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: Shell
+  }
+}
+
+export type V2ShellGetResponse = V2ShellGetResponses[keyof V2ShellGetResponses]
+
+export type V2ShellOutputData = {
+  body?: never
+  path: {
+    id: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+    cursor?: string
+    limit?: string
+  }
+  url: "/api/shell/{id}/output"
+}
+
+export type V2ShellOutputErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ShellNotFoundError
+   */
+  404: ShellNotFoundError
+}
+
+export type V2ShellOutputError = V2ShellOutputErrors[keyof V2ShellOutputErrors]
+
+export type V2ShellOutputResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: {
+      output: string
+      cursor: number
+      size: number
+      truncated: boolean
+    }
+  }
+}
+
+export type V2ShellOutputResponse = V2ShellOutputResponses[keyof V2ShellOutputResponses]
 
 export type V2QuestionRequestListData = {
   body?: never

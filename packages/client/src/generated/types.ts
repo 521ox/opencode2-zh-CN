@@ -94,6 +94,10 @@ export type PtyNotFoundError = { readonly _tag: "PtyNotFoundError"; readonly pty
 export const isPtyNotFoundError = (value: unknown): value is PtyNotFoundError =>
   typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "PtyNotFoundError"
 
+export type ShellNotFoundError = { readonly _tag: "ShellNotFoundError"; readonly id: string; readonly message: string }
+export const isShellNotFoundError = (value: unknown): value is ShellNotFoundError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "ShellNotFoundError"
+
 export type QuestionNotFoundError = {
   readonly _tag: "QuestionNotFoundError"
   readonly requestID: string
@@ -2733,6 +2737,160 @@ export type PtysRemoveInput = {
 }
 
 export type PtysRemoveOutput = void
+
+export type ServerShellListInput = {
+  readonly location?: {
+    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+  }["location"]
+}
+
+export type ServerShellListOutput = {
+  readonly location: {
+    readonly directory: string
+    readonly workspaceID?: string
+    readonly project: { readonly id: string; readonly directory: string }
+  }
+  readonly data: ReadonlyArray<{
+    readonly id: string
+    readonly status: "running" | "exited" | "timeout" | "killed"
+    readonly command: string
+    readonly cwd: string
+    readonly shell: string
+    readonly file: string
+    readonly pid?: number
+    readonly exit?: number | "Infinity" | "-Infinity" | "NaN"
+    readonly metadata: { readonly [x: string]: JsonValue }
+    readonly time: {
+      readonly started: number | "Infinity" | "-Infinity" | "NaN"
+      readonly completed?: number | "Infinity" | "-Infinity" | "NaN"
+    }
+  }>
+}
+
+export type ServerShellCreateInput = {
+  readonly location?: {
+    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+  }["location"]
+  readonly command: {
+    readonly command: string
+    readonly cwd?: string
+    readonly timeout?: number
+    readonly metadata?: { readonly [x: string]: JsonValue }
+  }["command"]
+  readonly cwd?: {
+    readonly command: string
+    readonly cwd?: string
+    readonly timeout?: number
+    readonly metadata?: { readonly [x: string]: JsonValue }
+  }["cwd"]
+  readonly timeout?: {
+    readonly command: string
+    readonly cwd?: string
+    readonly timeout?: number
+    readonly metadata?: { readonly [x: string]: JsonValue }
+  }["timeout"]
+  readonly metadata?: {
+    readonly command: string
+    readonly cwd?: string
+    readonly timeout?: number
+    readonly metadata?: { readonly [x: string]: JsonValue }
+  }["metadata"]
+}
+
+export type ServerShellCreateOutput = {
+  readonly location: {
+    readonly directory: string
+    readonly workspaceID?: string
+    readonly project: { readonly id: string; readonly directory: string }
+  }
+  readonly data: {
+    readonly id: string
+    readonly status: "running" | "exited" | "timeout" | "killed"
+    readonly command: string
+    readonly cwd: string
+    readonly shell: string
+    readonly file: string
+    readonly pid?: number
+    readonly exit?: number | "Infinity" | "-Infinity" | "NaN"
+    readonly metadata: { readonly [x: string]: JsonValue }
+    readonly time: {
+      readonly started: number | "Infinity" | "-Infinity" | "NaN"
+      readonly completed?: number | "Infinity" | "-Infinity" | "NaN"
+    }
+  }
+}
+
+export type ServerShellGetInput = {
+  readonly id: { readonly id: string }["id"]
+  readonly location?: {
+    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+  }["location"]
+}
+
+export type ServerShellGetOutput = {
+  readonly location: {
+    readonly directory: string
+    readonly workspaceID?: string
+    readonly project: { readonly id: string; readonly directory: string }
+  }
+  readonly data: {
+    readonly id: string
+    readonly status: "running" | "exited" | "timeout" | "killed"
+    readonly command: string
+    readonly cwd: string
+    readonly shell: string
+    readonly file: string
+    readonly pid?: number
+    readonly exit?: number | "Infinity" | "-Infinity" | "NaN"
+    readonly metadata: { readonly [x: string]: JsonValue }
+    readonly time: {
+      readonly started: number | "Infinity" | "-Infinity" | "NaN"
+      readonly completed?: number | "Infinity" | "-Infinity" | "NaN"
+    }
+  }
+}
+
+export type ServerShellOutputInput = {
+  readonly id: { readonly id: string }["id"]
+  readonly location?: {
+    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+    readonly cursor?: number | undefined
+    readonly limit?: number | undefined
+  }["location"]
+  readonly cursor?: {
+    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+    readonly cursor?: number | undefined
+    readonly limit?: number | undefined
+  }["cursor"]
+  readonly limit?: {
+    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+    readonly cursor?: number | undefined
+    readonly limit?: number | undefined
+  }["limit"]
+}
+
+export type ServerShellOutputOutput = {
+  readonly location: {
+    readonly directory: string
+    readonly workspaceID?: string
+    readonly project: { readonly id: string; readonly directory: string }
+  }
+  readonly data: {
+    readonly output: string
+    readonly cursor: number
+    readonly size: number
+    readonly truncated: boolean
+  }
+}
+
+export type ServerShellRemoveInput = {
+  readonly id: { readonly id: string }["id"]
+  readonly location?: {
+    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+  }["location"]
+}
+
+export type ServerShellRemoveOutput = void
 
 export type QuestionsListRequestsInput = {
   readonly location?: {

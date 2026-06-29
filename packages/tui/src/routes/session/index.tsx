@@ -1622,7 +1622,7 @@ function ToolPart(props: { part: SessionMessageAssistantTool }) {
   return (
     <Show when={!shouldHide()}>
       <Switch>
-        <Match when={display() === "bash"}>
+        <Match when={display() === "shell"}>
           <Shell {...toolprops} />
         </Match>
         <Match when={display() === "glob"}>
@@ -1646,7 +1646,7 @@ function ToolPart(props: { part: SessionMessageAssistantTool }) {
         <Match when={display() === "edit"}>
           <Edit {...toolprops} />
         </Match>
-        <Match when={display() === "task"}>
+        <Match when={display() === "subagent"}>
           <Task {...toolprops} />
         </Match>
         <Match when={display() === "apply_patch"}>
@@ -2111,8 +2111,8 @@ function Task(props: ToolProps) {
       }}
     >
       {formatSubagentTitle(
-        Locale.titlecase(stringValue(props.input.subagent_type) ?? "General"),
-        description() ?? "Task",
+        Locale.titlecase(stringValue(props.input.agent) ?? stringValue(props.input.subagent_type) ?? "General"),
+        description() ?? "Subagent",
         props.metadata.background === true,
       )}
     </InlineTool>
@@ -2124,7 +2124,7 @@ export function formatSubagentToolcalls(count: number) {
 }
 
 export function formatSubagentTitle(agent: string, description: string, background: boolean) {
-  return `${agent} Task${background ? " (background)" : ""} — ${description}`
+  return `${agent} Subagent${background ? " (background)" : ""} — ${description}`
 }
 
 export function formatSubagentRetry(attempt: number, message: string) {
@@ -2402,7 +2402,7 @@ function numberValue(value: unknown) {
 }
 
 const toolDisplays = new Set([
-  "bash",
+  "shell",
   "glob",
   "read",
   "grep",
@@ -2410,7 +2410,7 @@ const toolDisplays = new Set([
   "websearch",
   "write",
   "edit",
-  "task",
+  "subagent",
   "apply_patch",
   "todowrite",
   "question",
@@ -2418,7 +2418,10 @@ const toolDisplays = new Set([
 ])
 
 export function toolDisplay(tool: string) {
-  return toolDisplays.has(tool) ? tool : "generic"
+  // Legacy transcripts recorded the shell tool as "bash" and the subagent tool as "task"; render
+  // them with the renamed views.
+  const normalized = tool === "bash" ? "shell" : tool === "task" ? "subagent" : tool
+  return toolDisplays.has(normalized) ? normalized : "generic"
 }
 
 function recordValue(value: unknown): Record<string, unknown> | undefined {

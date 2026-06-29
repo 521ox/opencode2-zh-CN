@@ -143,6 +143,27 @@ describe("Config", () => {
     }),
   )
 
+  it.effect("normalizes renamed permission actions when migrating v1 permissions", () =>
+    Effect.sync(() => {
+      expect(
+        ConfigMigrateV1.migrate({
+          permission: {
+            task: "ask",
+            bash: { "git status": "allow", "*": "deny" },
+            write: "deny",
+            read: "allow",
+          },
+        }).permissions,
+      ).toEqual([
+        { action: "subagent", resource: "*", effect: "ask" },
+        { action: "shell", resource: "git status", effect: "allow" },
+        { action: "shell", resource: "*", effect: "deny" },
+        { action: "edit", resource: "*", effect: "deny" },
+        { action: "read", resource: "*", effect: "allow" },
+      ])
+    }),
+  )
+
   it.live("returns an empty configuration when directory files do not exist", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
@@ -566,7 +587,7 @@ describe("Config", () => {
             expect(documents[0]?.info.snapshots).toBe(false)
             expect(documents[0]?.info.share).toBe("auto")
             expect(documents[0]?.info.permissions).toEqual([
-              { action: "bash", resource: "*", effect: "ask" },
+              { action: "shell", resource: "*", effect: "ask" },
               { action: "edit", resource: "*.md", effect: "allow" },
               { action: "edit", resource: "*", effect: "deny" },
               { action: "question", resource: "*", effect: "deny" },

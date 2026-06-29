@@ -287,7 +287,7 @@ export function PermissionPrompt(props: { request: PermissionV2Request; director
               }
             }
 
-            if (permission === "bash") {
+            if (permission === "shell") {
               const command = typeof data.command === "string" ? data.command : ""
               return {
                 body: (
@@ -300,12 +300,17 @@ export function PermissionPrompt(props: { request: PermissionV2Request; director
               }
             }
 
-            if (permission === "task") {
-              const type = typeof data.subagent_type === "string" ? data.subagent_type : "Unknown"
+            if (permission === "subagent" || permission === "task") {
+              const agent =
+                typeof data.agent === "string"
+                  ? data.agent
+                  : typeof data.subagent_type === "string"
+                    ? data.subagent_type
+                    : "Unknown"
               const desc = typeof data.description === "string" ? data.description : ""
               return {
                 icon: "#",
-                title: `${Locale.titlecase(type)} Task`,
+                title: `${Locale.titlecase(agent)} Subagent`,
                 body: (
                   <Show when={desc}>
                     <box paddingLeft={1}>

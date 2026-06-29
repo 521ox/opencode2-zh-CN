@@ -1,19 +1,17 @@
-export * as BashTool from "./bash"
+export * as ShellTool from "./shell"
 
 import path from "path"
 import { ToolFailure } from "@opencode-ai/llm"
-import { Duration, Effect, Layer, Schema } from "effect"
-import { ChildProcess } from "effect/unstable/process"
-import { Config } from "../config"
+import { Effect, Layer, Schema } from "effect"
 import { FSUtil } from "../fs-util"
 import { LocationMutation } from "../location-mutation"
-import { AppProcess } from "../process"
 import { PermissionV2 } from "../permission"
 import { PositiveInt } from "../schema"
+import { Shell } from "../shell"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
 
-export const name = "bash"
+export const name = "shell"
 export const DEFAULT_TIMEOUT_MS = 2 * 60 * 1_000
 export const MAX_TIMEOUT_MS = 10 * 60 * 1_000
 export const MAX_CAPTURE_BYTES = 1024 * 1024
@@ -44,8 +42,6 @@ const Output = Schema.Struct({
 
 type Output = typeof Output.Type
 
-const defaultShell = () => (process.platform === "win32" ? (process.env.COMSPEC ?? "cmd.exe") : "/bin/sh")
-
 const modelOutput = (output: Output) => {
   const warnings = output.warnings?.length
     ? `\n\nWarnings:\n${output.warnings.map((warning) => `- ${warning}`).join("\n")}`
@@ -53,9 +49,6 @@ const modelOutput = (output: Output) => {
   if (output.timeout) return `${warnings.trimStart()}${warnings ? "\n\n" : ""}Command timed out before completion.`
   return `${warnings.trimStart()}${warnings ? "\n\n" : ""}Command exited with code ${output.exit}.`
 }
-
-const isTimeout = (error: AppProcess.AppProcessError) =>
-  error.cause instanceof Error && error.cause.message === "Timed out"
 
 /**
  * Minimal V2 core shell boundary. Keep parity debt visible without pulling the
@@ -93,8 +86,7 @@ export const layer = Layer.effectDiscard(
     const tools = yield* Tools.Service
     const mutation = yield* LocationMutation.Service
     const fs = yield* FSUtil.Service
-    const appProcess = yield* AppProcess.Service
-    const config = yield* Config.Service
+    const shell = yield* Shell.Service
     const permission = yield* PermissionV2.Service
 
     yield* tools
@@ -131,7 +123,7 @@ export const layer = Layer.effectDiscard(
                 })
               const warnings = externalCommandDirectories(input.command, target.canonical).map(
                 (directory) =>
-                  `Command argument references external directory ${path.join(directory, "*").replaceAll("\\", "/")}. Bash runs with host-user filesystem, process, and network authority; this scan is advisory only.`,
+                  `Command argument references external directory ${path.join(directory, "*").replaceAll("\\", "/")}. Shell runs with host-user filesystem, process, and network authority; this scan is advisory only.`,
               )
               yield* permission.assert({
                 action: name,
@@ -145,30 +137,20 @@ export const layer = Layer.effectDiscard(
               if ((yield* fs.stat(target.canonical)).type !== "Directory")
                 return yield* Effect.fail(new Error(`Working directory is not a directory: ${target.canonical}`))
 
-              const entries = yield* config.entries()
-              const shell =
-                Object.assign({}, ...entries.flatMap((entry) => (entry.type === "document" ? [entry.info] : [])))
-                  .shell ?? defaultShell()
-              const command = ChildProcess.make(input.command, [], {
-                cwd: target.canonical,
-                shell,
-                stdin: "ignore",
-                detached: process.platform !== "win32",
-                forceKillAfter: Duration.seconds(3),
-              })
+              // Delegate spawning, combined-output capture, timeout, and exit tracking to the Shell
+              // service. The full output is captured to a file; we read a bounded page for the model
+              // and point the agent at the file when it overflows the model cap.
               const timeout = input.timeout ?? DEFAULT_TIMEOUT_MS
-              const result = yield* appProcess
-                .run(command, {
-                  combineOutput: true,
-                  timeout: Duration.millis(timeout),
-                  maxOutputBytes: MAX_CAPTURE_BYTES,
-                })
-                .pipe(
-                  Effect.catchTag("AppProcessError", (error) =>
-                    isTimeout(error) ? Effect.succeed(undefined) : Effect.fail(error),
-                  ),
-                )
-              if (!result) {
+              const info = yield* shell.create({
+                command: input.command,
+                cwd: target.canonical,
+                timeout,
+                metadata: { sessionID: context.sessionID },
+              })
+              const final = yield* shell.wait(info.id)
+              const page = yield* shell.output(info.id, { limit: MAX_CAPTURE_BYTES })
+
+              if (final.status === "timeout") {
                 return {
                   output: `Command exceeded timeout of ${timeout} ms. Retry with a larger timeout if the command is expected to take longer.`,
                   truncated: false,
@@ -177,14 +159,13 @@ export const layer = Layer.effectDiscard(
                 }
               }
 
-              const output = result.output?.toString("utf8") || "(no output)"
-              const notice = result.outputTruncated
-                ? "[output capture truncated at the in-memory safety limit]"
-                : undefined
+              const truncated = page.size > page.cursor
+              const body = page.output || "(no output)"
+              const notice = truncated ? `\n\n[output truncated; full output saved to: ${final.file}]` : ""
               return {
-                exit: result.exitCode,
-                output: notice ? `${output}\n\n${notice}` : output,
-                truncated: result.outputTruncated === true,
+                exit: final.exit,
+                output: `${body}${notice}`,
+                truncated,
                 ...(warnings.length ? { warnings } : {}),
               }
             }).pipe(Effect.mapError(() => new ToolFailure({ message: `Unable to execute command: ${input.command}` }))),

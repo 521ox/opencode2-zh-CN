@@ -164,6 +164,9 @@ export function Prompt(props: PromptProps) {
       .filter((session) => session.parentID === props.sessionID && data.session.status(session.id) === "running")
       .length,
   )
+  const runningShells = createMemo(
+    () => data.shell.list().filter((shell) => shell.metadata.sessionID === props.sessionID).length,
+  )
   const history = usePromptHistory()
   const stash = usePromptStash()
   const keymap = useOpencodeKeymap()
@@ -282,6 +285,20 @@ export function Prompt(props: PromptProps) {
       context: pct ? `${Locale.number(tokens)} (${pct})` : Locale.number(tokens),
       cost: cost > 0 ? money.format(cost) : undefined,
     }
+  })
+
+  // Far-right footer cluster: live work counts lead, then context/cost usage, all dot-joined.
+  // When empty, the cluster falls back to the hotkey hints.
+  const statusItems = createMemo(() => {
+    const agents = activeSubagents()
+    const shells = runningShells()
+    const stats = usage()
+    return [
+      agents ? `${agents} subagent${agents === 1 ? "" : "s"}` : undefined,
+      shells ? `${shells} shell${shells === 1 ? "" : "s"}` : undefined,
+      stats?.context,
+      stats?.cost,
+    ].filter(Boolean)
   })
 
   const [store, setStore] = createStore<{
@@ -1548,13 +1565,6 @@ export function Prompt(props: PromptProps) {
                     <spinner color={spinnerDef().color} frames={spinnerDef().frames} interval={40} />
                   </Show>
                 </box>
-                <Show when={activeSubagents()}>
-                  {(count) => (
-                    <Spinner color={theme.textMuted}>
-                      {count()} active subagent{count() === 1 ? "" : "s"}
-                    </Spinner>
-                  )}
-                </Show>
                 <text fg={store.interrupt > 0 ? theme.primary : theme.text}>
                   esc{" "}
                   <span style={{ fg: store.interrupt > 0 ? theme.primary : theme.textMuted }}>
@@ -1624,22 +1634,20 @@ export function Prompt(props: PromptProps) {
             <Switch>
               <Match when={store.mode === "normal"}>
                 <Switch>
-                  <Match when={usage()}>
-                    {(item) => (
-                      <text fg={theme.textMuted} wrapMode="none">
-                        {[item().context, item().cost].filter(Boolean).join(" · ")}
-                      </text>
-                    )}
+                  <Match when={statusItems().length > 0}>
+                    <text fg={theme.textMuted} wrapMode="none">
+                      {statusItems().join(" · ")}
+                    </text>
                   </Match>
                   <Match when={true}>
                     <text fg={theme.text}>
                       {agentShortcut()} <span style={{ fg: theme.textMuted }}>agents</span>
                     </text>
+                    <text fg={theme.text}>
+                      {paletteShortcut()} <span style={{ fg: theme.textMuted }}>commands</span>
+                    </text>
                   </Match>
                 </Switch>
-                <text fg={theme.text}>
-                  {paletteShortcut()} <span style={{ fg: theme.textMuted }}>commands</span>
-                </text>
               </Match>
               <Match when={store.mode === "shell"}>
                 <text fg={theme.text}>

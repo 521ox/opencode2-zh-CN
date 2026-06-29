@@ -104,7 +104,11 @@ async function renderFrame(component: () => JSX.Element, options: { width: numbe
 
 describe("TUI inline tool wrapping", () => {
   test("falls back for unknown tool names", () => {
-    expect(toolDisplay("bash")).toBe("bash")
+    expect(toolDisplay("shell")).toBe("shell")
+    expect(toolDisplay("subagent")).toBe("subagent")
+    // Legacy tool names normalize to their renamed views.
+    expect(toolDisplay("bash")).toBe("shell")
+    expect(toolDisplay("task")).toBe("subagent")
     expect(toolDisplay("plugin_tool")).toBe("generic")
   })
 
@@ -169,9 +173,9 @@ describe("TUI inline tool wrapping", () => {
   })
 
   test("keeps background state attached to the subagent identity", () => {
-    expect(formatSubagentTitle("Explore", "Inspect renderer", false)).toBe("Explore Task — Inspect renderer")
+    expect(formatSubagentTitle("Explore", "Inspect renderer", false)).toBe("Explore Subagent — Inspect renderer")
     expect(formatSubagentTitle("Explore", "Inspect renderer", true)).toBe(
-      "Explore Task (background) — Inspect renderer",
+      "Explore Subagent (background) — Inspect renderer",
     )
   })
 

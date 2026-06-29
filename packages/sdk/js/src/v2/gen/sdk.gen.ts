@@ -385,6 +385,16 @@ import type {
   V2SessionSwitchModelResponses,
   V2SessionWaitErrors,
   V2SessionWaitResponses,
+  V2ShellCreateErrors,
+  V2ShellCreateResponses,
+  V2ShellGetErrors,
+  V2ShellGetResponses,
+  V2ShellListErrors,
+  V2ShellListResponses,
+  V2ShellOutputErrors,
+  V2ShellOutputResponses,
+  V2ShellRemoveErrors,
+  V2ShellRemoveResponses,
   V2SkillListErrors,
   V2SkillListResponses,
   VcsApplyErrors,
@@ -6849,6 +6859,179 @@ export class Pty2 extends HeyApiClient {
   }
 }
 
+export class Shell extends HeyApiClient {
+  /**
+   * List running shell commands
+   *
+   * List currently running shell commands for a location. Exited commands are not included.
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters?: {
+      location?: {
+        directory?: string
+        workspace?: string
+      }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "location" }] }])
+    return (options?.client ?? this.client).get<V2ShellListResponses, V2ShellListErrors, ThrowOnError>({
+      url: "/api/shell",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Run shell command
+   *
+   * Spawn one non-interactive shell command for a location. Combined stdout/stderr is captured to a file pageable via output.
+   */
+  public create<ThrowOnError extends boolean = false>(
+    parameters?: {
+      location?: {
+        directory?: string
+        workspace?: string
+      }
+      command?: string
+      cwd?: string
+      timeout?: number
+      metadata?: {
+        [key: string]: unknown
+      }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "location" },
+            { in: "body", key: "command" },
+            { in: "body", key: "cwd" },
+            { in: "body", key: "timeout" },
+            { in: "body", key: "metadata" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<V2ShellCreateResponses, V2ShellCreateErrors, ThrowOnError>({
+      url: "/api/shell",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Remove shell command
+   *
+   * Terminate and remove one shell command and its retained output.
+   */
+  public remove<ThrowOnError extends boolean = false>(
+    parameters: {
+      id: string
+      location?: {
+        directory?: string
+        workspace?: string
+      }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "id" },
+            { in: "query", key: "location" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).delete<V2ShellRemoveResponses, V2ShellRemoveErrors, ThrowOnError>({
+      url: "/api/shell/{id}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get shell command
+   *
+   * Get one shell command, including its status and exit code once exited.
+   */
+  public get<ThrowOnError extends boolean = false>(
+    parameters: {
+      id: string
+      location?: {
+        directory?: string
+        workspace?: string
+      }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "id" },
+            { in: "query", key: "location" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<V2ShellGetResponses, V2ShellGetErrors, ThrowOnError>({
+      url: "/api/shell/{id}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Read shell output
+   *
+   * Page through captured combined output by absolute byte cursor.
+   */
+  public output<ThrowOnError extends boolean = false>(
+    parameters: {
+      id: string
+      location?: {
+        directory?: string
+        workspace?: string
+      }
+      cursor?: string
+      limit?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "id" },
+            { in: "query", key: "location" },
+            { in: "query", key: "cursor" },
+            { in: "query", key: "limit" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<V2ShellOutputResponses, V2ShellOutputErrors, ThrowOnError>({
+      url: "/api/shell/{id}/output",
+      ...options,
+      ...params,
+    })
+  }
+}
+
 export class Request2 extends HeyApiClient {
   /**
    * List pending question requests
@@ -7093,6 +7276,11 @@ export class V2 extends HeyApiClient {
   private _pty?: Pty2
   get pty(): Pty2 {
     return (this._pty ??= new Pty2({ client: this.client }))
+  }
+
+  private _shell?: Shell
+  get shell(): Shell {
+    return (this._shell ??= new Shell({ client: this.client }))
   }
 
   private _question?: Question3

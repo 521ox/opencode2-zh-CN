@@ -43,7 +43,7 @@ import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { Skill } from "../../src/skill"
 import { SystemPrompt } from "../../src/session/system"
-import { Shell } from "@opencode-ai/core/shell"
+import { ShellSelect } from "@opencode-ai/core/shell/select"
 import { Snapshot } from "../../src/snapshot"
 import { ToolRegistry } from "@/tool/registry"
 import { Truncate } from "@/tool/truncate"
@@ -77,7 +77,7 @@ function withSh<A, E, R>(fx: () => Effect.Effect<A, E, R>) {
     Effect.sync(() => {
       const prev = process.env.SHELL
       process.env.SHELL = "/bin/sh"
-      Shell.preferred.reset()
+      ShellSelect.preferred.reset()
       return prev
     }),
     () => fx(),
@@ -85,7 +85,7 @@ function withSh<A, E, R>(fx: () => Effect.Effect<A, E, R>) {
       Effect.sync(() => {
         if (prev === undefined) delete process.env.SHELL
         else process.env.SHELL = prev
-        Shell.preferred.reset()
+        ShellSelect.preferred.reset()
       }),
   )
 }

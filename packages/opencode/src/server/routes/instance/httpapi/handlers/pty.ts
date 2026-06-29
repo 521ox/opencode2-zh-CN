@@ -9,7 +9,7 @@ import { PtyTicket } from "@opencode-ai/core/pty/ticket"
 import { LocationServiceMap, locationServiceMapLayer } from "@opencode-ai/core/location-services"
 import { Location } from "@opencode-ai/core/location"
 import { AbsolutePath } from "@opencode-ai/core/schema"
-import { Shell } from "@opencode-ai/core/shell"
+import { ShellSelect } from "@opencode-ai/core/shell/select"
 import { CorsConfig, isAllowedRequestOrigin, type CorsOptions } from "@opencode-ai/server/cors"
 import {
   PTY_CONNECT_TICKET_QUERY,
@@ -58,7 +58,7 @@ export const ptyHandlers = HttpApiBuilder.group(InstanceHttpApi, "pty", (handler
     })
 
     const shells = Effect.fn("PtyHttpApi.shells")(function* () {
-      return yield* Effect.promise(() => Shell.list())
+      return yield* Effect.promise(() => ShellSelect.list())
     })
 
     const list = Effect.fn("PtyHttpApi.list")(function* () {

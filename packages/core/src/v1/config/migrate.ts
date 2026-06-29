@@ -79,8 +79,9 @@ function permissions(info?: ConfigPermissionV1.Info, tools?: Readonly<Record<str
     resource: "*",
     effect: enabled ? ("allow" as const) : ("deny" as const),
   }))
-  for (const [action, rule] of Object.entries(info ?? {})) {
+  for (const [key, rule] of Object.entries(info ?? {})) {
     if (!rule) continue
+    const action = normalizeAction(key)
     if (typeof rule === "string") {
       rules.push({ action, resource: "*", effect: rule })
       continue
@@ -90,8 +91,12 @@ function permissions(info?: ConfigPermissionV1.Info, tools?: Readonly<Record<str
   return rules.length ? rules : undefined
 }
 
+// Map v1 permission/tool keys onto their renamed v2 tool actions so migrated rules keep matching.
 function normalizeAction(action: string) {
-  return action === "write" || action === "patch" ? "edit" : action
+  if (action === "write" || action === "patch") return "edit"
+  if (action === "task") return "subagent"
+  if (action === "bash") return "shell"
+  return action
 }
 
 function agents(info: typeof ConfigV1.Info.Type) {

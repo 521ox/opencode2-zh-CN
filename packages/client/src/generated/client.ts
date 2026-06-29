@@ -100,6 +100,16 @@ import type {
   PtysUpdateOutput,
   PtysRemoveInput,
   PtysRemoveOutput,
+  ServerShellListInput,
+  ServerShellListOutput,
+  ServerShellCreateInput,
+  ServerShellCreateOutput,
+  ServerShellGetInput,
+  ServerShellGetOutput,
+  ServerShellOutputInput,
+  ServerShellOutputOutput,
+  ServerShellRemoveInput,
+  ServerShellRemoveOutput,
   QuestionsListRequestsInput,
   QuestionsListRequestsOutput,
   QuestionsListInput,
@@ -908,6 +918,74 @@ export function make(options: ClientOptions) {
           {
             method: "DELETE",
             path: `/api/pty/${encodeURIComponent(input.ptyID)}`,
+            query: { location: input["location"] },
+            successStatus: 204,
+            declaredStatuses: [404, 401, 400],
+            empty: true,
+          },
+          requestOptions,
+        ),
+    },
+    "server.shell": {
+      list: (input?: ServerShellListInput, requestOptions?: RequestOptions) =>
+        request<ServerShellListOutput>(
+          {
+            method: "GET",
+            path: `/api/shell`,
+            query: { location: input?.["location"] },
+            successStatus: 200,
+            declaredStatuses: [401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      create: (input: ServerShellCreateInput, requestOptions?: RequestOptions) =>
+        request<ServerShellCreateOutput>(
+          {
+            method: "POST",
+            path: `/api/shell`,
+            query: { location: input["location"] },
+            body: {
+              command: input["command"],
+              cwd: input["cwd"],
+              timeout: input["timeout"],
+              metadata: input["metadata"],
+            },
+            successStatus: 200,
+            declaredStatuses: [401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      get: (input: ServerShellGetInput, requestOptions?: RequestOptions) =>
+        request<ServerShellGetOutput>(
+          {
+            method: "GET",
+            path: `/api/shell/${encodeURIComponent(input.id)}`,
+            query: { location: input["location"] },
+            successStatus: 200,
+            declaredStatuses: [404, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      output: (input: ServerShellOutputInput, requestOptions?: RequestOptions) =>
+        request<ServerShellOutputOutput>(
+          {
+            method: "GET",
+            path: `/api/shell/${encodeURIComponent(input.id)}/output`,
+            query: { location: input["location"], cursor: input["cursor"], limit: input["limit"] },
+            successStatus: 200,
+            declaredStatuses: [404, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      remove: (input: ServerShellRemoveInput, requestOptions?: RequestOptions) =>
+        request<ServerShellRemoveOutput>(
+          {
+            method: "DELETE",
+            path: `/api/shell/${encodeURIComponent(input.id)}`,
             query: { location: input["location"] },
             successStatus: 204,
             declaredStatuses: [404, 401, 400],
