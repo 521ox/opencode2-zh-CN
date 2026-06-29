@@ -16,6 +16,7 @@ import {
 import path from "node:path"
 import { mkdir, writeFile } from "node:fs/promises"
 import { useRoute, useRouteData } from "../../context/route"
+import { createStore } from "solid-js/store"
 import { useProject } from "../../context/project"
 import { useData } from "../../context/data"
 import { SplitBorder } from "../../ui/border"
@@ -46,7 +47,7 @@ import { DialogSessionRename } from "../../component/dialog-session-rename"
 import { TodoItem } from "../../component/todo-item"
 import { DialogMessage } from "./dialog-message"
 import { Sidebar } from "./sidebar"
-import { SubagentFooter } from "./subagent-footer.tsx"
+import { Composer } from "./composer"
 import { filetype } from "../../util/filetype"
 import parsers from "../../parsers-config"
 import { errorMessage } from "../../util/error"
@@ -177,7 +178,10 @@ export function Session() {
     if (session()?.parentID) return []
     return data.session.question.list(route.sessionID) ?? []
   })
-  const visible = createMemo(() => !session()?.parentID && permissions().length === 0 && questions().length === 0)
+  const [composer, setComposer] = createStore({
+    open: false,
+    tab: undefined as string | undefined,
+  })
   const disabled = createMemo(() => permissions().length > 0 || questions().length > 0)
 
   const pending = createMemo(() => {
@@ -764,11 +768,14 @@ export function Session() {
       run: () => unavailable("Backgrounding subagents"),
     },
     {
-      title: "Go to child session",
+      title: "Toggle subagent picker",
       value: "session.child.first",
       category: "Session",
-      hidden: true,
-      run: () => unavailable("Child session discovery"),
+      run: () => {
+        if (composer.open || session()?.parentID) setComposer("open", false)
+        else setComposer("open", true)
+        dialog.clear()
+      },
     },
     {
       title: "Go to parent session",
@@ -836,6 +843,7 @@ export function Session() {
 
   // snap to bottom when session changes
   createEffect(on(() => route.sessionID, toBottom))
+  createEffect(on(() => route.sessionID, () => setComposer("open", false)))
 
   return (
     <LocationProvider location={location()}>
@@ -898,37 +906,45 @@ export function Session() {
                 </Show>
               </scrollbox>
               <box flexShrink={0}>
-                <Show when={permissions().length > 0}>
-                  <PermissionPrompt request={permissions()[0]} directory={session()?.location.directory} />
-                </Show>
-                <Show when={permissions().length === 0 && questions().length > 0}>
-                  <QuestionPrompt request={questions()[0]} directory={session()?.location.directory} />
-                </Show>
-                <Show when={session()?.parentID}>
-                  <SubagentFooter />
-                </Show>
-                <Show when={visible()}>
-                  <pluginRuntime.Slot
-                    name="session_prompt"
-                    mode="replace"
-                    session_id={route.sessionID}
-                    visible={visible()}
-                    disabled={disabled()}
-                    on_submit={toBottom}
-                    ref={bind}
-                  >
-                    <Prompt
-                      visible={visible()}
+                <Composer
+                  sessionID={route.sessionID}
+                  open={composer.open || !!session()?.parentID}
+                  defaultTab={composer.tab ?? (session()?.parentID ? "subagents" : undefined)}
+                  onClose={() => setComposer("open", false)}
+                />
+                <Switch>
+                  <Match when={composer.open || !!session()?.parentID}>
+                    {null}
+                  </Match>
+                  <Match when={permissions().length > 0}>
+                    <PermissionPrompt request={permissions()[0]} directory={session()?.location.directory} />
+                  </Match>
+                  <Match when={questions().length > 0}>
+                    <QuestionPrompt request={questions()[0]} directory={session()?.location.directory} />
+                  </Match>
+                  <Match when={!disabled()}>
+                    <pluginRuntime.Slot
+                      name="session_prompt"
+                      mode="replace"
+                      session_id={route.sessionID}
+                      visible={true}
+                      disabled={false}
+                      on_submit={toBottom}
                       ref={bind}
-                      disabled={disabled()}
-                      onSubmit={() => {
-                        toBottom()
-                      }}
-                      sessionID={route.sessionID}
-                      right={<pluginRuntime.Slot name="session_prompt_right" session_id={route.sessionID} />}
-                    />
-                  </pluginRuntime.Slot>
-                </Show>
+                    >
+                      <Prompt
+                        visible={true}
+                        ref={bind}
+                        disabled={false}
+                        onSubmit={() => {
+                          toBottom()
+                        }}
+                        sessionID={route.sessionID}
+                        right={<pluginRuntime.Slot name="session_prompt_right" session_id={route.sessionID} />}
+                      />
+                    </pluginRuntime.Slot>
+                  </Match>
+                </Switch>
               </box>
             </Show>
             <Toast />
