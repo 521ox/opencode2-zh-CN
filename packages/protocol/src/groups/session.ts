@@ -171,6 +171,23 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
         ),
     )
     .add(
+      HttpApiEndpoint.post("session.fork", "/api/session/:sessionID/fork", {
+        params: { sessionID: Session.ID },
+        payload: Schema.Struct({ messageID: SessionMessage.ID.pipe(Schema.optional) }),
+        success: Schema.Struct({ data: Session.Info }),
+        error: [SessionNotFoundError, MessageNotFoundError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.session.fork",
+            summary: "Fork session",
+            description:
+              "Create a child session by copying projected history from the parent. When messageID is supplied, copy messages before that boundary.",
+          }),
+        ),
+    )
+    .add(
       HttpApiEndpoint.post("session.switchAgent", "/api/session/:sessionID/agent", {
         params: { sessionID: Session.ID },
         payload: Schema.Struct({ agent: Agent.ID }),

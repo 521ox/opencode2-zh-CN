@@ -108,6 +108,32 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         }),
       )
       .handle(
+        "session.fork",
+        Effect.fn(function* (ctx) {
+          return {
+            data: yield* session.fork({ sessionID: ctx.params.sessionID, messageID: ctx.payload.messageID }).pipe(
+              Effect.catchTag(
+                "Session.NotFoundError",
+                (error) =>
+                  new SessionNotFoundError({
+                    sessionID: error.sessionID,
+                    message: `Session not found: ${error.sessionID}`,
+                  }),
+              ),
+              Effect.catchTag(
+                "Session.MessageNotFoundError",
+                (error) =>
+                  new MessageNotFoundError({
+                    sessionID: error.sessionID,
+                    messageID: error.messageID,
+                    message: `Message not found: ${error.messageID}`,
+                  }),
+              ),
+            ),
+          }
+        }),
+      )
+      .handle(
         "session.switchAgent",
         Effect.fn(function* (ctx) {
           yield* session.switchAgent({ sessionID: ctx.params.sessionID, agent: ctx.payload.agent }).pipe(

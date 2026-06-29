@@ -124,6 +124,7 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
       },
       "session.next.moved": () => Effect.void,
       "session.next.renamed": () => Effect.void,
+      "session.next.forked": () => Effect.void,
       "session.next.prompted": (event) => {
         return adapter.appendMessage(
           SessionMessage.User.make({

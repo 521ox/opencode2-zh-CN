@@ -1,6 +1,6 @@
 export * as SessionProjector from "./projector"
 
-import { and, desc, eq, gt, or, sql } from "drizzle-orm"
+import { and, asc, desc, eq, gt, inArray, lt, or, sql } from "drizzle-orm"
 import { DateTime, Effect, Layer, Schema } from "effect"
 import { Database } from "../database/database"
 import { EventV2 } from "../event"
@@ -17,6 +17,7 @@ import { MessageTable, PartTable, SessionInputTable, SessionMessageTable, Sessio
 import type { DeepMutable } from "../schema"
 
 type DatabaseService = Database.Interface["db"]
+type MessageEvent = Exclude<SessionEvent.Event, typeof SessionEvent.Forked.Type>
 
 const decodeMessage = Schema.decodeUnknownSync(SessionMessage.Message)
 const encodeMessage = Schema.encodeSync(SessionMessage.Message)
@@ -33,12 +34,35 @@ type Usage = {
   }
 }
 
+const ForkBatchSize = 500
+
+const emptyUsage = (): Usage => ({
+  cost: 0,
+  tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+})
+
 function usage(part: (typeof SessionV1.Event.PartUpdated.Type)["data"]["part"] | unknown): Usage | undefined {
   if (typeof part !== "object" || part === null) return undefined
   const value = part as Record<string, unknown>
   if (value.type !== "step-finish") return undefined
   if (!("cost" in value) || !("tokens" in value)) return undefined
   return { cost: value.cost as Usage["cost"], tokens: value.tokens as Usage["tokens"] }
+}
+
+function addUsage(target: Usage, value: Usage) {
+  target.cost += value.cost
+  target.tokens.input += value.tokens.input
+  target.tokens.output += value.tokens.output
+  target.tokens.reasoning += value.tokens.reasoning
+  target.tokens.cache.read += value.tokens.cache.read
+  target.tokens.cache.write += value.tokens.cache.write
+}
+
+function messageUsage(row: typeof SessionMessageTable.$inferSelect): Usage | undefined {
+  if (row.type !== "assistant") return undefined
+  const message = decodeMessage({ ...row.data, id: row.id, type: row.type })
+  if (message.type !== "assistant" || message.cost === undefined || message.tokens === undefined) return undefined
+  return { cost: message.cost, tokens: message.tokens }
 }
 
 function sessionRow(info: SessionV1.SessionInfo): typeof SessionTable.$inferInsert {
@@ -109,7 +133,150 @@ function applyUsage(
     .pipe(Effect.orDie)
 }
 
-function run(db: DatabaseService, event: SessionEvent.Event) {
+const projectFork = Effect.fn("SessionProjector.projectFork")(function* (
+  db: DatabaseService,
+  event: typeof SessionEvent.Forked.Type,
+) {
+  const parent = yield* db
+    .select()
+    .from(SessionTable)
+    .where(eq(SessionTable.id, event.data.parentID))
+    .get()
+    .pipe(Effect.orDie)
+  if (!parent) return yield* Effect.die(`Fork parent session not found: ${event.data.parentID}`)
+
+  const stored = yield* db
+    .insert(SessionTable)
+    .values({
+      id: event.data.sessionID,
+      parent_id: event.data.parentID,
+      project_id: parent.project_id,
+      workspace_id: parent.workspace_id,
+      slug: event.data.slug,
+      directory: parent.directory,
+      path: parent.path,
+      title: event.data.title,
+      agent: event.data.agent,
+      model: event.data.model,
+      version: parent.version,
+      cost: 0,
+      tokens_input: 0,
+      tokens_output: 0,
+      tokens_reasoning: 0,
+      tokens_cache_read: 0,
+      tokens_cache_write: 0,
+      time_created: DateTime.toEpochMillis(event.data.timestamp),
+      time_updated: DateTime.toEpochMillis(event.data.timestamp),
+    })
+    .onConflictDoNothing()
+    .returning({ sessionID: SessionTable.id })
+    .get()
+    .pipe(Effect.orDie)
+  if (!stored) return yield* Effect.die(new SessionAlreadyProjected())
+
+  const usage = emptyUsage()
+  let cursor = -1
+  while (true) {
+    const rows = yield* db
+      .select()
+      .from(SessionMessageTable)
+      .where(
+        and(
+          eq(SessionMessageTable.session_id, event.data.parentID),
+          gt(SessionMessageTable.seq, cursor),
+          event.data.messageID === undefined ? undefined : lt(SessionMessageTable.seq, event.data.copiedSeq + 1),
+        ),
+      )
+      .orderBy(asc(SessionMessageTable.seq))
+      .limit(ForkBatchSize)
+      .all()
+      .pipe(Effect.orDie)
+    if (rows.length === 0) break
+
+    const idMap = new Map(rows.map((row) => [row.id, SessionMessage.ID.create()]))
+    yield* db
+      .insert(SessionMessageTable)
+      .values(
+        rows.map((row) => {
+          const id = idMap.get(row.id)
+          if (!id) throw new Error(`Fork message ID mapping missing: ${row.id}`)
+          return {
+            id,
+            session_id: event.data.sessionID,
+            type: row.type,
+            seq: row.seq,
+            time_created: row.time_created,
+            time_updated: row.time_updated,
+            data: row.type === "synthetic" ? { ...row.data, sessionID: event.data.sessionID } : row.data,
+          }
+        }),
+      )
+      .run()
+      .pipe(Effect.orDie)
+
+    const inputRows = yield* db
+      .select()
+      .from(SessionInputTable)
+      .where(
+        and(
+          eq(SessionInputTable.session_id, event.data.parentID),
+          inArray(
+            SessionInputTable.id,
+            rows.map((row) => row.id),
+          ),
+        ),
+      )
+      .all()
+      .pipe(Effect.orDie)
+    if (inputRows.length > 0) {
+      yield* db
+        .insert(SessionInputTable)
+        .values(
+          inputRows.flatMap((row) => {
+            const id = idMap.get(row.id)
+            return id
+              ? [
+                  {
+                    id,
+                    session_id: event.data.sessionID,
+                    prompt: row.prompt,
+                    delivery: row.delivery,
+                    admitted_seq: row.admitted_seq,
+                    promoted_seq: row.promoted_seq,
+                    time_created: row.time_created,
+                  },
+                ]
+              : []
+          }),
+        )
+        .run()
+        .pipe(Effect.orDie)
+    }
+
+    for (const row of rows) {
+      const value = messageUsage(row)
+      if (value) addUsage(usage, value)
+    }
+    cursor = rows.at(-1)!.seq
+  }
+
+  yield* db
+    .update(SessionTable)
+    .set({
+      cost: usage.cost,
+      tokens_input: usage.tokens.input,
+      tokens_output: usage.tokens.output,
+      tokens_reasoning: usage.tokens.reasoning,
+      tokens_cache_read: usage.tokens.cache.read,
+      tokens_cache_write: usage.tokens.cache.write,
+    })
+    .where(eq(SessionTable.id, event.data.sessionID))
+    .run()
+    .pipe(Effect.orDie)
+  if (event.data.copiedSeq > 0) yield* EventV2.reserveSequence(db, event.data.sessionID, event.data.copiedSeq)
+})
+
+function run(db: DatabaseService, event: MessageEvent) {
   return Effect.gen(function* () {
     const decodeRow = (row: typeof SessionMessageTable.$inferSelect) =>
       decodeMessage({ ...row.data, id: row.id, type: row.type })
@@ -355,6 +522,7 @@ export const layer = Layer.effectDiscard(
         .run()
         .pipe(Effect.orDie),
     )
+    yield* events.project(SessionEvent.Forked, (event) => projectFork(db, event))
     yield* events.project(SessionEvent.Prompted, (event) =>
       Effect.gen(function* () {
         if (event.durable === undefined) return yield* Effect.die("Durable Session event is missing aggregate sequence")

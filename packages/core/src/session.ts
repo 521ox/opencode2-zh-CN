@@ -90,6 +90,11 @@ type CompactInput = {
   sessionID: SessionSchema.ID
 }
 
+type ForkInput = {
+  sessionID: SessionSchema.ID
+  messageID?: SessionMessage.ID
+}
+
 export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Session.NotFoundError", {
   sessionID: SessionSchema.ID,
 }) {}
@@ -113,11 +118,18 @@ export class BusyError extends Schema.TaggedErrorClass<BusyError>()("Session.Bus
 export const MessageNotFoundError = SessionRevert.MessageNotFoundError
 export type MessageNotFoundError = SessionRevert.MessageNotFoundError
 
-export type Error = NotFoundError | MessageDecodeError | OperationUnavailableError | PromptConflictError | BusyError
+export type Error =
+  | NotFoundError
+  | MessageDecodeError
+  | OperationUnavailableError
+  | PromptConflictError
+  | BusyError
+  | MessageNotFoundError
 
 export interface Interface {
   readonly list: (input?: ListInput) => Effect.Effect<SessionSchema.Info[]>
   readonly create: (input: CreateInput) => Effect.Effect<SessionSchema.Info, NotFoundError>
+  readonly fork: (input: ForkInput) => Effect.Effect<SessionSchema.Info, NotFoundError | MessageNotFoundError>
   readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<SessionSchema.Info, NotFoundError>
   readonly messages: (input: {
     sessionID: SessionSchema.ID
@@ -270,6 +282,52 @@ export const layer = Layer.effect(
         )
         if (projected.type === "existing") return projected.session
         // TODO: Restore recorded sessions onto replacement synchronized workspaces in a future API slice.
+        return yield* result.get(sessionID).pipe(Effect.orDie)
+      }),
+      fork: Effect.fn("V2Session.fork")(function* (input) {
+        const parent = yield* result.get(input.sessionID)
+        const boundary = input.messageID
+          ? yield* db
+              .select({ seq: SessionMessageTable.seq })
+              .from(SessionMessageTable)
+              .where(
+                and(eq(SessionMessageTable.session_id, input.sessionID), eq(SessionMessageTable.id, input.messageID)),
+              )
+              .get()
+              .pipe(Effect.orDie)
+          : undefined
+        if (input.messageID && !boundary)
+          return yield* new MessageNotFoundError({ sessionID: input.sessionID, messageID: input.messageID })
+        const copied = yield* db
+          .select({ seq: SessionMessageTable.seq })
+          .from(SessionMessageTable)
+          .where(
+            and(
+              eq(SessionMessageTable.session_id, input.sessionID),
+              boundary === undefined ? undefined : lt(SessionMessageTable.seq, boundary.seq),
+            ),
+          )
+          .orderBy(desc(SessionMessageTable.seq))
+          .limit(1)
+          .get()
+          .pipe(Effect.orDie)
+        const sessionID = SessionSchema.ID.create()
+        yield* events.publish(SessionEvent.Forked, {
+          sessionID,
+          parentID: parent.id,
+          slug: Slug.create(),
+          title: forkTitle(parent.title),
+          agent: parent.agent,
+          model: parent.model,
+          messageID: input.messageID,
+          copiedSeq: copied?.seq ?? 0,
+          timestamp: yield* DateTime.now,
+        }, {
+          commit: (seq) =>
+            copied && copied.seq > seq
+              ? EventV2.reserveSequence(db, sessionID, copied.seq)
+              : Effect.void,
+        })
         return yield* result.get(sessionID).pipe(Effect.orDie)
       }),
       get: Effect.fn("V2Session.get")(function* (sessionID) {
@@ -504,6 +562,12 @@ export const defaultLayer = layer.pipe(
   Layer.provide(ProjectV2.defaultLayer),
   Layer.orDie,
 )
+
+const forkTitle = (value: string) => {
+  const match = value.match(/^(.+) \(fork #(\d+)\)$/)
+  if (match) return `${match[1]} (fork #${Number.parseInt(match[2], 10) + 1})`
+  return `${value} (fork #1)`
+}
 
 const resolvePrompt = (input: PromptInput.Prompt) =>
   Prompt.make({

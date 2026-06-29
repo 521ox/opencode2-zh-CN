@@ -94,6 +94,22 @@ export const Renamed = Event.define({
 })
 export type Renamed = typeof Renamed.Type
 
+export const Forked = Event.define({
+  type: "session.next.forked",
+  ...options,
+  schema: {
+    ...Base,
+    parentID: SessionID,
+    slug: Schema.String,
+    title: Schema.String,
+    agent: Schema.String.pipe(optional),
+    model: Model.Ref.pipe(optional),
+    messageID: SessionMessage.ID.pipe(optional),
+    copiedSeq: NonNegativeInt,
+  },
+})
+export type Forked = typeof Forked.Type
+
 export const Prompted = Event.define({
   type: "session.next.prompted",
   ...options,
@@ -460,6 +476,7 @@ export const DurableDefinitions = Event.inventory(
   ModelSwitched,
   Moved,
   Renamed,
+  Forked,
   Prompted,
   PromptAdmitted,
   ContextUpdated,
@@ -492,6 +509,7 @@ export const Definitions = Event.inventory(
   ModelSwitched,
   Moved,
   Renamed,
+  Forked,
   Prompted,
   PromptAdmitted,
   ContextUpdated,

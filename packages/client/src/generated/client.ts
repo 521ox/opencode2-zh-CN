@@ -11,6 +11,8 @@ import type {
   SessionsActiveOutput,
   SessionsGetInput,
   SessionsGetOutput,
+  SessionsForkInput,
+  SessionsForkOutput,
   SessionsSwitchAgentInput,
   SessionsSwitchAgentOutput,
   SessionsSwitchModelInput,
@@ -355,6 +357,18 @@ export function make(options: ClientOptions) {
           {
             method: "GET",
             path: `/api/session/${encodeURIComponent(input.sessionID)}`,
+            successStatus: 200,
+            declaredStatuses: [404, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      fork: (input: SessionsForkInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionsForkOutput }>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/fork`,
+            body: { messageID: input["messageID"] },
             successStatus: 200,
             declaredStatuses: [404, 400, 401],
             empty: false,
