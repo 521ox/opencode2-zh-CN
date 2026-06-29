@@ -626,6 +626,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             }),
           )
         },
+        async remove(id: string) {
+          await sdk.client.v2.shell.remove({ id }, { throwOnError: true })
+          setStore("shell", id, undefined!)
+        },
       },
       location: {
         default() {
