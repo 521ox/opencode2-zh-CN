@@ -356,6 +356,53 @@ test("refreshes effective catalog data after catalog updates", async () => {
   }
 })
 
+test("refreshes agents after agent updates", async () => {
+  const events = createEventStream()
+  let requests = 0
+  const calls = createFetch((url) => {
+    if (url.pathname !== "/api/agent") return
+    requests++
+    return json({
+      location: { directory, project: { id: "proj_test", directory } },
+      data: [
+        {
+          id: requests === 1 ? "build" : "reviewer",
+          request: { headers: {}, body: {} },
+          mode: "primary",
+          hidden: false,
+          permissions: [],
+        },
+      ],
+    })
+  }, events)
+  let data!: ReturnType<typeof useData>
+
+  function Probe() {
+    data = useData()
+    return <box />
+  }
+
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <SDKProvider client={createClient(calls.fetch)} api={createApi(calls.fetch)}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </SDKProvider>
+    </TestTuiContexts>
+  ))
+
+  try {
+    await wait(() => data.location.agent.list()?.[0]?.id === "build")
+    emitEvent(events, { id: "evt_agent", type: "agent.updated", data: {} })
+    await wait(() => data.location.agent.list()?.[0]?.id === "reviewer")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("refreshes references after updates", async () => {
   const events = createEventStream()
   let requests = 0

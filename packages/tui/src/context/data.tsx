@@ -158,6 +158,9 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             result.location.provider.refresh(event.location),
           ])
           break
+        case "agent.updated":
+          void result.location.agent.refresh(event.location)
+          break
         case "session.next.agent.switched":
           if (store.session.info[event.data.sessionID])
             setStore("session", "info", event.data.sessionID, "agent", event.data.agent)
