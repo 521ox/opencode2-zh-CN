@@ -100,12 +100,7 @@ export const Forked = Event.define({
   schema: {
     ...Base,
     parentID: SessionID,
-    slug: Schema.String,
-    title: Schema.String,
-    agent: Schema.String.pipe(optional),
-    model: Model.Ref.pipe(optional),
     messageID: SessionMessage.ID.pipe(optional),
-    copiedSeq: NonNegativeInt,
   },
 })
 export type Forked = typeof Forked.Type

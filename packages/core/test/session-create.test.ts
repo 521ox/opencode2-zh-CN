@@ -166,7 +166,7 @@ describe("SessionV2.create", () => {
       expect(history.events[0]).toMatchObject({
         type: "session.next.forked",
         durable: { seq: 0 },
-        data: { sessionID: forked.id, parentID: parent.id, copiedSeq: 3 },
+        data: { sessionID: forked.id, parentID: parent.id },
       })
       expect(yield* SessionInput.find(db, forkContext[0]!.id)).toMatchObject({
         sessionID: forked.id,
@@ -216,7 +216,7 @@ describe("SessionV2.create", () => {
       const history = yield* session.history({ sessionID: forked.id, limit: 10 })
       expect(context).toMatchObject([{ text: "First" }])
       expect(context[0]?.id).not.toBe(first.id)
-      expect(history.events[0]).toMatchObject({ data: { copiedSeq: 2, messageID: second.id } })
+      expect(history.events[0]).toMatchObject({ data: { messageID: second.id } })
     }),
   )
 

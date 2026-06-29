@@ -15,6 +15,7 @@ import { WorkspaceV2 } from "../workspace"
 import { SessionContextEpoch } from "./context-epoch"
 import { MessageTable, PartTable, SessionInputTable, SessionMessageTable, SessionTable } from "./sql"
 import type { DeepMutable } from "../schema"
+import { Slug } from "../util/slug"
 
 type DatabaseService = Database.Interface["db"]
 type MessageEvent = Exclude<SessionEvent.Event, typeof SessionEvent.Forked.Type>
@@ -40,6 +41,12 @@ const emptyUsage = (): Usage => ({
   cost: 0,
   tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
 })
+
+const forkTitle = (value: string) => {
+  const match = value.match(/^(.+) \(fork #(\d+)\)$/)
+  if (match) return `${match[1]} (fork #${Number.parseInt(match[2], 10) + 1})`
+  return `${value} (fork #1)`
+}
 
 function usage(part: (typeof SessionV1.Event.PartUpdated.Type)["data"]["part"] | unknown): Usage | undefined {
   if (typeof part !== "object" || part === null) return undefined
@@ -144,6 +151,31 @@ const projectFork = Effect.fn("SessionProjector.projectFork")(function* (
     .get()
     .pipe(Effect.orDie)
   if (!parent) return yield* Effect.die(`Fork parent session not found: ${event.data.parentID}`)
+  const boundary = event.data.messageID
+    ? yield* db
+        .select({ seq: SessionMessageTable.seq })
+        .from(SessionMessageTable)
+        .where(
+          and(eq(SessionMessageTable.session_id, event.data.parentID), eq(SessionMessageTable.id, event.data.messageID)),
+        )
+        .get()
+        .pipe(Effect.orDie)
+    : undefined
+  if (event.data.messageID && !boundary) return yield* Effect.die(`Fork boundary message not found: ${event.data.messageID}`)
+  const copied = yield* db
+    .select({ seq: SessionMessageTable.seq })
+    .from(SessionMessageTable)
+    .where(
+      and(
+        eq(SessionMessageTable.session_id, event.data.parentID),
+        boundary === undefined ? undefined : lt(SessionMessageTable.seq, boundary.seq),
+      ),
+    )
+    .orderBy(desc(SessionMessageTable.seq))
+    .limit(1)
+    .get()
+    .pipe(Effect.orDie)
+  const copiedSeq = copied?.seq ?? 0
 
   const stored = yield* db
     .insert(SessionTable)
@@ -152,12 +184,12 @@ const projectFork = Effect.fn("SessionProjector.projectFork")(function* (
       parent_id: event.data.parentID,
       project_id: parent.project_id,
       workspace_id: parent.workspace_id,
-      slug: event.data.slug,
+      slug: Slug.create(),
       directory: parent.directory,
       path: parent.path,
-      title: event.data.title,
-      agent: event.data.agent,
-      model: event.data.model,
+      title: forkTitle(parent.title),
+      agent: parent.agent,
+      model: parent.model,
       version: parent.version,
       cost: 0,
       tokens_input: 0,
@@ -184,7 +216,7 @@ const projectFork = Effect.fn("SessionProjector.projectFork")(function* (
         and(
           eq(SessionMessageTable.session_id, event.data.parentID),
           gt(SessionMessageTable.seq, cursor),
-          event.data.messageID === undefined ? undefined : lt(SessionMessageTable.seq, event.data.copiedSeq + 1),
+          copiedSeq === 0 ? undefined : lt(SessionMessageTable.seq, copiedSeq + 1),
         ),
       )
       .orderBy(asc(SessionMessageTable.seq))
@@ -273,7 +305,7 @@ const projectFork = Effect.fn("SessionProjector.projectFork")(function* (
     .where(eq(SessionTable.id, event.data.sessionID))
     .run()
     .pipe(Effect.orDie)
-  if (event.data.copiedSeq > 0) yield* EventV2.reserveSequence(db, event.data.sessionID, event.data.copiedSeq)
+  if (copiedSeq > 0) yield* EventV2.reserveSequence(db, event.data.sessionID, copiedSeq)
 })
 
 function run(db: DatabaseService, event: MessageEvent) {

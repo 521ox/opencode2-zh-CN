@@ -799,12 +799,7 @@ export type SessionsHistoryOutput = {
           readonly timestamp: number
           readonly sessionID: string
           readonly parentID: string
-          readonly slug: string
-          readonly title: string
-          readonly agent?: string
-          readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string }
           readonly messageID?: string
-          readonly copiedSeq: number
         }
       }
     | {
@@ -1283,12 +1278,7 @@ export type SessionsEventsOutput =
         readonly timestamp: number
         readonly sessionID: string
         readonly parentID: string
-        readonly slug: string
-        readonly title: string
-        readonly agent?: string
-        readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string }
         readonly messageID?: string
-        readonly copiedSeq: number
       }
     }
   | {

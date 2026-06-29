@@ -298,35 +298,12 @@ export const layer = Layer.effect(
           : undefined
         if (input.messageID && !boundary)
           return yield* new MessageNotFoundError({ sessionID: input.sessionID, messageID: input.messageID })
-        const copied = yield* db
-          .select({ seq: SessionMessageTable.seq })
-          .from(SessionMessageTable)
-          .where(
-            and(
-              eq(SessionMessageTable.session_id, input.sessionID),
-              boundary === undefined ? undefined : lt(SessionMessageTable.seq, boundary.seq),
-            ),
-          )
-          .orderBy(desc(SessionMessageTable.seq))
-          .limit(1)
-          .get()
-          .pipe(Effect.orDie)
         const sessionID = SessionSchema.ID.create()
         yield* events.publish(SessionEvent.Forked, {
           sessionID,
           parentID: parent.id,
-          slug: Slug.create(),
-          title: forkTitle(parent.title),
-          agent: parent.agent,
-          model: parent.model,
           messageID: input.messageID,
-          copiedSeq: copied?.seq ?? 0,
           timestamp: yield* DateTime.now,
-        }, {
-          commit: (seq) =>
-            copied && copied.seq > seq
-              ? EventV2.reserveSequence(db, sessionID, copied.seq)
-              : Effect.void,
         })
         return yield* result.get(sessionID).pipe(Effect.orDie)
       }),
@@ -562,12 +539,6 @@ export const defaultLayer = layer.pipe(
   Layer.provide(ProjectV2.defaultLayer),
   Layer.orDie,
 )
-
-const forkTitle = (value: string) => {
-  const match = value.match(/^(.+) \(fork #(\d+)\)$/)
-  if (match) return `${match[1]} (fork #${Number.parseInt(match[2], 10) + 1})`
-  return `${value} (fork #1)`
-}
 
 const resolvePrompt = (input: PromptInput.Prompt) =>
   Prompt.make({
