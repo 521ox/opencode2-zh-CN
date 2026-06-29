@@ -159,7 +159,7 @@ export const layer = Layer.effect(
       const cwd = input.cwd ?? location.directory
       const configShell = Config.latest(yield* config.entries(), "shell")
       const shell = ShellSelect.preferred(configShell)
-      const args = ShellSelect.args(shell, input.command, cwd)
+      const args = ShellSelect.args(shell, input.command)
       const file = path.join(outputDir, `${id}.out`)
       const env = {
         ...process.env,
