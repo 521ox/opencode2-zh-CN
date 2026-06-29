@@ -1,7 +1,7 @@
 import { NodeHttpServer } from "@effect/platform-node"
 import { Credential } from "@opencode-ai/core/credential"
 import { PermissionSaved } from "@opencode-ai/core/permission/saved"
-import { Context, Layer, Option } from "effect"
+import { Context, Layer, Option, Schedule } from "effect"
 import * as Effect from "effect/Effect"
 import { HttpRouter, HttpServer } from "effect/unstable/http"
 import { createServer } from "node:http"
@@ -34,7 +34,7 @@ export default Runtime.handler(
         const url = HttpServer.formatAddress(address)
         console.log(input.stdio ? JSON.stringify({ url }) : `server listening on ${url}`)
         const updater = yield* Updater.Service
-        yield* updater.check().pipe(Effect.forkScoped)
+        yield* updater.check().pipe(Effect.schedule(Schedule.spaced("10 minutes")), Effect.forkScoped)
         return yield* (input.stdio ? waitForStdinClose() : Effect.never)
       }).pipe(Effect.annotateLogs({ role: "server" })),
     )
