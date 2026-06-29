@@ -213,7 +213,7 @@ export function SubagentsTab(props: { sessionID: string }) {
         maxHeight={5}
         ref={(r: ScrollBoxRenderable) => (scroll = r)}
       >
-        <Show when={entries().length > 0} fallback={<text fg={theme.textMuted}>No subagents</text>}>
+        <Show when={entries().length > 0} fallback={<text fg={theme.textMuted}> No subagents</text>}>
           <For each={entries()}>
             {(entry, index) => {
               const active = createMemo(() => index() === selected())
