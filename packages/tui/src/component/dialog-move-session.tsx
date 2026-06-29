@@ -17,18 +17,18 @@ import { useCommandShortcut } from "../keymap"
 import { useProject } from "../context/project"
 import { Spinner } from "./spinner"
 import { DialogWorkspaceFileChanges } from "./dialog-workspace-file-changes"
-import type { ProjectDirectories } from "@opencode-ai/sdk/v2"
+import type { ProjectDirectoriesOutput } from "@opencode-ai/client"
 import { useRoute } from "../context/route"
 
 export type MoveSessionSelection = { type: "directory"; directory: string; subdirectory: boolean } | { type: "new" }
-type ProjectDirectory = ProjectDirectories[number]
+type ProjectDirectory = ProjectDirectoriesOutput[number]
 
 type DialogMoveSessionProps = {
   projectID: string
   current?: MoveSessionSelection
   onSelect: (selection: MoveSessionSelection) => void
   onCurrentChange?: (selection: MoveSessionSelection) => void
-  initialDirectories?: ProjectDirectory[]
+  initialDirectories?: ReadonlyArray<ProjectDirectory>
   initialRemoving?: string
 }
 
@@ -58,12 +58,13 @@ export function DialogMoveSession(props: DialogMoveSessionProps) {
 
   // A failed current-checkout lookup only affects which row is highlighted, so
   // swallow it and let the directory list render without a current marker.
+  // Once the current project is known, a mismatch is a guaranteed miss.
   const [loadedProject] = createResource(
-    () => (projectContext.project() === props.projectID ? undefined : props.projectID),
+    () => (projectContext.project() === undefined ? props.projectID : undefined),
     (projectID) =>
-      sdk.client.project
-        .current({}, { throwOnError: true })
-        .then((result) => (result.data?.id === projectID ? result.data.worktree : undefined))
+      sdk.api.project
+        .current({ location: { directory: projectContext.instance.directory() || paths.cwd } })
+        .then((project) => (project.id === projectID ? project.directory : undefined))
         .catch(() => undefined),
   )
   const currentCheckout = createMemo(() => {
@@ -73,15 +74,19 @@ export function DialogMoveSession(props: DialogMoveSessionProps) {
 
   const [directories, { refetch }] = createResource(
     () => (props.initialRemoving ? undefined : props.projectID),
-    async (projectID, info): Promise<ProjectDirectory[] | undefined> => {
+    async (projectID, info): Promise<ReadonlyArray<ProjectDirectory> | undefined> => {
       try {
+        const location = { directory: projectContext.instance.directory() || paths.cwd }
         await sdk.api.projectCopies.refresh({
           projectID,
-          location: { directory: projectContext.instance.directory() || paths.cwd },
+          location,
         })
-        const directories = await sdk.client.project.directories({ projectID }, { throwOnError: true })
+        const directories = await sdk.api.project.directories({
+          projectID,
+          location,
+        })
         setLoadError(undefined)
-        return directories.data ?? []
+        return directories
       } catch (error) {
         setLoadError(error)
         // An initial load with no data surfaces the inline error view below. A

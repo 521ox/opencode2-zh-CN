@@ -2339,6 +2339,23 @@ export type CredentialsRemoveInput = {
 
 export type CredentialsRemoveOutput = void
 
+export type ProjectCurrentInput = {
+  readonly location?: {
+    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+  }["location"]
+}
+
+export type ProjectCurrentOutput = { readonly id: string; readonly directory: string }
+
+export type ProjectDirectoriesInput = {
+  readonly projectID: { readonly projectID: string }["projectID"]
+  readonly location?: {
+    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+  }["location"]
+}
+
+export type ProjectDirectoriesOutput = ReadonlyArray<{ readonly directory: string; readonly strategy?: string }>
+
 export type PermissionsListRequestsInput = {
   readonly location?: {
     readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined

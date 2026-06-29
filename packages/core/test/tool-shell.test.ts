@@ -88,6 +88,18 @@ const call = (input: typeof ShellTool.Input.Type, id = "call-shell") => ({
   call: { type: "tool-call" as const, id, name: "shell", input },
 })
 
+const isWindows = process.platform === "win32"
+const cwdCommand = isWindows ? "(Get-Location).Path; Start-Sleep -Milliseconds 100" : "pwd"
+const helloCommand = isWindows ? "[Console]::Out.Write('hello'); Start-Sleep -Milliseconds 100" : "printf hello"
+const idleCommand = isWindows ? "Start-Sleep -Seconds 60" : "sleep 60"
+const bodyExitCommand = isWindows
+  ? "[Console]::Out.Write('body'); Start-Sleep -Milliseconds 100; exit 7"
+  : "printf body && exit 7"
+const overflowCommand = (bytes: number) =>
+  isWindows
+    ? `[Console]::Out.Write(('x' * ${bytes})); Start-Sleep -Milliseconds 100`
+    : `head -c ${bytes} /dev/zero | tr '\\0' 'x'`
+
 const it = testEffect(Layer.empty)
 
 describe("ShellTool", () => {
@@ -103,14 +115,14 @@ describe("ShellTool", () => {
             expect(definitions[0]?.outputSchema).not.toHaveProperty("properties.output")
             expect(yield* toolDefinitions(registry, [{ action: "shell", resource: "*", effect: "deny" }])).toEqual([])
 
-            const settled = yield* settleTool(registry, call({ command: "printf hello" }))
+            const settled = yield* settleTool(registry, call({ command: helloCommand }))
             expect(settled.output?.structured).toMatchObject({ exit: 0, truncated: false })
             expect(settled.output?.content[0]).toEqual({ type: "text", text: "hello" })
             expect(settled.output?.content[1]).toMatchObject({
               type: "text",
               text: expect.stringContaining("Command exited with code 0."),
             })
-            expect(assertions).toMatchObject([{ sessionID, action: "shell", resources: ["printf hello"] }])
+            expect(assertions).toMatchObject([{ sessionID, action: "shell", resources: [helloCommand] }])
           }),
         )
       },
@@ -128,7 +140,9 @@ describe("ShellTool", () => {
         reset()
         return Effect.promise(() => fs.mkdir(path.join(tmp.path, "src"))).pipe(
           Effect.andThen(
-            withTool(data.path, tmp.path, (registry) => settleTool(registry, call({ command: "pwd", workdir: "src" }))),
+            withTool(data.path, tmp.path, (registry) =>
+              settleTool(registry, call({ command: cwdCommand, workdir: "src" })),
+            ),
           ),
           Effect.andThen((settled) =>
             Effect.sync(() =>
@@ -163,7 +177,7 @@ describe("ShellTool", () => {
         return Effect.promise(() => fs.mkdir(workdir)).pipe(
           Effect.andThen(
             withTool(data.path, tmp.path, (registry) =>
-              executeTool(registry, call({ command: "pwd", workdir: "src" })),
+              executeTool(registry, call({ command: cwdCommand, workdir: "src" })),
             ),
           ),
           Effect.andThen(Effect.sync(() => expect(assertions.map((input) => input.action)).toEqual(["shell"]))),
@@ -182,7 +196,7 @@ describe("ShellTool", () => {
       ([data, active, outside]) => {
         reset()
         return withTool(data.path, active.path, (registry) =>
-          executeTool(registry, call({ command: "pwd", workdir: outside.path })),
+          executeTool(registry, call({ command: cwdCommand, workdir: outside.path })),
         ).pipe(
           Effect.andThen(
             Effect.sync(() => {
@@ -213,13 +227,13 @@ describe("ShellTool", () => {
           reset()
           denyAction = "external_directory"
           yield* withTool(data.path, active.path, (registry) =>
-            executeTool(registry, call({ command: "pwd", workdir: outside.path })),
+            executeTool(registry, call({ command: cwdCommand, workdir: outside.path })),
           )
           expect(assertions.map((item) => item.action)).toEqual(["external_directory"])
 
           reset()
           denyAction = "shell"
-          yield* withTool(data.path, active.path, (registry) => executeTool(registry, call({ command: "pwd" })))
+          yield* withTool(data.path, active.path, (registry) => executeTool(registry, call({ command: cwdCommand })))
           expect(assertions.map((item) => item.action)).toEqual(["shell"])
         }),
       ([data, active, outside]) =>
@@ -272,7 +286,7 @@ describe("ShellTool", () => {
       ([data, tmp]) => {
         reset()
         return withTool(data.path, tmp.path, (registry) =>
-          settleTool(registry, call({ command: "printf body && exit 7" }, "call-nonzero")),
+          settleTool(registry, call({ command: bodyExitCommand }, "call-nonzero")),
         ).pipe(
           Effect.andThen((settled) =>
             Effect.sync(() => {
@@ -300,7 +314,7 @@ describe("ShellTool", () => {
         reset()
         const bytes = ShellTool.MAX_CAPTURE_BYTES + 1024
         return withTool(data.path, tmp.path, (registry) =>
-          settleTool(registry, call({ command: `head -c ${bytes} /dev/zero | tr '\\0' 'x'` }, "call-overflow")),
+          settleTool(registry, call({ command: overflowCommand(bytes) }, "call-overflow")),
         ).pipe(
           Effect.andThen((settled) =>
             Effect.sync(() => {
@@ -326,7 +340,7 @@ describe("ShellTool", () => {
       ([data, tmp]) => {
         reset()
         return withTool(data.path, tmp.path, (registry) =>
-          settleTool(registry, call({ command: "sleep 60", timeout: 50 })),
+          settleTool(registry, call({ command: idleCommand, timeout: 50 })),
         ).pipe(
           Effect.andThen((settled) =>
             Effect.sync(() => {

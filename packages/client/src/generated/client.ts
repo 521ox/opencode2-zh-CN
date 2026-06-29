@@ -67,6 +67,10 @@ import type {
   CredentialsUpdateOutput,
   CredentialsRemoveInput,
   CredentialsRemoveOutput,
+  ProjectCurrentInput,
+  ProjectCurrentOutput,
+  ProjectDirectoriesInput,
+  ProjectDirectoriesOutput,
   PermissionsListRequestsInput,
   PermissionsListRequestsOutput,
   PermissionsListSavedInput,
@@ -700,6 +704,32 @@ export function make(options: ClientOptions) {
             successStatus: 204,
             declaredStatuses: [401, 400],
             empty: true,
+          },
+          requestOptions,
+        ),
+    },
+    project: {
+      current: (input?: ProjectCurrentInput, requestOptions?: RequestOptions) =>
+        request<ProjectCurrentOutput>(
+          {
+            method: "GET",
+            path: `/api/project/current`,
+            query: { location: input?.["location"] },
+            successStatus: 200,
+            declaredStatuses: [401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      directories: (input: ProjectDirectoriesInput, requestOptions?: RequestOptions) =>
+        request<ProjectDirectoriesOutput>(
+          {
+            method: "GET",
+            path: `/api/project/${encodeURIComponent(input.projectID)}/directories`,
+            query: { location: input["location"] },
+            successStatus: 200,
+            declaredStatuses: [401, 400],
+            empty: false,
           },
           requestOptions,
         ),
