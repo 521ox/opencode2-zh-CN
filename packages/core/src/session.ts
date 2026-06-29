@@ -1,7 +1,7 @@
 export * as SessionV2 from "./session"
 export * from "./session/schema"
 
-import { DateTime, Effect, Layer, Schema, Context, Stream } from "effect"
+import { DateTime, Effect, Layer, Schema, Context, Stream, Scope } from "effect"
 import { ListAnchor } from "@opencode-ai/schema/session"
 import { and, asc, desc, eq, gt, like, lt, or, type SQL } from "drizzle-orm"
 import { ProjectV2 } from "./project"
@@ -212,6 +212,7 @@ export const layer = Layer.effect(
     const execution = yield* SessionExecution.Service
     const store = yield* SessionStore.Service
     const locations = yield* LocationServiceMap.Service
+    const scope = yield* Scope.Scope
     const decodeMessage = Schema.decodeUnknownEffect(SessionMessage.Message)
     const isDurableSessionEvent = Schema.is(SessionEvent.Durable)
     const decode = (row: typeof SessionMessageTable.$inferSelect) =>
@@ -506,7 +507,7 @@ export const layer = Layer.effect(
           timestamp: yield* DateTime.now,
           text: input.text,
         })
-        yield* execution.wake(input.sessionID)
+        yield* execution.resume(input.sessionID).pipe(Effect.ignore, Effect.forkIn(scope, { startImmediately: true }), Effect.asVoid)
       }),
       interrupt: Effect.fn("V2Session.interrupt")((sessionID) =>
         Effect.uninterruptible(execution.interrupt(sessionID)),
