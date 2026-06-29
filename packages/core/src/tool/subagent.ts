@@ -1,14 +1,11 @@
 export * as SubagentTool from "./subagent"
 
 import { ToolFailure } from "@opencode-ai/llm"
-import { DateTime, Effect, Layer, Schema, Scope } from "effect"
+import { Effect, Layer, Schema, Scope } from "effect"
 import { AgentV2 } from "../agent"
 import { BackgroundJob } from "../background-job"
-import { EventV2 } from "../event"
 import { LocationServiceMap } from "../location-service-map"
 import { SessionV2 } from "../session"
-import { SessionEvent } from "../session/event"
-import { SessionMessage } from "../session/message"
 import { SessionSchema } from "../session/schema"
 import { makeGlobalNode } from "../effect/app-node"
 import { ApplicationTools } from "./application-tools"
@@ -48,7 +45,6 @@ export const layer = Layer.effectDiscard(
     const tools = yield* ApplicationTools.Service
     const sessions = yield* SessionV2.Service
     const jobs = yield* BackgroundJob.Service
-    const events = yield* EventV2.Service
     const locations = yield* LocationServiceMap.Service
     const scope = yield* Scope.Scope
 
@@ -75,10 +71,8 @@ export const layer = Layer.effectDiscard(
       state: "completed" | "error" | "cancelled",
       text: string,
     ) {
-      yield* events.publish(SessionEvent.Synthetic, {
+      yield* sessions.synthetic({
         sessionID: parentID,
-        messageID: SessionMessage.ID.create(),
-        timestamp: yield* DateTime.now,
         text: `<subagent id="${childID}" state="${state}" description="${description}">\n${text}\n</subagent>`,
       })
     })
@@ -188,5 +182,5 @@ export const layer = Layer.effectDiscard(
 export const node = makeGlobalNode({
   name: "subagent-tool",
   layer,
-  deps: [ApplicationTools.node, SessionV2.node, BackgroundJob.node, EventV2.node, LocationServiceMap.node],
+  deps: [ApplicationTools.node, SessionV2.node, BackgroundJob.node, LocationServiceMap.node],
 })

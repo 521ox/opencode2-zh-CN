@@ -2,7 +2,6 @@ export * as BuiltInTools from "./builtins"
 
 import { makeLocationNode } from "../effect/app-node"
 import { Layer } from "effect"
-import { ShellTool } from "./shell"
 import { ApplyPatchTool } from "./apply-patch"
 import { EditTool } from "./edit"
 import { GlobTool } from "./glob"
@@ -16,7 +15,6 @@ import { WebFetchTool } from "./webfetch"
 import { WebSearchTool } from "./websearch"
 import { WriteTool } from "./write"
 import { FSUtil } from "../fs-util"
-import { Shell } from "../shell"
 import { Location } from "../location"
 import { LocationMutation } from "../location-mutation"
 import { FileMutation } from "../file-mutation"
@@ -44,7 +42,6 @@ import { httpClient } from "../effect/app-node-platform"
  */
 export const locationLayer = Layer.mergeAll(
   ApplyPatchTool.layer,
-  ShellTool.layer,
   EditTool.layer,
   GlobTool.layer,
   GrepTool.layer,
@@ -63,7 +60,6 @@ export const node = makeLocationNode({
   deps: [
     ToolRegistry.toolsNode,
     FSUtil.node,
-    Shell.node,
     Location.node,
     LocationMutation.node,
     FileMutation.node,
