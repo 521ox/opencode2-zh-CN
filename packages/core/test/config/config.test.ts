@@ -76,6 +76,18 @@ describe("Config", () => {
     }),
   )
 
+  it.effect("detects a bare v1-shaped mcp block while leaving v2 mcp config alone", () =>
+    Effect.sync(() => {
+      // V1 lists servers directly under `mcp`, so a file with only `$schema` + `mcp` still migrates.
+      expect(ConfigMigrateV1.isV1({ mcp: { context7: { type: "local", command: ["npx"] } } })).toBe(true)
+      expect(ConfigMigrateV1.isV1({ $schema: "x", mcp: { executor: { type: "remote", url: "https://x" } } })).toBe(true)
+      // V2 nests under `mcp.servers`, so it must not be misdetected and re-migrated.
+      expect(ConfigMigrateV1.isV1({ mcp: { servers: { context7: { type: "local", command: ["npx"] } } } })).toBe(false)
+      expect(ConfigMigrateV1.isV1({ mcp: {} })).toBe(false)
+      expect(ConfigMigrateV1.isV1({ mcp: { timeout: { request: 1000 } } })).toBe(false)
+    }),
+  )
+
   it.effect("migrates arbitrary v1 configuration into valid v2 configuration", () =>
     Effect.sync(() => {
       FastCheck.assert(

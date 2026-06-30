@@ -16,6 +16,7 @@ import { Integration } from "./integration"
 import { Location } from "./location"
 import { LocationMutation } from "./location-mutation"
 import { LocationServiceMap } from "./location-service-map"
+import { MCP } from "./mcp/index"
 import { PermissionV2 } from "./permission"
 import { PluginV2 } from "./plugin"
 import { PluginInternal } from "./plugin/internal"
@@ -37,6 +38,7 @@ import { Snapshot } from "./snapshot"
 import { SystemContextBuiltIns } from "./system-context/builtins"
 import { SystemContextRegistry } from "./system-context/registry"
 import { BuiltInTools } from "./tool/builtins"
+import { McpTool } from "./tool/mcp"
 import { ReadToolFileSystem } from "./tool/read-filesystem"
 import { ToolRegistry } from "./tool/registry"
 import { ToolOutputStore } from "./tool-output-store"
@@ -68,6 +70,7 @@ export const locationServices = LayerNode.group([
   SystemContextBuiltIns.node,
   LocationMutation.node,
   FileMutation.node,
+  MCP.node,
   PermissionV2.node,
   ToolOutputStore.node,
   ToolRegistry.node,
@@ -80,6 +83,7 @@ export const locationServices = LayerNode.group([
   Generate.node,
   ReadToolFileSystem.node,
   BuiltInTools.node,
+  McpTool.node,
   SessionRunnerModel.node,
   SessionCompaction.node,
   Snapshot.node,

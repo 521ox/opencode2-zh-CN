@@ -2466,6 +2466,30 @@ export type IntegrationAttemptCancelInput = {
 
 export type IntegrationAttemptCancelOutput = void
 
+export type ServerMcpListInput = {
+  readonly location?: {
+    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+  }["location"]
+}
+
+export type ServerMcpListOutput = {
+  readonly location: {
+    readonly directory: string
+    readonly workspaceID?: string
+    readonly project: { readonly id: string; readonly directory: string }
+  }
+  readonly data: ReadonlyArray<{
+    readonly name: string
+    readonly status:
+      | { readonly status: "connected" }
+      | { readonly status: "disconnected" }
+      | { readonly status: "disabled" }
+      | { readonly status: "failed"; readonly error: string }
+      | { readonly status: "needs_auth" }
+      | { readonly status: "needs_client_registration"; readonly error: string }
+  }>
+}
+
 export type CredentialUpdateInput = {
   readonly credentialID: { readonly credentialID: string }["credentialID"]
   readonly location?: {

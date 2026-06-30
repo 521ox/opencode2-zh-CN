@@ -299,6 +299,8 @@ import type {
   V2IntegrationListResponses,
   V2LocationGetErrors,
   V2LocationGetResponses,
+  V2McpListErrors,
+  V2McpListResponses,
   V2ModelListErrors,
   V2ModelListResponses,
   V2PermissionRequestListErrors,
@@ -6412,6 +6414,30 @@ export class Integration extends HeyApiClient {
   }
 }
 
+export class Mcp2 extends HeyApiClient {
+  /**
+   * List MCP servers
+   *
+   * Retrieve configured MCP servers and their connection status.
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters?: {
+      location?: {
+        directory?: string
+        workspace?: string
+      }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "location" }] }])
+    return (options?.client ?? this.client).get<V2McpListResponses, V2McpListErrors, ThrowOnError>({
+      url: "/api/mcp",
+      ...options,
+      ...params,
+    })
+  }
+}
+
 export class Credential extends HeyApiClient {
   /**
    * Remove credential
@@ -7433,6 +7459,11 @@ export class V2 extends HeyApiClient {
   private _integration?: Integration
   get integration(): Integration {
     return (this._integration ??= new Integration({ client: this.client }))
+  }
+
+  private _mcp?: Mcp2
+  get mcp(): Mcp2 {
+    return (this._mcp ??= new Mcp2({ client: this.client }))
   }
 
   private _credential?: Credential

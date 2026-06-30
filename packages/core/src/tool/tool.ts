@@ -60,6 +60,23 @@ type Config<
   }) => ReadonlyArray<Content>
 }
 
+export type DynamicOutput = {
+  readonly structured: unknown
+  readonly content: ReadonlyArray<Content>
+}
+
+/**
+ * Config for a tool whose input shape is a raw JSON Schema not known at compile
+ * time (MCP servers, plugin manifests). Input is passed through as `unknown`;
+ * `execute` returns the already-projected structured value and model content.
+ */
+type DynamicConfig = {
+  readonly description: string
+  readonly jsonSchema: JsonSchema.JsonSchema
+  readonly outputSchema?: JsonSchema.JsonSchema
+  readonly execute: (input: unknown, context: Context) => Effect.Effect<DynamicOutput, ToolFailure>
+}
+
 type Runtime = {
   readonly permission?: string
   readonly definition: (name: string) => ToolDefinition
@@ -69,6 +86,17 @@ type Runtime = {
 const runtimes = new WeakMap<AnyTool, Runtime>()
 
 export function make<
+  Input extends SchemaType<any>,
+  Output extends SchemaType<any>,
+  Structured extends SchemaType<any> = Output,
+>(config: Config<Input, Output, Structured>): Definition<Input, Structured>
+export function make(config: DynamicConfig): AnyTool
+export function make(config: Config<any, any, any> | DynamicConfig): AnyTool {
+  if ("jsonSchema" in config) return makeDynamic(config)
+  return makeTyped(config)
+}
+
+function makeTyped<
   Input extends SchemaType<any>,
   Output extends SchemaType<any>,
   Structured extends SchemaType<any> = Output,
@@ -113,22 +141,43 @@ export function make<
             Effect.map(({ output, structured }) => ({
               structured,
               content:
-                config.toModelOutput?.({ input, output }).map((part) =>
-                  part.type === "text"
-                    ? { type: "text" as const, text: part.text }
-                    : {
-                        type: "file" as const,
-                        uri: `data:${part.mime};base64,${part.data}`,
-                        mime: part.mime,
-                        name: part.name,
-                      },
-                ) ?? (typeof output === "string" ? [{ type: "text" as const, text: output }] : []),
+                config.toModelOutput?.({ input, output }).map(toModelContent) ??
+                (typeof output === "string" ? [{ type: "text" as const, text: output }] : []),
             })),
           ),
         ),
       ),
   })
   return tool
+}
+
+function makeDynamic(config: DynamicConfig): AnyTool {
+  const tool = Object.freeze({}) as AnyTool
+  const definitions = new Map<string, ToolDefinition>()
+  runtimes.set(tool, {
+    definition: (name) => {
+      const cached = definitions.get(name)
+      if (cached) return cached
+      const definition = new ToolDefinition({
+        name,
+        description: config.description,
+        inputSchema: config.jsonSchema,
+        outputSchema: config.outputSchema,
+      })
+      definitions.set(name, definition)
+      return definition
+    },
+    settle: (call, context) =>
+      config
+        .execute(call.input, context)
+        .pipe(Effect.map((output) => ({ structured: output.structured, content: output.content.map(toModelContent) }))),
+  })
+  return tool
+}
+
+function toModelContent(part: Content) {
+  if (part.type === "text") return { type: "text" as const, text: part.text }
+  return { type: "file" as const, uri: `data:${part.mime};base64,${part.data}`, mime: part.mime, name: part.name }
 }
 
 export const validateName = (name: string) =>

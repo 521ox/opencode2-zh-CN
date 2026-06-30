@@ -30,6 +30,7 @@ import { SystemContextRegistry } from "@opencode-ai/core/system-context/registry
 import { SystemContext } from "@opencode-ai/core/system-context"
 import { SkillGuidance } from "@opencode-ai/core/skill/guidance"
 import { ReferenceGuidance } from "@opencode-ai/core/reference/guidance"
+import { McpGuidance } from "@opencode-ai/core/mcp/guidance"
 import { describe, expect } from "bun:test"
 import { eq } from "drizzle-orm"
 import { Effect, Layer } from "effect"
@@ -72,6 +73,7 @@ const systemContext = SystemContextRegistry.layer
 const location = Location.layer({ directory: AbsolutePath.make("/project") }).pipe(Layer.provide(Project.defaultLayer))
 const skillGuidance = Layer.mock(SkillGuidance.Service, { load: () => Effect.succeed(SystemContext.empty) })
 const referenceGuidance = Layer.mock(ReferenceGuidance.Service, { load: () => Effect.succeed(SystemContext.empty) })
+const mcpGuidance = Layer.mock(McpGuidance.Service, { load: () => Effect.succeed(SystemContext.empty) })
 const config = Layer.succeed(Config.Service, Config.Service.of({ entries: () => Effect.succeed([]) }))
 const runner = SessionRunnerLLM.defaultLayer.pipe(
   Layer.provide(SessionCompaction.layer),
@@ -87,6 +89,7 @@ const runner = SessionRunnerLLM.defaultLayer.pipe(
   Layer.provide(agents),
   Layer.provide(skillGuidance),
   Layer.provide(referenceGuidance),
+  Layer.provide(mcpGuidance),
   Layer.provide(config),
 )
 const execution = Layer.effect(

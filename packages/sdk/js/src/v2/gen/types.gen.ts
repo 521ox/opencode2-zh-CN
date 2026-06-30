@@ -84,6 +84,7 @@ export type Event =
   | EventTuiSessionSelect2
   | EventMcpToolsChanged
   | EventMcpBrowserOpenFailed
+  | EventMcpStatusChanged
   | EventCommandExecuted
   | EventProjectUpdated
   | EventSessionStatus
@@ -1549,6 +1550,13 @@ export type GlobalEvent = {
         properties: {
           mcpName: string
           url: string
+        }
+      }
+    | {
+        id: string
+        type: "mcp.status.changed"
+        properties: {
+          server: string
         }
       }
     | {
@@ -3048,6 +3056,7 @@ export type V2Event =
   | TuiSessionSelect
   | McpToolsChanged
   | McpBrowserOpenFailed
+  | McpStatusChanged
   | CommandExecuted
   | ProjectUpdated
   | SessionStatus2
@@ -5254,6 +5263,43 @@ export type IntegrationAttemptStatus =
       }
     }
 
+export type McpStatusConnected2 = {
+  status: "connected"
+}
+
+export type McpStatusDisconnected = {
+  status: "disconnected"
+}
+
+export type McpStatusDisabled2 = {
+  status: "disabled"
+}
+
+export type McpStatusFailed2 = {
+  status: "failed"
+  error: string
+}
+
+export type McpStatusNeedsAuth2 = {
+  status: "needs_auth"
+}
+
+export type McpStatusNeedsClientRegistration2 = {
+  status: "needs_client_registration"
+  error: string
+}
+
+export type McpServer = {
+  name: string
+  status:
+    | McpStatusConnected2
+    | McpStatusDisconnected
+    | McpStatusDisabled2
+    | McpStatusFailed2
+    | McpStatusNeedsAuth2
+    | McpStatusNeedsClientRegistration2
+}
+
 export type ProjectCurrent = {
   id: string
   directory: string
@@ -6212,6 +6258,23 @@ export type McpBrowserOpenFailed = {
   data: {
     mcpName: string
     url: string
+  }
+}
+
+export type McpStatusChanged = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "mcp.status.changed"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    server: string
   }
 }
 
@@ -7315,6 +7378,14 @@ export type EventMcpBrowserOpenFailed = {
   properties: {
     mcpName: string
     url: string
+  }
+}
+
+export type EventMcpStatusChanged = {
+  id: string
+  type: "mcp.status.changed"
+  properties: {
+    server: string
   }
 }
 
@@ -13029,6 +13100,43 @@ export type V2IntegrationAttemptCompleteResponses = {
 
 export type V2IntegrationAttemptCompleteResponse =
   V2IntegrationAttemptCompleteResponses[keyof V2IntegrationAttemptCompleteResponses]
+
+export type V2McpListData = {
+  body?: never
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/mcp"
+}
+
+export type V2McpListErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2McpListError = V2McpListErrors[keyof V2McpListErrors]
+
+export type V2McpListResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: Array<McpServer>
+  }
+}
+
+export type V2McpListResponse = V2McpListResponses[keyof V2McpListResponses]
 
 export type V2CredentialRemoveData = {
   body?: never

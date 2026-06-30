@@ -29,7 +29,19 @@ const keys = new Set([
 
 export function isV1(input: unknown) {
   if (typeof input !== "object" || input === null || Array.isArray(input)) return false
-  return Object.keys(input).some((key) => keys.has(key))
+  const record = input as Record<string, unknown>
+  if (Object.keys(record).some((key) => keys.has(key))) return true
+  // `mcp` exists in both versions, so presence alone is ambiguous: v1 lists servers directly under
+  // `mcp`, while v2 nests them under `mcp.servers`. Only the v1 shape (a server entry with `type`)
+  // counts, so a bare `mcp`-only file still migrates instead of silently parsing to zero servers.
+  const mcp = record.mcp
+  return (
+    typeof mcp === "object" &&
+    mcp !== null &&
+    !Array.isArray(mcp) &&
+    !("servers" in mcp) &&
+    Object.values(mcp).some((server) => typeof server === "object" && server !== null && "type" in server)
+  )
 }
 
 export function migrate(info: typeof ConfigV1.Info.Type) {

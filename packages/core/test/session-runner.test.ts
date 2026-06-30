@@ -52,6 +52,7 @@ import { SystemContext } from "@opencode-ai/core/system-context"
 import { SystemContextRegistry } from "@opencode-ai/core/system-context/registry"
 import { SkillGuidance } from "@opencode-ai/core/skill/guidance"
 import { ReferenceGuidance } from "@opencode-ai/core/reference/guidance"
+import { McpGuidance } from "@opencode-ai/core/mcp/guidance"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { Location } from "@opencode-ai/core/location"
 import { ProviderV2 } from "@opencode-ai/core/provider"
@@ -217,6 +218,7 @@ const skillGuidance = Layer.mock(SkillGuidance.Service, {
     ),
 })
 const referenceGuidance = Layer.mock(ReferenceGuidance.Service, { load: () => Effect.succeed(SystemContext.empty) })
+const mcpGuidance = Layer.mock(McpGuidance.Service, { load: () => Effect.succeed(SystemContext.empty) })
 const config = Layer.succeed(
   Config.Service,
   Config.Service.of({
@@ -248,6 +250,7 @@ const runner = SessionRunnerLLM.layer.pipe(
   Layer.provide(agents),
   Layer.provide(skillGuidance),
   Layer.provide(referenceGuidance),
+  Layer.provide(mcpGuidance),
   Layer.provide(config),
 )
 const execution = Layer.effect(
