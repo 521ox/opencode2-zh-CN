@@ -56,6 +56,7 @@ import { usePromptWorkspace } from "./workspace"
 import { usePromptMove } from "./move"
 import { readLocalAttachment } from "./local-attachment"
 import { useData } from "../../context/data"
+import { useLocation } from "../../context/location"
 
 export type PromptProps = {
   sessionID?: string
@@ -154,6 +155,7 @@ export function Prompt(props: PromptProps) {
   const project = useProject()
   const sync = useSync()
   const data = useData()
+  const currentLocation = useLocation()
   const tuiConfig = useTuiConfig()
   const dialog = useDialog()
   const toast = useToast()
@@ -533,6 +535,7 @@ export function Prompt(props: PromptProps) {
         run: () => {
           dialog.replace(() => (
             <DialogSkill
+              location={currentLocation()}
               onSelect={(skill) => {
                 input.setText(`/${skill} `)
                 setStore("prompt", {
@@ -1088,7 +1091,9 @@ export function Prompt(props: PromptProps) {
       setStore("mode", "normal")
     } else if (
       inputText.startsWith("/") &&
-      sync.data.command.some((x) => x.name === inputText.split("\n")[0].split(" ")[0].slice(1))
+      (data.location.command.list(currentLocation()) ?? []).some(
+        (command) => command.name === inputText.split("\n")[0].split(" ")[0].slice(1),
+      )
     ) {
       move.startSubmit()
       // Parse command from first line, preserve multi-line content in arguments
@@ -1106,6 +1111,17 @@ export function Prompt(props: PromptProps) {
         model: `${selectedModel.providerID}/${selectedModel.modelID}`,
         variant,
         parts: nonTextParts.filter((x) => x.type === "file"),
+      })
+    } else if (
+      inputText.startsWith("/") &&
+      (data.location.skill.list(currentLocation()) ?? []).some(
+        (skill) => skill.slash === true && skill.name === inputText.split("\n")[0].split(" ")[0].slice(1),
+      )
+    ) {
+      move.startSubmit()
+      void sdk.api.session.skill({
+        sessionID,
+        skill: inputText.split("\n")[0].split(" ")[0].slice(1),
       })
     } else {
       move.startSubmit()

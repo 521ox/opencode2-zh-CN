@@ -443,15 +443,31 @@ export function Autocomplete(props: {
 
   const commands = createMemo((): AutocompleteOption[] => {
     const results: AutocompleteOption[] = [...slashes()]
+    const commandNames = new Set<string>()
 
-    for (const serverCommand of sync.data.command) {
-      if (serverCommand.source === "skill") continue
-      const label = serverCommand.source === "mcp" ? ":mcp" : ""
+    for (const serverCommand of data.location.command.list(location()) ?? []) {
+      commandNames.add(serverCommand.name)
       results.push({
-        display: "/" + serverCommand.name + label,
+        display: "/" + serverCommand.name,
         description: serverCommand.description,
         onSelect: () => {
           const newText = "/" + serverCommand.name + " "
+          const cursor = props.input().logicalCursor
+          props.input().deleteRange(0, 0, cursor.row, cursor.col)
+          props.input().insertText(newText)
+          props.input().cursorOffset = Bun.stringWidth(newText)
+        },
+      })
+    }
+
+    for (const skill of data.location.skill
+      .list(location())
+      ?.filter((skill) => skill.slash === true && !commandNames.has(skill.name)) ?? []) {
+      results.push({
+        display: "/" + skill.name,
+        description: skill.description,
+        onSelect: () => {
+          const newText = "/" + skill.name + " "
           const cursor = props.input().logicalCursor
           props.input().deleteRange(0, 0, cursor.row, cursor.col)
           props.input().insertText(newText)

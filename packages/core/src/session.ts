@@ -38,6 +38,7 @@ import { SessionRevert } from "./session/revert"
 import { Revert } from "@opencode-ai/schema/revert"
 import { FSUtil } from "./fs-util"
 import { SessionDurable } from "@opencode-ai/schema/durable-event-manifest"
+import { SkillV2 } from "./skill"
 
 export const RevertState = Revert.State
 export type RevertState = Revert.State
@@ -115,6 +116,9 @@ export class PromptConflictError extends Schema.TaggedErrorClass<PromptConflictE
 export class BusyError extends Schema.TaggedErrorClass<BusyError>()("Session.BusyError", {
   sessionID: SessionSchema.ID,
 }) {}
+export class SkillNotFoundError extends Schema.TaggedErrorClass<SkillNotFoundError>()("Session.SkillNotFoundError", {
+  skill: Schema.String,
+}) {}
 export const MessageNotFoundError = SessionRevert.MessageNotFoundError
 export type MessageNotFoundError = SessionRevert.MessageNotFoundError
 
@@ -124,6 +128,7 @@ export type Error =
   | OperationUnavailableError
   | PromptConflictError
   | BusyError
+  | SkillNotFoundError
   | MessageNotFoundError
 
 export interface Interface {
@@ -176,11 +181,11 @@ export interface Interface {
     resume?: boolean
   }) => Effect.Effect<void, OperationUnavailableError>
   readonly skill: (input: {
-    id?: EventV2.ID
+    id?: SessionMessage.ID
     sessionID: SessionSchema.ID
     skill: string
     resume?: boolean
-  }) => Effect.Effect<void, OperationUnavailableError>
+  }) => Effect.Effect<void, NotFoundError | SkillNotFoundError>
   readonly compact: (
     input: CompactInput,
   ) => Effect.Effect<void, NotFoundError | BusyError | MessageDecodeError | OperationUnavailableError>
@@ -440,8 +445,20 @@ export const layer = Layer.effect(
       shell: Effect.fn("V2Session.shell")(function* () {
         return yield* new OperationUnavailableError({ operation: "shell" })
       }),
-      skill: Effect.fn("V2Session.skill")(function* () {
-        return yield* new OperationUnavailableError({ operation: "skill" })
+      skill: Effect.fn("V2Session.skill")(function* (input) {
+        const session = yield* result.get(input.sessionID)
+        const skills = yield* SkillV2.Service.pipe(Effect.provide(locations.get(session.location)))
+        const skill = (yield* skills.list()).find((item) => item.name === input.skill)
+        if (!skill) return yield* new SkillNotFoundError({ skill: input.skill })
+        yield* events.publish(SessionEvent.Skill.Activated, {
+          sessionID: input.sessionID,
+          messageID: input.id ?? SessionMessage.ID.create(),
+          timestamp: yield* DateTime.now,
+          name: skill.name,
+          text: skill.content,
+        })
+        if (input.resume !== false)
+          yield* execution.resume(input.sessionID).pipe(Effect.ignore, Effect.forkIn(scope, { startImmediately: true }), Effect.asVoid)
       }),
       switchAgent: Effect.fn("V2Session.switchAgent")(function* (input) {
         yield* result.get(input.sessionID)

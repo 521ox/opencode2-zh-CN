@@ -159,6 +159,17 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
           }),
         )
       },
+      "session.next.skill.activated": (event) => {
+        return adapter.appendMessage(
+          SessionMessage.Skill.make({
+            id: event.data.messageID,
+            type: "skill",
+            name: event.data.name,
+            text: event.data.text,
+            time: { created: event.data.timestamp },
+          }),
+        )
+      },
       "session.next.shell.started": (event) => {
         return adapter.appendMessage(
           SessionMessage.Shell.make({

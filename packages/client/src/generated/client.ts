@@ -21,6 +21,8 @@ import type {
   SessionRenameOutput,
   SessionPromptInput,
   SessionPromptOutput,
+  SessionSkillInput,
+  SessionSkillOutput,
   SessionCompactInput,
   SessionCompactOutput,
   SessionWaitInput,
@@ -427,6 +429,18 @@ export function make(options: ClientOptions) {
           },
           requestOptions,
         ).then((value) => value.data),
+      skill: (input: SessionSkillInput, requestOptions?: RequestOptions) =>
+        request<SessionSkillOutput>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/skill`,
+            body: { id: input["id"], skill: input["skill"], resume: input["resume"] },
+            successStatus: 204,
+            declaredStatuses: [404, 400, 401],
+            empty: true,
+          },
+          requestOptions,
+        ),
       compact: (input: SessionCompactInput, requestOptions?: RequestOptions) =>
         request<SessionCompactOutput>(
           {

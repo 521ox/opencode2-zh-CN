@@ -584,6 +584,15 @@ export const layer = Layer.effectDiscard(
     )
     yield* events.project(SessionEvent.ContextUpdated, (event) => run(db, event))
     yield* events.project(SessionEvent.Synthetic, (event) => run(db, event))
+    yield* events.project(SessionEvent.Skill.Activated, (event) =>
+      insertMessage(db, event, {
+        id: event.data.messageID,
+        type: "skill",
+        name: event.data.name,
+        text: event.data.text,
+        time: { created: event.data.timestamp },
+      }),
+    )
     yield* events.project(SessionEvent.Shell.Started, (event) => run(db, event))
     yield* events.project(SessionEvent.Shell.Ended, (event) => run(db, event))
     yield* events.project(SessionEvent.Step.Started, (event) => run(db, event))

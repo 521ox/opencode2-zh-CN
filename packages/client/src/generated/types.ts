@@ -50,6 +50,14 @@ export type ConflictError = {
 export const isConflictError = (value: unknown): value is ConflictError =>
   typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "ConflictError"
 
+export type SkillNotFoundError = {
+  readonly _tag: "SkillNotFoundError"
+  readonly skill: string
+  readonly message: string
+}
+export const isSkillNotFoundError = (value: unknown): value is SkillNotFoundError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "SkillNotFoundError"
+
 export type SessionBusyError = {
   readonly _tag: "SessionBusyError"
   readonly sessionID: string
@@ -540,6 +548,27 @@ export type SessionPromptOutput = {
   }
 }["data"]
 
+export type SessionSkillInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly id?: {
+    readonly id?: string | undefined
+    readonly skill: string
+    readonly resume?: boolean | undefined
+  }["id"]
+  readonly skill: {
+    readonly id?: string | undefined
+    readonly skill: string
+    readonly resume?: boolean | undefined
+  }["skill"]
+  readonly resume?: {
+    readonly id?: string | undefined
+    readonly skill: string
+    readonly resume?: boolean | undefined
+  }["resume"]
+}
+
+export type SessionSkillOutput = void
+
 export type SessionCompactInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
 
 export type SessionCompactOutput = void
@@ -627,6 +656,14 @@ export type SessionContextOutput = {
         readonly metadata?: { readonly [x: string]: JsonValue }
         readonly time: { readonly created: number }
         readonly type: "system"
+        readonly text: string
+      }
+    | {
+        readonly id: string
+        readonly metadata?: { readonly [x: string]: JsonValue }
+        readonly time: { readonly created: number }
+        readonly type: "skill"
+        readonly name: string
         readonly text: string
       }
     | {
@@ -879,6 +916,20 @@ export type SessionHistoryOutput = {
           readonly timestamp: number
           readonly sessionID: string
           readonly messageID: string
+          readonly text: string
+        }
+      }
+    | {
+        readonly id: string
+        readonly metadata?: { readonly [x: string]: JsonValue }
+        readonly type: "session.next.skill.activated"
+        readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+        readonly location?: { readonly directory: string; readonly workspaceID?: string }
+        readonly data: {
+          readonly timestamp: number
+          readonly sessionID: string
+          readonly messageID: string
+          readonly name: string
           readonly text: string
         }
       }
@@ -1364,6 +1415,20 @@ export type SessionEventsOutput =
   | {
       readonly id: string
       readonly metadata?: { readonly [x: string]: unknown }
+      readonly type: "session.next.skill.activated"
+      readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+      readonly location?: { readonly directory: string; readonly workspaceID?: string }
+      readonly data: {
+        readonly timestamp: number
+        readonly sessionID: string
+        readonly messageID: string
+        readonly name: string
+        readonly text: string
+      }
+    }
+  | {
+      readonly id: string
+      readonly metadata?: { readonly [x: string]: unknown }
       readonly type: "session.next.shell.started"
       readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
       readonly location?: { readonly directory: string; readonly workspaceID?: string }
@@ -1752,6 +1817,14 @@ export type SessionMessageOutput = {
     | {
         readonly id: string
         readonly metadata?: { readonly [x: string]: JsonValue }
+        readonly time: { readonly created: number }
+        readonly type: "skill"
+        readonly name: string
+        readonly text: string
+      }
+    | {
+        readonly id: string
+        readonly metadata?: { readonly [x: string]: JsonValue }
         readonly time: { readonly created: number; readonly completed?: number }
         readonly type: "shell"
         readonly callID: string
@@ -1919,6 +1992,14 @@ export type MessageListOutput = {
         readonly metadata?: { readonly [x: string]: JsonValue }
         readonly time: { readonly created: number }
         readonly type: "system"
+        readonly text: string
+      }
+    | {
+        readonly id: string
+        readonly metadata?: { readonly [x: string]: JsonValue }
+        readonly time: { readonly created: number }
+        readonly type: "skill"
+        readonly name: string
         readonly text: string
       }
     | {
@@ -2714,6 +2795,14 @@ export type EventSubscribeOutput =
   | {
       readonly id: string
       readonly metadata?: { readonly [x: string]: unknown }
+      readonly type: "agent.updated"
+      readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+      readonly location?: { readonly directory: string; readonly workspaceID?: string }
+      readonly data: {}
+    }
+  | {
+      readonly id: string
+      readonly metadata?: { readonly [x: string]: unknown }
       readonly type: "session.created"
       readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
       readonly location?: { readonly directory: string; readonly workspaceID?: string }
@@ -3389,6 +3478,20 @@ export type EventSubscribeOutput =
         readonly timestamp: number
         readonly sessionID: string
         readonly messageID: string
+        readonly text: string
+      }
+    }
+  | {
+      readonly id: string
+      readonly metadata?: { readonly [x: string]: unknown }
+      readonly type: "session.next.skill.activated"
+      readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+      readonly location?: { readonly directory: string; readonly workspaceID?: string }
+      readonly data: {
+        readonly timestamp: number
+        readonly sessionID: string
+        readonly messageID: string
+        readonly name: string
         readonly text: string
       }
     }

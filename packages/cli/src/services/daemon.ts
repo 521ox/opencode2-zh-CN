@@ -56,9 +56,11 @@ export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
-    const directory = Global.Path.state
-    const file = path.join(directory, InstallationChannel === "local" ? "service-local.json" : "service.json")
-    const configFile = path.join(Global.Path.config, "service.json")
+    const global = yield* Global.Service
+    const directory = global.state
+    const filename = InstallationChannel === "local" ? "service-local.json" : "service.json"
+    const file = path.join(directory, filename)
+    const configFile = path.join(global.config, filename)
     const decodeRegistration = Schema.decodeUnknownEffect(Schema.fromJsonString(Registration))
     const decodeServiceConfig = Schema.decodeUnknownEffect(Schema.fromJsonString(ServiceConfig))
 
@@ -311,7 +313,7 @@ export const layer = Layer.effect(
   }),
 )
 
-export const defaultLayer = layer
+export const defaultLayer = layer.pipe(Layer.provide(Global.defaultLayer))
 
 function serviceURL(config: ServiceConfig) {
   const hostname = config.hostname ?? "127.0.0.1"

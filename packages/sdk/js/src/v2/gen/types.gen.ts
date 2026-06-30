@@ -26,6 +26,7 @@ export type Event =
   | EventSessionNextPromptAdmitted
   | EventSessionNextContextUpdated
   | EventSessionNextSynthetic
+  | EventSessionNextSkillActivated
   | EventSessionNextShellStarted
   | EventSessionNextShellEnded
   | EventSessionNextStepStarted
@@ -942,6 +943,17 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "session.next.skill.activated"
+        properties: {
+          timestamp: number
+          sessionID: string
+          messageID: string
+          name: string
+          text: string
+        }
+      }
+    | {
+        id: string
         type: "session.next.shell.started"
         properties: {
           timestamp: number
@@ -1690,6 +1702,7 @@ export type GlobalEvent = {
     | SyncEventSessionNextPromptAdmitted
     | SyncEventSessionNextContextUpdated
     | SyncEventSessionNextSynthetic
+    | SyncEventSessionNextSkillActivated
     | SyncEventSessionNextShellStarted
     | SyncEventSessionNextShellEnded
     | SyncEventSessionNextStepStarted
@@ -2794,6 +2807,12 @@ export type ConflictError = {
   resource?: string
 }
 
+export type SkillNotFoundError = {
+  _tag: "SkillNotFoundError"
+  skill: string
+  message: string
+}
+
 export type ServiceUnavailableError = {
   _tag: "ServiceUnavailableError"
   message: string
@@ -2816,6 +2835,7 @@ export type SessionDurableEvent =
   | SessionNextPromptAdmitted
   | SessionNextContextUpdated
   | SessionNextSynthetic
+  | SessionNextSkillActivated
   | SessionNextShellStarted
   | SessionNextShellEnded
   | SessionNextStepStarted
@@ -2970,6 +2990,7 @@ export type V2Event =
   | SessionNextPromptAdmitted
   | SessionNextContextUpdated
   | SessionNextSynthetic
+  | SessionNextSkillActivated
   | SessionNextShellStarted
   | SessionNextShellEnded
   | SessionNextStepStarted
@@ -3578,6 +3599,24 @@ export type SyncEventSessionNextSynthetic = {
   }
 }
 
+export type SyncEventSessionNextSkillActivated = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.skill.activated.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      messageID: string
+      name: string
+      text: string
+    }
+  }
+}
+
 export type SyncEventSessionNextShellStarted = {
   type: "sync"
   id: string
@@ -4170,6 +4209,19 @@ export type SessionMessageSystem = {
   text: string
 }
 
+export type SessionMessageSkill = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  time: {
+    created: number
+  }
+  type: "skill"
+  name: string
+  text: string
+}
+
 export type SessionMessageShell = {
   id: string
   metadata?: {
@@ -4319,6 +4371,7 @@ export type SessionMessage =
   | SessionMessageUser
   | SessionMessageSynthetic
   | SessionMessageSystem
+  | SessionMessageSkill
   | SessionMessageShell
   | SessionMessageAssistant
   | SessionMessageCompaction
@@ -4500,6 +4553,27 @@ export type SessionNextSynthetic = {
     timestamp: number
     sessionID: string
     messageID: string
+    text: string
+  }
+}
+
+export type SessionNextSkillActivated = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "session.next.skill.activated"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    timestamp: number
+    sessionID: string
+    messageID: string
+    name: string
     text: string
   }
 }
@@ -6627,6 +6701,18 @@ export type EventSessionNextSynthetic = {
     timestamp: number
     sessionID: string
     messageID: string
+    text: string
+  }
+}
+
+export type EventSessionNextSkillActivated = {
+  id: string
+  type: "session.next.skill.activated"
+  properties: {
+    timestamp: number
+    sessionID: string
+    messageID: string
+    name: string
     text: string
   }
 }
@@ -12001,6 +12087,45 @@ export type V2SessionPromptResponses = {
 }
 
 export type V2SessionPromptResponse = V2SessionPromptResponses[keyof V2SessionPromptResponses]
+
+export type V2SessionSkillData = {
+  body: {
+    id?: string
+    skill: string
+    resume?: boolean
+  }
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/skill"
+}
+
+export type V2SessionSkillErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError | SkillNotFoundError
+   */
+  404: SkillNotFoundError | SessionNotFoundError
+}
+
+export type V2SessionSkillError = V2SessionSkillErrors[keyof V2SessionSkillErrors]
+
+export type V2SessionSkillResponses = {
+  /**
+   * <No Content>
+   */
+  204: void
+}
+
+export type V2SessionSkillResponse = V2SessionSkillResponses[keyof V2SessionSkillResponses]
 
 export type V2SessionCompactData = {
   body?: never
