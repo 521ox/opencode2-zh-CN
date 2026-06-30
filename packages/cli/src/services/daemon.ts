@@ -15,6 +15,10 @@ export interface Interface {
   readonly status: () => Effect.Effect<string | undefined>
   readonly stop: () => Effect.Effect<void, unknown>
   readonly password: (value?: string) => Effect.Effect<string, unknown>
+  readonly config: () => Effect.Effect<ServiceConfig, unknown>
+  readonly get: (key?: string) => Effect.Effect<string, unknown>
+  readonly set: (key: string, value: string) => Effect.Effect<void, unknown>
+  readonly unset: (key: string) => Effect.Effect<void, unknown>
   readonly register: (address: HttpServer.Address) => Effect.Effect<void, unknown, Scope.Scope>
 }
 
@@ -28,9 +32,20 @@ const Registration = Schema.Struct({
 })
 type Registration = typeof Registration.Type
 
-const Config = Schema.Struct({
+const ServiceConfig = Schema.Struct({
+  hostname: Schema.optional(Schema.String),
+  port: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1), Schema.isLessThanOrEqualTo(65_535))),
   password: Schema.optional(Schema.String),
 })
+export type ServiceConfig = typeof ServiceConfig.Type
+
+const serviceConfigKeys = ["hostname", "port", "password"] as const
+type ServiceConfigKey = (typeof serviceConfigKeys)[number]
+
+function serviceConfigKey(key: string): ServiceConfigKey {
+  if (serviceConfigKeys.includes(key as ServiceConfigKey)) return key as ServiceConfigKey
+  throw new Error(`Unknown service config key: ${key}`)
+}
 
 function sameRegistration(left: Registration, right: Registration) {
   return left.id === right.id && left.version === right.version && left.url === right.url && left.pid === right.pid
@@ -41,30 +56,98 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const directory = Global.Path.state
-    const file = path.join(directory, InstallationChannel === "local" ? "server-local.json" : "server.json")
+    const file = path.join(directory, InstallationChannel === "local" ? "service-local.json" : "service.json")
     const configFile = path.join(Global.Path.config, "service.json")
-    const legacyPasswordFile = path.join(directory, "password")
     const decodeRegistration = Schema.decodeUnknownEffect(Schema.fromJsonString(Registration))
-    const decodeConfig = Schema.decodeUnknownEffect(Schema.fromJsonString(Config))
+    const decodeServiceConfig = Schema.decodeUnknownEffect(Schema.fromJsonString(ServiceConfig))
+
+    const config = Effect.fn("cli.daemon.config")(function* () {
+      return yield* fs.readFileString(configFile).pipe(
+        Effect.flatMap(decodeServiceConfig),
+        Effect.catch(() => Effect.succeed({} as ServiceConfig)),
+      )
+    })
+
+    const writeConfig = Effect.fn("cli.daemon.writeConfig")(function* (value: ServiceConfig) {
+      const temp = configFile + ".tmp"
+      yield* fs.makeDirectory(path.dirname(configFile), { recursive: true })
+      yield* fs.writeFileString(temp, JSON.stringify(value, null, 2) + "\n", { mode: 0o600 })
+      yield* fs.rename(temp, configFile)
+    })
 
     const password = Effect.fn("cli.daemon.password")(function* (value?: string) {
-      const config = yield* fs
-        .readFileString(configFile)
-        .pipe(Effect.flatMap(decodeConfig), Effect.catch(() => Effect.succeed(undefined)))
-      if (value === undefined && config?.password) return config.password
-
-      const legacy = yield* fs
-        .readFileString(legacyPasswordFile)
-        .pipe(Effect.catch(() => Effect.succeed(undefined)))
-      const next = value ?? legacy ?? randomBytes(32).toString("base64url")
+      const existing = yield* config()
+      if (value === undefined && existing.password) return existing.password
+      const next = value ?? randomBytes(32).toString("base64url")
 
       // Keep one private credential across server restarts so discovered clients
       // can reconnect without exposing a password flag or environment variable.
-      const temp = configFile + ".tmp"
-      yield* fs.writeFileString(temp, JSON.stringify({ password: next }, null, 2) + "\n", { mode: 0o600 })
-      yield* fs.rename(temp, configFile)
-      if (legacy) yield* fs.remove(legacyPasswordFile).pipe(Effect.ignore)
+      yield* writeConfig({ ...existing, password: next })
       return next
+    })
+
+    const get = Effect.fn("cli.daemon.get")(function* (key?: string) {
+      if (key === undefined) {
+        const { password: _password, ...safe } = yield* config()
+        return JSON.stringify(safe, null, 2)
+      }
+      switch (serviceConfigKey(key)) {
+        case "hostname": {
+          return (yield* config()).hostname ?? ""
+        }
+        case "port": {
+          const port = (yield* config()).port
+          return port === undefined ? "" : String(port)
+        }
+        case "password": {
+          return yield* password()
+        }
+      }
+    })
+
+    const set = Effect.fn("cli.daemon.set")(function* (key: string, value: string) {
+      switch (serviceConfigKey(key)) {
+        case "hostname": {
+          yield* stop()
+          yield* writeConfig({ ...(yield* config()), hostname: value })
+          return
+        }
+        case "port": {
+          const port = Number(value)
+          if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new Error("Port must be between 1 and 65535")
+          yield* stop()
+          yield* writeConfig({ ...(yield* config()), port })
+          return
+        }
+        case "password": {
+          yield* stop()
+          yield* password(value)
+          return
+        }
+      }
+    })
+
+    const unset = Effect.fn("cli.daemon.unset")(function* (key: string) {
+      switch (serviceConfigKey(key)) {
+        case "hostname": {
+          yield* stop()
+          const { hostname: _hostname, ...next } = yield* config()
+          yield* writeConfig(next)
+          return
+        }
+        case "port": {
+          yield* stop()
+          const { port: _port, ...next } = yield* config()
+          yield* writeConfig(next)
+          return
+        }
+        case "password": {
+          yield* stop()
+          const { password: _password, ...next } = yield* config()
+          yield* writeConfig(next)
+          return
+        }
+      }
     })
 
     const registration = Effect.fnUntraced(function* () {
@@ -131,7 +214,7 @@ export const layer = Layer.effect(
         return yield* Effect.fail(new Error("Failed to resolve CLI entrypoint"))
       yield* Effect.try({
         try: () => {
-          spawn(process.execPath, [...(entrypoint ? [entrypoint] : []), "serve", "--register"], {
+          spawn(process.execPath, [...(entrypoint ? [entrypoint] : []), "serve", "--service"], {
             detached: true,
             stdio: "ignore",
           }).unref()
@@ -197,7 +280,7 @@ export const layer = Layer.effect(
       )
     })
 
-    return Service.of({ client, transport, start, status, stop, password, register })
+    return Service.of({ client, transport, start, status, stop, password, config, get, set, unset, register })
   }),
 )
 
