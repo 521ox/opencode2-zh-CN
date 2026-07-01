@@ -1672,11 +1672,20 @@ function TextPart(props: { last: boolean; part: SessionMessageAssistantText }) {
 
 function ToolPart(props: { part: SessionMessageAssistantTool }) {
   const ctx = use()
+  const data = useData()
   const display = createMemo(() => toolDisplay(props.part.name))
+  const runningShell = createMemo(
+    () => {
+      if (display() !== "shell" || props.part.state.status === "pending") return false
+      const shellID = stringValue(props.part.state.structured.shellID)
+      return Boolean(shellID && data.shell.get(shellID))
+    },
+  )
 
   // Hide tool if showDetails is false and tool completed successfully
   const shouldHide = createMemo(() => {
     if (ctx.showDetails()) return false
+    if (runningShell()) return false
     if (props.part.state.status !== "completed") return false
     return true
   })
@@ -1699,6 +1708,9 @@ function ToolPart(props: { part: SessionMessageAssistantTool }) {
     },
     get part() {
       return props.part
+    },
+    get runningShell() {
+      return runningShell()
     },
   }
 
@@ -1758,6 +1770,7 @@ type ToolProps = {
   tool: string
   output?: string
   part: SessionMessageAssistantTool
+  runningShell?: boolean
 }
 function GenericTool(props: ToolProps) {
   const { theme } = useTheme()
@@ -2003,7 +2016,7 @@ function Shell(props: ToolProps) {
     return request?.source?.type === "tool" && request.source.callID === props.part.id
   })
   const color = createMemo(() => (permission() ? theme.warning : theme.text))
-  const isRunning = createMemo(() => props.part.state.status === "running")
+  const isRunning = createMemo(() => props.part.state.status === "running" || props.runningShell === true)
   const command = createMemo(() => stringValue(props.input.command))
   const output = createMemo(() => {
     if (props.part.state.status === "pending") return ""

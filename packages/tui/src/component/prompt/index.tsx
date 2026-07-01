@@ -168,7 +168,7 @@ export function Prompt(props: PromptProps) {
         .length,
   )
   const runningShells = createMemo(
-    () => data.shell.list().filter((shell) => shell.metadata.sessionID === props.sessionID).length,
+    () => data.shell.list(currentLocation()).filter((shell) => shell.metadata.sessionID === props.sessionID).length,
   )
   const history = usePromptHistory()
   const stash = usePromptStash()

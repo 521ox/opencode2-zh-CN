@@ -25,6 +25,8 @@ import { SessionMessage } from "@opencode-ai/core/session/message"
 import { SessionStore } from "@opencode-ai/core/session/store"
 import { PermissionV2 } from "@opencode-ai/core/permission"
 import { PluginRuntime } from "@opencode-ai/core/plugin/runtime"
+import { Shell } from "@opencode-ai/core/shell"
+import { Shell as ShellSchema } from "@opencode-ai/schema/shell"
 import { ShellTool } from "@opencode-ai/core/tool/shell"
 import { ToolRegistry } from "@opencode-ai/core/tool/registry"
 import { ToolOutputStore } from "@opencode-ai/core/tool-output-store"
@@ -393,6 +395,31 @@ describe("ShellTool", () => {
               })
             }),
           ),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+    ),
+  )
+
+  it.live("returns the shell id for a background command", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        return withSession(tmp.path, (registry) =>
+          Effect.gen(function* () {
+            const settled = yield* settleTool(registry, call({ command: idleCommand, background: true }))
+            const structured = settled.output?.structured as Record<string, unknown> | undefined
+            const shellID = typeof structured?.shellID === "string" ? structured.shellID : undefined
+            expect(settled.output?.structured).toMatchObject({ truncated: false })
+            expect(shellID).toStartWith("sh_")
+
+            const shell = yield* Shell.Service
+            if (!shellID) return
+            const id = ShellSchema.ID.make(shellID)
+            expect((yield* shell.list()).map((info) => info.id)).toContain(id)
+            yield* shell.remove(id)
+          }),
         )
       },
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),

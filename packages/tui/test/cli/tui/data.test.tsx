@@ -449,6 +449,78 @@ test("refreshes references after updates", async () => {
   }
 })
 
+test("keeps shell state scoped to location", async () => {
+  const events = createEventStream()
+  const other = "/tmp/opencode/other"
+  const calls = createFetch((url) => {
+    if (url.pathname !== "/api/shell") return
+    const requestDirectory = url.searchParams.get("location[directory]")
+    return json({
+      location: { directory: requestDirectory ?? directory, project: { id: "proj_test", directory: requestDirectory ?? directory } },
+      data: [
+        {
+          id: requestDirectory === other ? "sh_other" : "sh_default",
+          status: "running",
+          command: requestDirectory === other ? "pnpm dev" : "bun test",
+          cwd: requestDirectory ?? directory,
+          shell: "/bin/sh",
+          file: "/tmp/opencode-shell",
+          metadata: { sessionID: requestDirectory === other ? "ses_other" : "ses_default" },
+          time: { started: 1 },
+        },
+      ],
+    })
+  }, events)
+  let data!: ReturnType<typeof useData>
+
+  function Probe() {
+    data = useData()
+    return <box />
+  }
+
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <SDKProvider client={createClient(calls.fetch)} api={createApi(calls.fetch)}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </SDKProvider>
+    </TestTuiContexts>
+  ))
+
+  try {
+    await wait(() => data.shell.list().some((shell) => shell.id === "sh_default"))
+    await data.shell.refresh({ directory: other })
+
+    expect(data.shell.list().map((shell) => shell.id)).toEqual(["sh_default"])
+    expect(data.shell.list({ directory: other }).map((shell) => shell.id)).toEqual(["sh_other"])
+
+    events.emit({
+      id: "evt_shell_created",
+      type: "shell.created",
+      location: { directory: other },
+      data: {
+        info: {
+          id: "sh_live_other",
+          status: "running",
+          command: "npm run watch",
+          cwd: other,
+          shell: "/bin/sh",
+          file: "/tmp/opencode-shell-live",
+          metadata: { sessionID: "ses_other" },
+          time: { started: 2 },
+        },
+      },
+    })
+    await wait(() => data.shell.list({ directory: other }).some((shell) => shell.id === "sh_live_other"))
+    expect(data.shell.list().map((shell) => shell.id)).toEqual(["sh_default"])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("adds and dismisses permission requests from live events", async () => {
   const events = createEventStream()
   const calls = createFetch(undefined, events)

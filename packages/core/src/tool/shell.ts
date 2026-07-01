@@ -39,6 +39,7 @@ export const Input = Schema.Struct({
 
 const StructuredOutput = Schema.Struct({
   exit: Schema.Number.pipe(Schema.optional),
+  shellID: Schema.String.pipe(Schema.optional),
   truncated: Schema.Boolean,
   timeout: Schema.Boolean.pipe(Schema.optional),
 })
@@ -142,6 +143,7 @@ export const Plugin = {
           toStructuredOutput: ({ output }) => ({
             truncated: output.truncated,
             ...(output.exit === undefined ? {} : { exit: output.exit }),
+            ...(output.shellID === undefined ? {} : { shellID: output.shellID }),
             ...(output.timeout === undefined ? {} : { timeout: output.timeout }),
           }),
           toModelOutput: ({ output }) => {
@@ -185,16 +187,16 @@ export const Plugin = {
               const timeout = input.timeout ?? DEFAULT_TIMEOUT_MS
 
               if (input.background === true) {
+                const background = yield* shell.create({
+                  command: input.command,
+                  cwd: target.canonical,
+                  timeout,
+                  metadata: { sessionID: context.sessionID },
+                })
                 const run = Effect.fn("ShellTool.run")(function* () {
-                  const info = yield* shell.create({
-                    command: input.command,
-                    cwd: target.canonical,
-                    timeout,
-                    metadata: { sessionID: context.sessionID },
-                  })
                   return yield* Effect.gen(function* () {
-                    const final = yield* shell.wait(info.id)
-                    const page = yield* shell.output(info.id, { limit: MAX_CAPTURE_BYTES })
+                    const final = yield* shell.wait(background.id)
+                    const page = yield* shell.output(background.id, { limit: MAX_CAPTURE_BYTES })
 
                     if (final.status === "timeout")
                       return `Command exceeded timeout of ${timeout} ms. Retry with a larger timeout if the command is expected to take longer.`
@@ -203,7 +205,7 @@ export const Plugin = {
                     const body = page.output || "(no output)"
                     const notice = truncated ? `\n\n[output truncated; full output saved to: ${final.file}]` : ""
                     return `${body}${notice}`
-                  }).pipe(Effect.onInterrupt(() => shell.remove(info.id).pipe(Effect.ignore)))
+                  }).pipe(Effect.onInterrupt(() => shell.remove(background.id).pipe(Effect.ignore)))
                 })
 
                 const info = yield* runtime.job.start({
@@ -217,6 +219,7 @@ export const Plugin = {
                 yield* notifyWhenDone(context.sessionID, context.toolCallID, input.command)
                 return {
                   output: BACKGROUND_STARTED,
+                  shellID: background.id,
                   truncated: false,
                   status: "running" as const,
                   ...(warnings.length ? { warnings } : {}),

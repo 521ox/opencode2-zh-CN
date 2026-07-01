@@ -35,6 +35,9 @@ type LocationData = {
   model?: ModelV2Info[]
   provider?: ProviderV2Info[]
   reference?: ReferenceInfo[]
+  // Currently running shell commands for this location, keyed by shell id. Entries are removed
+  // once the command exits or is deleted, so this only ever holds in-flight shells.
+  shell?: Record<string, Shell>
   skill?: SkillV2Info[]
 }
 
@@ -50,9 +53,6 @@ type Data = {
     permission: Record<string, PermissionSavedInfo[]>
   }
   location: Record<string, LocationData>
-  // Currently running shell commands, keyed by shell id. Entries are removed once the command
-  // exits or is deleted, so this only ever holds in-flight shells.
-  shell: Record<string, Shell>
 }
 
 function locationKey(location: LocationRef) {
@@ -86,7 +86,6 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         permission: {},
       },
       location: {},
-      shell: {},
     })
 
     const sdk = useSDK()
@@ -510,14 +509,24 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           )
           break
         case "shell.created":
-          setStore("shell", event.data.info.id, event.data.info)
+          setStore("location", locationKey(event.location ?? defaultLocation()), (data) => ({
+            ...data,
+            shell: { ...data?.shell, [event.data.info.id]: event.data.info },
+          }))
           break
         case "shell.exited":
         case "shell.deleted":
+          if (event.location) {
+            setStore("location", locationKey(event.location), (data) => ({
+              ...data,
+              shell: Object.fromEntries(Object.entries(data?.shell ?? {}).filter(([id]) => id !== event.data.id)),
+            }))
+            break
+          }
           setStore(
-            "shell",
+            "location",
             produce((draft) => {
-              delete draft[event.data.id]
+              for (const data of Object.values(draft)) delete data.shell?.[event.data.id]
             }),
           )
           break
@@ -621,24 +630,30 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         },
       },
       shell: {
-        list() {
-          return Object.values(store.shell)
+        list(location?: LocationRef) {
+          return Object.values(store.location[locationKey(location ?? defaultLocation())]?.shell ?? {})
         },
         get(id: string) {
-          return store.shell[id]
+          return Object.values(store.location)
+            .map((data) => data.shell?.[id])
+            .find((shell) => shell !== undefined)
         },
         async refresh(ref?: LocationRef) {
           const result = await sdk.api.shell.list({ location: locationQuery(ref) })
-          setStore(
-            "shell",
-            produce((draft) => {
-              for (const info of mutable(result.data)) draft[info.id] = info
-            }),
-          )
+          const key = locationKey(result.location)
+          setStore("location", key, {
+            ...store.location[key],
+            shell: Object.fromEntries(mutable(result.data).map((info) => [info.id, info])),
+          })
         },
         async remove(id: string) {
           await sdk.api.shell.remove({ id })
-          setStore("shell", id, undefined!)
+          setStore(
+            "location",
+            produce((draft) => {
+              for (const data of Object.values(draft)) delete data.shell?.[id]
+            }),
+          )
         },
       },
       location: {
