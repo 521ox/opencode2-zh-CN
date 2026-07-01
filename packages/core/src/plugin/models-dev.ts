@@ -38,12 +38,33 @@ function cost(input: ModelsDev.Model["cost"]) {
   ]
 }
 
-function variants(model: ModelsDev.Model) {
-  return Object.entries(model.experimental?.modes ?? {}).map(([id, item]) => ({
-    id: ModelV2.VariantID.make(id),
-    headers: { ...(item.provider?.headers ?? {}) },
-    body: { ...(item.provider?.body ?? {}) },
-  }))
+function variants(model: ModelsDev.Model, packageName: string | undefined): ModelV2Info["variants"] {
+  const result = new Map<ModelV2.VariantID, ModelV2Info["variants"][number]>()
+  if (packageName === "@ai-sdk/openai" || packageName === "@ai-sdk/openai-compatible") {
+    const option = model.reasoning_options?.find((option) => option.type === "effort")
+    for (const value of option?.values ?? []) {
+      const id = value === null ? "none" : value
+      if (typeof id !== "string") continue
+      const variantID = ModelV2.VariantID.make(id)
+      result.set(variantID, {
+        id: variantID,
+        headers: {},
+        body:
+          packageName === "@ai-sdk/openai"
+            ? { include: ["reasoning.encrypted_content"], reasoning: { effort: id, summary: "auto" } }
+            : { reasoning_effort: id },
+      })
+    }
+  }
+  for (const [id, item] of Object.entries(model.experimental?.modes ?? {})) {
+    const variantID = ModelV2.VariantID.make(id)
+    result.set(variantID, {
+      id: variantID,
+      headers: { ...(item.provider?.headers ?? {}) },
+      body: { ...(item.provider?.body ?? {}) },
+    })
+  }
+  return [...result.values()]
 }
 
 function mergeVariants(model: ModelV2Info, next: ModelV2Info["variants"]) {
@@ -121,7 +142,7 @@ export const ModelsDevPlugin = define({
                 input: [...(model.modalities?.input ?? [])],
                 output: [...(model.modalities?.output ?? [])],
               }
-              mergeVariants(draft, variants(model))
+              mergeVariants(draft, variants(model, model.provider?.npm ?? item.npm))
               draft.time.released = released(model.release_date)
               draft.cost = cost(model.cost)
               draft.status = model.status ?? "active"

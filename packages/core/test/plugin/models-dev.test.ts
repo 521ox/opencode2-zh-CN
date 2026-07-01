@@ -76,7 +76,7 @@ describe("ModelsDevPlugin", () => {
     ),
   )
 
-  it.effect("loads models.dev variants without replacing existing variants", () =>
+  it.effect("derives OpenAI reasoning variants from models.dev reasoning options", () =>
     Effect.acquireUseRelease(
       Effect.sync(() => {
         const previous = {
@@ -89,27 +89,61 @@ describe("ModelsDevPlugin", () => {
       }),
       () =>
         Effect.gen(function* () {
-          const service = yield* Catalog.Service
+          const catalog = yield* Catalog.Service
           const integrations = yield* Integration.Service
-          yield* service.transform((catalog) => {
-            catalog.model.update(ProviderV2.ID.make("local"), ModelV2.ID.make("model"), (model) => {
+          yield* catalog.transform((catalog) => {
+            catalog.model.update(ProviderV2.ID.opencode, ModelV2.ID.make("gpt-5.5"), (model) => {
               model.variants = [
-                { id: ModelV2.VariantID.make("high"), headers: { custom: "true" }, body: {} },
-                { id: ModelV2.VariantID.make("custom"), headers: {}, body: { custom: true } },
+                {
+                  id: ModelV2.VariantID.make("high"),
+                  headers: { custom: "true" },
+                  body: { custom: true },
+                },
               ]
             })
           })
           yield* ModelsDevPlugin.effect(
             host({
-              catalog: catalogHost(service),
+              catalog: catalogHost(catalog),
               integration: integrationHost(integrations),
             }),
           )
 
-          expect((yield* service.model.get(ProviderV2.ID.make("local"), ModelV2.ID.make("model")))?.variants).toEqual([
-            expect.objectContaining({ id: "high", headers: { custom: "true" } }),
-            expect.objectContaining({ id: "max", headers: { "x-variant": "max" }, body: { reasoning_effort: "max" } }),
-            expect.objectContaining({ id: "custom", body: { custom: true } }),
+          expect((yield* catalog.model.get(ProviderV2.ID.opencode, ModelV2.ID.make("gpt-5.5")))?.variants).toEqual([
+            {
+              id: ModelV2.VariantID.make("none"),
+              headers: {},
+              body: {
+                include: ["reasoning.encrypted_content"],
+                reasoning: { effort: "none", summary: "auto" },
+              },
+            },
+            expect.objectContaining({
+              id: "low",
+              body: {
+                include: ["reasoning.encrypted_content"],
+                reasoning: { effort: "low", summary: "auto" },
+              },
+            }),
+            expect.objectContaining({
+              id: "medium",
+              body: {
+                include: ["reasoning.encrypted_content"],
+                reasoning: { effort: "medium", summary: "auto" },
+              },
+            }),
+            expect.objectContaining({
+              id: "high",
+              headers: { custom: "true" },
+              body: { custom: true },
+            }),
+            expect.objectContaining({
+              id: "xhigh",
+              body: {
+                include: ["reasoning.encrypted_content"],
+                reasoning: { effort: "xhigh", summary: "auto" },
+              },
+            }),
           ])
         }).pipe(Effect.provide(ModelsDev.defaultLayer)),
       (previous) =>
@@ -119,4 +153,5 @@ describe("ModelsDevPlugin", () => {
         }),
     ),
   )
+
 })
