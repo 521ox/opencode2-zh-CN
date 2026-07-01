@@ -2803,6 +2803,7 @@ export type SkillListOutput = {
     readonly name: string
     readonly description?: string
     readonly slash?: boolean
+    readonly autoinvoke?: boolean
     readonly location: string
     readonly content: string
   }>

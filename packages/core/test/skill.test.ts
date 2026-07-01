@@ -140,6 +140,46 @@ describe("SkillV2", () => {
     ),
   )
 
+  it.live("parses opencode metadata flags from skill frontmatter", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(async () => {
+            await fs.mkdir(path.join(tmp.path, "manual"), { recursive: true })
+            await fs.writeFile(
+              path.join(tmp.path, "manual", "SKILL.md"),
+              `---
+name: manual
+description: Manual only
+metadata:
+  opencode/slash: true
+  opencode/autoinvoke: false
+---
+# manual`,
+            )
+          })
+
+          const skill = yield* SkillV2.Service
+          yield* skill.transform((editor) => editor.source({ type: "directory", path: AbsolutePath.make(tmp.path) }))
+
+          expect(yield* skill.list()).toEqual([
+            {
+              name: "manual",
+              description: "Manual only",
+              slash: true,
+              autoinvoke: false,
+              location: AbsolutePath.make(path.join(tmp.path, "manual", "SKILL.md")),
+              content: "# manual",
+            },
+          ])
+        }),
+      ),
+    ),
+  )
+
   it.live("invalidates cached skills and publishes updates for watcher changes", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),

@@ -26,6 +26,13 @@ const denied = SkillV2.Info.make({
   location: AbsolutePath.make(path.resolve("/skills/denied/SKILL.md")),
   content: "Denied guidance",
 })
+const manual = SkillV2.Info.make({
+  name: "manual",
+  description: "Load only when explicitly selected",
+  autoinvoke: false,
+  location: AbsolutePath.make(path.resolve("/skills/manual/SKILL.md")),
+  content: "Manual guidance",
+})
 
 const layer = (list: () => SkillV2.Info[]) =>
   SkillGuidance.layer.pipe(Layer.provide(Layer.mock(SkillV2.Service, { list: () => Effect.succeed(list()) })))
@@ -36,7 +43,7 @@ describe("SkillGuidance", () => {
       ...AgentV2.Info.empty(build),
       permissions: [{ action: "skill", resource: "denied", effect: "deny" }],
     })
-    let skills = [hidden, denied, effect]
+    let skills = [hidden, denied, manual, effect]
     return Effect.gen(function* () {
       const guidance = yield* SkillGuidance.Service
       const initialized = yield* guidance
@@ -55,6 +62,7 @@ describe("SkillGuidance", () => {
           "</available_skills>",
         ].join("\n"),
       )
+      expect(initialized.baseline).not.toContain("manual")
 
       skills = []
       expect(

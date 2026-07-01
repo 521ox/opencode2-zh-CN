@@ -38,8 +38,22 @@ const Frontmatter = Schema.Struct({
   name: Schema.String.pipe(Schema.optional),
   description: Schema.String.pipe(Schema.optional),
   slash: Schema.Boolean.pipe(Schema.optional),
+  metadata: Schema.Unknown.pipe(Schema.optional),
 })
 const decodeFrontmatter = Schema.decodeUnknownOption(Frontmatter)
+
+const metadataBoolean = (metadata: unknown, key: string) => {
+  if (metadata === undefined || metadata === null || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return undefined
+  }
+  const value = (metadata as { readonly [key: string]: unknown })[key]
+  if (typeof value === "boolean") return value
+  if (typeof value !== "string") return undefined
+  const normalized = value.trim().toLowerCase()
+  if (normalized === "true") return true
+  if (normalized === "false") return false
+  return undefined
+}
 
 export type Data = {
   sources: Types.DeepMutable<Source>[]
@@ -108,7 +122,8 @@ export const layer = Layer.effect(
           skills.push({
             name,
             description: frontmatter.description,
-            slash: frontmatter.slash,
+            slash: metadataBoolean(frontmatter.metadata, "opencode/slash") ?? frontmatter.slash,
+            autoinvoke: metadataBoolean(frontmatter.metadata, "opencode/autoinvoke"),
             location: AbsolutePath.make(filepath),
             content: markdown.content,
           })
