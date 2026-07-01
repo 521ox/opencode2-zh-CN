@@ -290,18 +290,23 @@ export function Prompt(props: PromptProps) {
     }
   })
 
-  // Far-right footer cluster: live work counts lead, then context/cost usage, all dot-joined.
+  const subagentStatusLabel = createMemo(() => {
+    const agents = activeSubagents()
+    if (!agents) return undefined
+    return `${agents} subagent${agents === 1 ? "" : "s"}`
+  })
+  const shellStatusLabel = createMemo(() => {
+    const shells = runningShells()
+    if (!shells) return undefined
+    return `${shells} shell${shells === 1 ? "" : "s"}`
+  })
+  const liveWorkStatusVisible = createMemo(() => Boolean(subagentStatusLabel() || shellStatusLabel()))
+
+  // Far-right footer cluster: live work counts lead, then context/cost usage.
   // When empty, the cluster falls back to the hotkey hints.
   const statusItems = createMemo(() => {
-    const agents = activeSubagents()
-    const shells = runningShells()
     const stats = usage()
-    return [
-      agents ? `${agents} subagent${agents === 1 ? "" : "s"}` : undefined,
-      shells ? `${shells} shell${shells === 1 ? "" : "s"}` : undefined,
-      stats?.context,
-      stats?.cost,
-    ].filter(Boolean)
+    return [stats?.context, stats?.cost].filter(Boolean)
   })
 
   const [store, setStore] = createStore<{
@@ -1683,9 +1688,23 @@ export function Prompt(props: PromptProps) {
             <Switch>
               <Match when={store.mode === "normal"}>
                 <Switch>
-                  <Match when={statusItems().length > 0}>
+                  <Match when={liveWorkStatusVisible() || statusItems().length > 0}>
                     <text fg={theme.textMuted} wrapMode="none">
-                      {statusItems().join(" · ")}
+                      <Show when={subagentStatusLabel()}>
+                        {(label) => <span style={{ fg: theme.accent }}>{label()}</span>}
+                      </Show>
+                      <Show when={subagentStatusLabel() && shellStatusLabel()}>
+                        <span style={{ fg: theme.textMuted }}> · </span>
+                      </Show>
+                      <Show when={shellStatusLabel()}>
+                        {(label) => <span style={{ fg: theme.secondary }}>{label()}</span>}
+                      </Show>
+                      <Show when={liveWorkStatusVisible() && statusItems().length > 0}>
+                        <span style={{ fg: theme.textMuted }}> · </span>
+                      </Show>
+                      <Show when={statusItems().length > 0}>
+                        <span style={{ fg: theme.textMuted }}>{statusItems().join(" · ")}</span>
+                      </Show>
                     </text>
                   </Match>
                   <Match when={true}>
