@@ -155,7 +155,7 @@ test("reconnects the event stream and bootstraps fresh data", async () => {
     expect(data.connection.attempt()).toBe(0)
 
     events.disconnect()
-    await wait(() => data.connection.status() === "reconnecting")
+    await wait(() => data.connection.status() === "connecting")
     expect(data.connection.attempt()).toBe(1)
     expect(data.connection.error()).toBe("Event stream disconnected")
 

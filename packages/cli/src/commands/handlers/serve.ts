@@ -38,7 +38,7 @@ export default Runtime.handler(
           createOpencodeClient({
             baseUrl: HttpServer.formatAddress(address),
             headers: ServerAuth.headers({ password }),
-          }).v2.location.get(undefined, { throwOnError: true }),
+          }).v2.health.get({}),
         )
         if (input.service) yield* daemon.register(address)
         const url = HttpServer.formatAddress(address)

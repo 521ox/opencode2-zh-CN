@@ -29,6 +29,12 @@ const PluginModule = Schema.Struct({
   ]),
 })
 
+const PluginPackage = Schema.Struct({
+  exports: Schema.optional(Schema.Unknown),
+  main: Schema.optional(Schema.String),
+  module: Schema.optional(Schema.String),
+})
+
 export const Plugin = define({
   id: "config-plugin",
   effect: Effect.fn(function* (ctx) {
@@ -65,8 +71,30 @@ export const Plugin = define({
               symlink: true,
             })
             .pipe(Effect.orElseSucceed(() => []))
+          const directories = yield* fs
+            .glob("{plugin,plugins}/*", {
+              cwd: entry.path,
+              absolute: true,
+              include: "all",
+              dot: true,
+              symlink: true,
+            })
+            .pipe(
+              Effect.flatMap((items) =>
+                Effect.filter(items, (item) => fs.isDir(item), {
+                  concurrency: "unbounded",
+                }),
+              ),
+              Effect.orElseSucceed(() => []),
+            )
+          const packages = yield* Effect.forEach(
+            directories.sort(),
+            (directory) => resolvePackageEntrypoint(fs, directory),
+            { concurrency: "unbounded" },
+          ).pipe(Effect.map((items) => items.filter((item): item is string => item !== undefined)))
           files.sort()
           for (const file of files) configured.push({ package: file })
+          for (const file of packages) configured.push({ package: file })
         }
       }
 
@@ -88,4 +116,19 @@ export const Plugin = define({
       }
     })
   }),
+})
+
+const resolvePackageEntrypoint = Effect.fnUntraced(function* (fs: FSUtil.Interface, directory: string) {
+  const pkg = yield* fs.readJson(path.join(directory, "package.json")).pipe(
+    Effect.flatMap(Schema.decodeUnknownEffect(PluginPackage)),
+    Effect.catch(() => Effect.succeed(undefined)),
+  )
+  const exported = typeof pkg?.exports === "string" ? pkg.exports : undefined
+  const entries = [exported, pkg?.module, pkg?.main, "index.ts", "index.js"]
+
+  return yield* Effect.forEach(entries, (entry) => {
+    if (!entry) return Effect.succeed(undefined)
+    const file = path.resolve(directory, entry)
+    return fs.isFile(file).pipe(Effect.map((exists) => (exists ? file : undefined)))
+  }).pipe(Effect.map((items) => items.find((item): item is string => item !== undefined)))
 })

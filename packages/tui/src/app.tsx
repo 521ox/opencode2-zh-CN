@@ -1148,7 +1148,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       <Show when={!startup.skipInitialLoading}>
         <StartupLoading ready={ready} />
       </Show>
-      <Show when={sdk.connection.status() === "reconnecting"}>
+      <Show when={sdk.connection.status() === "connecting"}>
         <Reconnecting attempt={sdk.connection.attempt()} error={sdk.connection.error()} />
       </Show>
     </box>

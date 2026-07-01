@@ -1,6 +1,7 @@
 import { Formatter, Logger, type LogLevel } from "effect"
 import path from "path"
 import { Global } from "../global"
+import { InstallationChannel, InstallationLocal } from "../installation/version"
 import { runID } from "./shared"
 
 function formatter(id: string = runID) {
@@ -46,9 +47,14 @@ function format(input: unknown) {
   return /^[^\s="\\]+$/.test(value) ? value : JSON.stringify(value)
 }
 
-export function fileLogger(file = path.join(Global.Path.log, "opencode.log"), id: string = runID) {
+export function file(local = InstallationLocal, channel = InstallationChannel) {
+  if (!local) return path.join(Global.Path.log, "opencode.log")
+  return path.join(Global.Path.log, `opencode-${channel.replace(/[^a-zA-Z0-9._-]/g, "-")}.log`)
+}
+
+export function fileLogger(target = file(), id: string = runID) {
   // Do not set batchWindow to 0; it causes high idle CPU usage.
-  return Logger.toFile(formatter(id), file, { flag: "a" })
+  return Logger.toFile(formatter(id), target, { flag: "a" })
 }
 
 const stderrLogger = Logger.make((options) => process.stderr.write(formatter().log(options) + "\n"))

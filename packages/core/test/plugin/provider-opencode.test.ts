@@ -133,6 +133,15 @@ describe("OpencodePlugin", () => {
           const catalog = yield* Catalog.Service
           yield* catalog.transform((draft) => {
             draft.provider.update(ProviderV2.ID.make("remote"), () => {})
+            draft.model.update(ProviderV2.ID.make("remote"), ModelV2.ID.make("model"), (model) => {
+              model.variants = [
+                {
+                  id: ModelV2.VariantID.make("custom"),
+                  headers: { "x-custom": "true" },
+                  body: { custom: true },
+                },
+              ]
+            })
             draft.model.update(ProviderV2.ID.make("remote"), ModelV2.ID.make("stale"), () => {})
           })
           yield* credentials.create({
@@ -176,6 +185,11 @@ describe("OpencodePlugin", () => {
           })
           expect(model.request.body).toEqual({ custom: "value", temperature: 0.5 })
           expect(model.variants).toEqual([
+            {
+              id: ModelV2.VariantID.make("custom"),
+              headers: { "x-custom": "true" },
+              body: { custom: true },
+            },
             {
               id: ModelV2.VariantID.make("high"),
               headers: {},

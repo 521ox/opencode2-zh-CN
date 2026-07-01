@@ -93,6 +93,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       directory: process.cwd(),
     })
     const messageIndex = new Map<string, Map<string, number>>()
+    let bootstrapping: Promise<void> | undefined
 
     const message = {
       update(sessionID: string, fn: (messages: SessionMessage[], index: Map<string, number>) => void) {
@@ -543,6 +544,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         // Authenticating an MCP integration reconnects its server, which emits mcp.status.changed,
         // so the mcp list refreshes here rather than off integration.updated.
         case "mcp.status.changed":
+          if (bootstrapping) break
           void result.location.mcp.refresh(event.location)
           break
       }
@@ -750,7 +752,8 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     }
 
     async function bootstrap() {
-      const settled = await Promise.allSettled([
+      if (bootstrapping) return bootstrapping
+      bootstrapping = Promise.allSettled([
         sdk.api.session
           .list({
             limit: 50,
@@ -787,14 +790,23 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         result.location.skill.refresh(),
         result.shell.refresh(),
       ])
-      for (const failure of settled.filter((item) => item.status === "rejected"))
-        console.error("Failed to refresh default location data", failure.reason)
+        .then((settled) => {
+          for (const failure of settled.filter((item) => item.status === "rejected"))
+            console.error("Failed to refresh default location data", failure.reason)
+        })
+        .finally(() => {
+          bootstrapping = undefined
+        })
+      return bootstrapping
     }
 
     onCleanup(
       sdk.event.listen(({ details }) => {
+        if (details.type === "server.connected") {
+          void bootstrap()
+          return
+        }
         handleEvent(details)
-        if (details.type === "server.connected") void bootstrap()
       }),
     )
 

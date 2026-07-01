@@ -234,6 +234,10 @@ describe("ConfigExternalPlugin", () => {
         description: "Loaded from plugin directory",
         mode: "subagent",
       })
+      expect(yield* waitForAgent(agents, "folder")).toMatchObject({
+        description: "Loaded from plugin folder",
+        mode: "subagent",
+      })
     }),
   )
 })

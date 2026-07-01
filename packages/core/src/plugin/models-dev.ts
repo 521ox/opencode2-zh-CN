@@ -1,4 +1,5 @@
 import { define } from "./internal"
+import type { ModelV2Info } from "@opencode-ai/sdk/v2/types"
 import { Effect, Stream } from "effect"
 import { EventV2 } from "../event"
 import { ModelV2 } from "../model"
@@ -43,6 +44,15 @@ function variants(model: ModelsDev.Model) {
     headers: { ...(item.provider?.headers ?? {}) },
     body: { ...(item.provider?.body ?? {}) },
   }))
+}
+
+function mergeVariants(model: ModelV2Info, next: ModelV2Info["variants"]) {
+  const existing = new Map(model.variants.map((variant) => [variant.id, variant]))
+  const nextIDs = new Set(next.map((variant) => variant.id))
+  model.variants = [
+    ...next.map((variant) => existing.get(variant.id) ?? variant),
+    ...model.variants.filter((variant) => !nextIDs.has(variant.id)),
+  ]
 }
 
 export const ModelsDevPlugin = define({
@@ -111,7 +121,7 @@ export const ModelsDevPlugin = define({
                 input: [...(model.modalities?.input ?? [])],
                 output: [...(model.modalities?.output ?? [])],
               }
-              draft.variants = variants(model)
+              mergeVariants(draft, variants(model))
               draft.time.released = released(model.release_date)
               draft.cost = cost(model.cost)
               draft.status = model.status ?? "active"

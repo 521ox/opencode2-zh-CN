@@ -5,7 +5,7 @@ import { onCleanup, onMount } from "solid-js"
 import { createStore } from "solid-js/store"
 import { createSimpleContext } from "./helper"
 
-export type SDKConnectionStatus = "connecting" | "connected" | "reconnecting"
+export type SDKConnectionStatus = "connected" | "connecting"
 
 type SDKEventMap = { [Type in V2Event["type"]]: Extract<V2Event, { type: Type }> }
 const connectTimeout = 2_000
@@ -64,10 +64,11 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
               return connection.signal.reason instanceof Error
                 ? connection.signal.reason
                 : new Error("Event stream disconnected")
+            if (first.value.type !== "server.connected") return new Error("Event stream did not start with server.connected")
             clearTimeout(timeout)
             attempt = 0
-            setConnection({ status: "connected", attempt: 0, error: undefined })
             events.emit(first.value.type, first.value)
+            setConnection({ status: "connected", attempt: 0, error: undefined })
             connected()
             while (!abort.signal.aborted && !controller.signal.aborted) {
               const event = await iterator.next()
@@ -84,7 +85,7 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
           if (abort.signal.aborted || controller.signal.aborted) return
           attempt += 1
           setConnection({
-            status: "reconnecting",
+            status: "connecting",
             attempt,
             error: error instanceof Error ? error.message : String(error),
           })
