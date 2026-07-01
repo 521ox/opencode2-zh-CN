@@ -182,13 +182,18 @@ export type Endpoint4_18Input = { readonly sessionID: Endpoint4_18Request["param
 export type Endpoint4_18Output = EffectValue<ReturnType<RawClient["server.session"]["session.interrupt"]>>
 export type SessionInterruptOperation<E = never> = (input: Endpoint4_18Input) => Effect.Effect<Endpoint4_18Output, E>
 
-type Endpoint4_19Request = Parameters<RawClient["server.session"]["session.message"]>[0]
-export type Endpoint4_19Input = {
-  readonly sessionID: Endpoint4_19Request["params"]["sessionID"]
-  readonly messageID: Endpoint4_19Request["params"]["messageID"]
+type Endpoint4_19Request = Parameters<RawClient["server.session"]["session.background"]>[0]
+export type Endpoint4_19Input = { readonly sessionID: Endpoint4_19Request["params"]["sessionID"] }
+export type Endpoint4_19Output = EffectValue<ReturnType<RawClient["server.session"]["session.background"]>>
+export type SessionBackgroundOperation<E = never> = (input: Endpoint4_19Input) => Effect.Effect<Endpoint4_19Output, E>
+
+type Endpoint4_20Request = Parameters<RawClient["server.session"]["session.message"]>[0]
+export type Endpoint4_20Input = {
+  readonly sessionID: Endpoint4_20Request["params"]["sessionID"]
+  readonly messageID: Endpoint4_20Request["params"]["messageID"]
 }
-export type Endpoint4_19Output = EffectValue<ReturnType<RawClient["server.session"]["session.message"]>>["data"]
-export type SessionMessageOperation<E = never> = (input: Endpoint4_19Input) => Effect.Effect<Endpoint4_19Output, E>
+export type Endpoint4_20Output = EffectValue<ReturnType<RawClient["server.session"]["session.message"]>>["data"]
+export type SessionMessageOperation<E = never> = (input: Endpoint4_20Input) => Effect.Effect<Endpoint4_20Output, E>
 
 export interface SessionApi<E = never> {
   readonly list: SessionListOperation<E>
@@ -210,6 +215,7 @@ export interface SessionApi<E = never> {
   readonly history: SessionHistoryOperation<E>
   readonly events: SessionEventsOperation<E>
   readonly interrupt: SessionInterruptOperation<E>
+  readonly background: SessionBackgroundOperation<E>
   readonly message: SessionMessageOperation<E>
 }
 

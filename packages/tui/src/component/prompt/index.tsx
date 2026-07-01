@@ -436,6 +436,23 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
+        title: "Background blocking tools",
+        name: "session.background",
+        category: "Session",
+        hidden: true,
+        enabled: status() === "running",
+        run: () => {
+          if (auto()?.visible) return
+          if (!input.focused) return
+          if (!props.sessionID) return
+
+          void sdk.api.session.background({
+            sessionID: props.sessionID,
+          })
+          dialog.clear()
+        },
+      },
+      {
         title: "Open editor",
         category: "Session",
         name: "prompt.editor",
@@ -590,6 +607,7 @@ export function Prompt(props: PromptProps) {
       "prompt.stash.list",
       "prompt.skills",
       "session.interrupt",
+      "session.background",
       "workspace.set",
       "session.move",
     ]),

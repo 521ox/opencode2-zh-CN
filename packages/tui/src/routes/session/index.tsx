@@ -782,11 +782,14 @@ export function Session() {
       },
     },
     {
-      title: "Background subagents",
+      title: "Background blocking tools",
       value: "session.background",
       category: "Session",
       hidden: true,
-      run: () => unavailable("Backgrounding subagents"),
+      run: () => {
+        void sdk.api.session.background({ sessionID: route.sessionID })
+        dialog.clear()
+      },
     },
     {
       title: "Toggle subagent picker",
@@ -920,6 +923,7 @@ export function Session() {
                     />
                   )}
                 </For>
+                <BackgroundToolHint messages={messages()} />
                 <Show when={session()?.revert?.messageID}>
                   <RevertMessage
                     count={
@@ -1034,6 +1038,34 @@ function SessionRowView(props: { row: SessionRow; message: (messageID: string) =
         </Match>
       </Switch>
     </box>
+  )
+}
+
+function BackgroundToolHint(props: { messages: SessionMessage[] }) {
+  const { theme } = useTheme()
+  const shortcut = useCommandShortcut("session.background")
+  const visible = createMemo(() => {
+    const current = props.messages.findLast(
+      (message): message is SessionMessageAssistant => message.type === "assistant" && !message.time.completed,
+    )
+    return (
+      current?.content.some((part) => {
+        if (part.type !== "tool" || part.state.status !== "running") return false
+        const display = toolDisplay(part.name)
+        return display === "shell" || display === "subagent"
+      }) ?? false
+    )
+  })
+  return (
+    <Show when={visible() && shortcut()}>
+      {(value) => (
+        <box marginTop={1} paddingLeft={3} flexShrink={0}>
+          <text fg={theme.textMuted}>
+            Press <span style={{ fg: theme.text }}>{value()}</span> to move running work to the background
+          </text>
+        </box>
+      )}
+    </Show>
   )
 }
 

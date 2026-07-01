@@ -43,6 +43,8 @@ import type {
   SessionEventsOutput,
   SessionInterruptInput,
   SessionInterruptOutput,
+  SessionBackgroundInput,
+  SessionBackgroundOutput,
   SessionMessageInput,
   SessionMessageOutput,
   MessageListInput,
@@ -555,6 +557,17 @@ export function make(options: ClientOptions) {
           {
             method: "POST",
             path: `/api/session/${encodeURIComponent(input.sessionID)}/interrupt`,
+            successStatus: 204,
+            declaredStatuses: [404, 400, 401],
+            empty: true,
+          },
+          requestOptions,
+        ),
+      background: (input: SessionBackgroundInput, requestOptions?: RequestOptions) =>
+        request<SessionBackgroundOutput>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/background`,
             successStatus: 204,
             declaredStatuses: [404, 400, 401],
             empty: true,

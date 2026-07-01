@@ -1775,6 +1775,10 @@ export type SessionInterruptInput = { readonly sessionID: { readonly sessionID: 
 
 export type SessionInterruptOutput = void
 
+export type SessionBackgroundInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+
+export type SessionBackgroundOutput = void
+
 export type SessionMessageInput = {
   readonly sessionID: { readonly sessionID: string; readonly messageID: string }["sessionID"]
   readonly messageID: { readonly sessionID: string; readonly messageID: string }["messageID"]
