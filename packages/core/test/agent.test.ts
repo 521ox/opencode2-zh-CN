@@ -3,6 +3,7 @@ import { Effect, Exit, Fiber, Layer, Scope, Stream } from "effect"
 import { AgentV2 } from "@opencode-ai/core/agent"
 import { EventV2 } from "@opencode-ai/core/event"
 import { Location } from "@opencode-ai/core/location"
+import { PermissionV2 } from "@opencode-ai/core/permission"
 import { AgentPlugin } from "@opencode-ai/core/plugin/agent"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { location } from "./fixture/location"
@@ -150,6 +151,32 @@ describe("AgentV2", () => {
       for (const item of agents) {
         expect(item.permissions.some((rule) => rule.action === "bash" && rule.effect !== "deny")).toBe(false)
       }
+    }),
+  )
+
+  it.effect("denies the subagent tool for built-in subagents", () =>
+    Effect.gen(function* () {
+      const agent = yield* AgentV2.Service
+      yield* AgentPlugin.Plugin.effect(
+        host({
+          agent: agentHost(agent),
+        }),
+      ).pipe(
+        Effect.provideService(
+          Location.Service,
+          Location.Service.of(location({ directory: AbsolutePath.make("/project") })),
+        ),
+      )
+
+      yield* Effect.forEach(["general", "explore"], (id) =>
+        Effect.gen(function* () {
+          const info = yield* agent.get(AgentV2.ID.make(id))
+          if (!info) throw new Error(`expected built-in agent: ${id}`)
+          expect(info.mode).toBe("subagent")
+          expect(info.permissions).toContainEqual({ action: "subagent", resource: "*", effect: "deny" })
+          expect(PermissionV2.evaluate("subagent", "*", info.permissions).effect).toBe("deny")
+        }),
+      )
     }),
   )
 })
