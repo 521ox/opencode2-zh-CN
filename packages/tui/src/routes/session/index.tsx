@@ -22,7 +22,7 @@ import { useData } from "../../context/data"
 import { SplitBorder } from "../../ui/border"
 import { useTuiPaths, useTuiTerminalEnvironment } from "../../context/runtime"
 import { Spinner } from "../../component/spinner"
-import { createSyntaxStyleMemo, generateSubtleSyntax, useTheme } from "../../context/theme"
+import { createSyntaxStyleMemo, generateSubtleSyntax, selectedForeground, useTheme } from "../../context/theme"
 import { BoxRenderable, ScrollBoxRenderable, addDefaultParsers, TextAttributes, RGBA } from "@opentui/core"
 import { Prompt, type PromptRef } from "../../component/prompt"
 import type {
@@ -1319,11 +1319,15 @@ function RevertMessage(props: {
 
 function UserMessage(props: { message: SessionMessageUser }) {
   const ctx = use()
+  const data = useData()
   const local = useLocal()
   const files = createMemo(() => props.message.files ?? [])
   const { theme } = useTheme()
   const [hover, setHover] = createSignal(false)
-  const color = createMemo(() => local.agent.color(useData().session.get(ctx.sessionID)?.agent ?? "build"))
+  const color = createMemo(() => local.agent.color(data.session.get(ctx.sessionID)?.agent ?? "build"))
+  const queued = createMemo(() => props.message.metadata?.queued === true)
+  const queuedFg = createMemo(() => selectedForeground(theme, color()))
+  const metadataVisible = createMemo(() => queued() || ctx.showTimestamps())
   const dialog = useDialog()
   const renderer = useRenderer()
 
@@ -1356,7 +1360,7 @@ function UserMessage(props: { message: SessionMessageUser }) {
           <Show when={files().length}>
             <box
               flexDirection="row"
-              paddingBottom={ctx.showTimestamps() ? 1 : 0}
+              paddingBottom={metadataVisible() ? 1 : 0}
               paddingTop={1}
               gap={1}
               flexWrap="wrap"
@@ -1379,9 +1383,18 @@ function UserMessage(props: { message: SessionMessageUser }) {
               </For>
             </box>
           </Show>
-          <Show when={ctx.showTimestamps()}>
+          <Show
+            when={queued()}
+            fallback={
+              <Show when={ctx.showTimestamps()}>
+                <text fg={theme.textMuted}>
+                  <span style={{ fg: theme.textMuted }}>{Locale.todayTimeOrDateTime(props.message.time.created)}</span>
+                </text>
+              </Show>
+            }
+          >
             <text fg={theme.textMuted}>
-              <span style={{ fg: theme.textMuted }}>{Locale.todayTimeOrDateTime(props.message.time.created)}</span>
+              <span style={{ bg: color(), fg: queuedFg(), bold: true }}> QUEUED </span>
             </text>
           </Show>
         </box>
