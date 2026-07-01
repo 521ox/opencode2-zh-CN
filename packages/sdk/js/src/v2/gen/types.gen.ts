@@ -5363,6 +5363,7 @@ export type SkillV2Info = {
   name: string
   description?: string
   slash?: boolean
+  autoinvoke?: boolean
   location: string
   content: string
 }

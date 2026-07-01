@@ -27,7 +27,7 @@ const discovery = Layer.succeed(
 )
 const it = testEffect(
   AppNodeBuilder.build(LayerNode.group([SkillV2.node, AgentV2.node, EventV2.node]), [
-    LayerNode.replace(SkillDiscovery.layer, discovery),
+    [SkillDiscovery.node, discovery],
   ]),
 )
 
