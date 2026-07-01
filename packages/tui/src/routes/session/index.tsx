@@ -1719,18 +1719,23 @@ function ToolPart(props: { part: SessionMessageAssistantTool }) {
   const ctx = use()
   const data = useData()
   const display = createMemo(() => toolDisplay(props.part.name))
-  const runningShell = createMemo(
-    () => {
-      if (display() !== "shell" || props.part.state.status === "pending") return false
+  const activeBackgroundWork = createMemo(() => {
+    if (props.part.state.status === "pending") return false
+    if (display() === "shell") {
       const shellID = stringValue(props.part.state.structured.shellID)
       return Boolean(shellID && data.shell.get(shellID))
-    },
-  )
+    }
+    if (display() === "subagent") {
+      const sessionID = stringValue(props.part.state.structured.sessionID) ?? stringValue(props.part.state.structured.sessionId)
+      return Boolean(sessionID && data.session.status(sessionID) === "running")
+    }
+    return false
+  })
 
   // Hide tool if showDetails is false and tool completed successfully
   const shouldHide = createMemo(() => {
     if (ctx.showDetails()) return false
-    if (runningShell()) return false
+    if (activeBackgroundWork()) return false
     if (props.part.state.status !== "completed") return false
     if (display() === "shell") return false
     return true
@@ -1754,9 +1759,6 @@ function ToolPart(props: { part: SessionMessageAssistantTool }) {
     },
     get part() {
       return props.part
-    },
-    get runningShell() {
-      return runningShell()
     },
   }
 
@@ -1788,7 +1790,7 @@ function ToolPart(props: { part: SessionMessageAssistantTool }) {
           <Edit {...toolprops} />
         </Match>
         <Match when={display() === "subagent"}>
-          <Task {...toolprops} />
+          <Subagent {...toolprops} />
         </Match>
         <Match when={display() === "apply_patch"}>
           <ApplyPatch {...toolprops} />
@@ -1816,7 +1818,6 @@ type ToolProps = {
   tool: string
   output?: string
   part: SessionMessageAssistantTool
-  runningShell?: boolean
 }
 function GenericTool(props: ToolProps) {
   const { theme } = useTheme()
@@ -2062,7 +2063,11 @@ function Shell(props: ToolProps) {
     return request?.source?.type === "tool" && request.source.callID === props.part.id
   })
   const color = createMemo(() => (permission() ? theme.warning : theme.text))
-  const isRunning = createMemo(() => props.part.state.status === "running" || props.runningShell === true)
+  const isRunning = createMemo(() => {
+    if (props.part.state.status === "running") return true
+    const shellID = stringValue(props.metadata.shellID)
+    return Boolean(shellID && data.shell.get(shellID))
+  })
   const command = createMemo(() => stringValue(props.input.command))
   const output = createMemo(() => {
     if (props.part.state.status === "pending") return ""
@@ -2225,15 +2230,20 @@ function WebSearch(props: ToolProps) {
   )
 }
 
-function Task(props: ToolProps) {
+function Subagent(props: ToolProps) {
   const { navigate } = useRoute()
+  const data = useData()
   const sessionID = createMemo(() => stringValue(props.metadata.sessionID) ?? stringValue(props.metadata.sessionId))
   const description = createMemo(() => stringValue(props.input.description))
+  const isRunning = createMemo(() => {
+    const id = sessionID()
+    return props.part.state.status === "running" || Boolean(id && data.session.status(id) === "running")
+  })
 
   return (
     <InlineTool
-      icon={props.part.state.status === "completed" ? "✓" : "│"}
-      spinner={props.part.state.status === "running"}
+      icon={isRunning() ? "│" : props.part.state.status === "completed" ? "✓" : "│"}
+      spinner={isRunning()}
       complete={description()}
       pending="Delegating..."
       part={props.part}
