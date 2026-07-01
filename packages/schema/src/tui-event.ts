@@ -1,10 +1,10 @@
-export * as TuiEvent from "./tui-event"
+export * as TuiEvent from "./tui-event.js"
 
 import { Effect, Schema } from "effect"
-import { optional } from "./schema"
-import { Event } from "./event"
-import { PositiveInt } from "./schema"
-import { SessionID } from "./session-id"
+import { optional } from "./schema.js"
+import { Event } from "./event.js"
+import { PositiveInt } from "./schema.js"
+import { SessionID } from "./session-id.js"
 
 const DEFAULT_TOAST_DURATION = 5000
 

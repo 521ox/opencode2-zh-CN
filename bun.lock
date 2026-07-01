@@ -722,6 +722,7 @@
     },
     "packages/schema": {
       "name": "@opencode-ai/schema",
+      "version": "1.17.11",
       "dependencies": {
         "effect": "catalog:",
       },
@@ -729,6 +730,7 @@
         "@tsconfig/bun": "catalog:",
         "@types/bun": "catalog:",
         "@typescript/native-preview": "catalog:",
+        "typescript": "catalog:",
       },
     },
     "packages/script": {
