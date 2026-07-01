@@ -33,7 +33,7 @@ const IS_PREVIEW = CHANNEL !== "latest"
 
 const VERSION = await (async () => {
   if (env.OPENCODE_VERSION) return env.OPENCODE_VERSION
-  if (IS_PREVIEW) return `0.0.0-${CHANNEL}-${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "")}`
+  if (IS_PREVIEW) return `0.0.0-${CHANNEL}-${previewBuildNumber()}`
   const version = await fetch("https://registry.npmjs.org/opencode-ai/latest")
     .then((res) => {
       if (!res.ok) throw new Error(res.statusText)
@@ -46,6 +46,14 @@ const VERSION = await (async () => {
   if (t === "minor") return `${major}.${minor + 1}.0`
   return `${major}.${minor}.${patch + 1}`
 })()
+
+function previewBuildNumber() {
+  const runNumber = process.env["GITHUB_RUN_NUMBER"]
+  if (!runNumber) return new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "")
+  const runAttempt = process.env["GITHUB_RUN_ATTEMPT"]
+  if (runAttempt && runAttempt !== "1") return `${runNumber}.${runAttempt}`
+  return runNumber
+}
 
 const bot = ["actions-user", "opencode", "opencode-agent[bot]"]
 const teamPath = path.resolve(import.meta.dir, "../../../.github/TEAM_MEMBERS")
