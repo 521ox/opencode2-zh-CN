@@ -3,6 +3,7 @@ import { Deferred, Effect, Fiber, Layer } from "effect"
 import { AgentV2 } from "@opencode-ai/core/agent"
 import { Database } from "@opencode-ai/core/database/database"
 import { EventV2 } from "@opencode-ai/core/event"
+import { Job } from "@opencode-ai/core/job"
 import { Location } from "@opencode-ai/core/location"
 import { PermissionV2 } from "@opencode-ai/core/permission"
 import { PermissionTable } from "@opencode-ai/core/permission/sql"
@@ -24,6 +25,7 @@ const current = Layer.succeed(
   Location.Service.of(location({ directory: AbsolutePath.make("/project") })),
 )
 const sessions = SessionV2.layer.pipe(
+  Layer.provide(Job.layer),
   Layer.provide(locationServiceMapLayer),
   Layer.provide(EventV2.defaultLayer),
   Layer.provide(Database.defaultLayer),

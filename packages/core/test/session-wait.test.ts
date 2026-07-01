@@ -2,6 +2,7 @@ import { describe, expect } from "bun:test"
 import { Effect, Layer } from "effect"
 import { Database } from "@opencode-ai/core/database/database"
 import { EventV2 } from "@opencode-ai/core/event"
+import { Job } from "@opencode-ai/core/job"
 import { Location } from "@opencode-ai/core/location"
 import { ProjectV2 } from "@opencode-ai/core/project"
 import { AbsolutePath } from "@opencode-ai/core/schema"
@@ -21,6 +22,7 @@ const execution = Layer.mock(SessionExecution.Service, {
   awaitIdle: (sessionID) => Effect.sync(() => awaited.push(sessionID)),
 })
 const sessions = SessionV2.layer.pipe(
+  Layer.provide(Job.layer),
   Layer.provide(locationServiceMapLayer),
   Layer.provide(EventV2.defaultLayer),
   Layer.provide(Database.defaultLayer),

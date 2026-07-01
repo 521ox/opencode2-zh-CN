@@ -5,6 +5,7 @@ import { Auth, LLMClient, RequestExecutor } from "@opencode-ai/llm/route"
 import { Database } from "@opencode-ai/core/database/database"
 import { EventV2 } from "@opencode-ai/core/event"
 import { EventTable } from "@opencode-ai/core/event/sql"
+import { Job } from "@opencode-ai/core/job"
 import { PermissionV2 } from "@opencode-ai/core/permission"
 import { AgentV2 } from "@opencode-ai/core/agent"
 import { Config } from "@opencode-ai/core/config"
@@ -111,6 +112,7 @@ const execution = Layer.effect(
   }),
 ).pipe(Layer.provide(runner))
 const sessions = SessionV2.layer.pipe(
+  Layer.provide(Job.layer),
   Layer.provide(locationServiceMapLayer),
   Layer.provide(EventV2.defaultLayer),
   Layer.provide(Database.defaultLayer),

@@ -664,6 +664,7 @@ export type SessionContextOutput = {
         readonly time: { readonly created: number }
         readonly sessionID: string
         readonly text: string
+        readonly description?: string
         readonly type: "synthetic"
       }
     | {
@@ -932,6 +933,7 @@ export type SessionHistoryOutput = {
           readonly sessionID: string
           readonly messageID: string
           readonly text: string
+          readonly description?: string
         }
       }
     | {
@@ -1425,6 +1427,7 @@ export type SessionEventsOutput =
         readonly sessionID: string
         readonly messageID: string
         readonly text: string
+        readonly description?: string
       }
     }
   | {
@@ -1824,6 +1827,7 @@ export type SessionMessageOutput = {
         readonly time: { readonly created: number }
         readonly sessionID: string
         readonly text: string
+        readonly description?: string
         readonly type: "synthetic"
       }
     | {
@@ -2004,6 +2008,7 @@ export type MessageListOutput = {
         readonly time: { readonly created: number }
         readonly sessionID: string
         readonly text: string
+        readonly description?: string
         readonly type: "synthetic"
       }
     | {
@@ -3523,6 +3528,7 @@ export type EventSubscribeOutput =
         readonly sessionID: string
         readonly messageID: string
         readonly text: string
+        readonly description?: string
       }
     }
   | {
@@ -3982,6 +3988,14 @@ export type EventSubscribeOutput =
       readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
       readonly location?: { readonly directory: string; readonly workspaceID?: string }
       readonly data: { readonly projectID: string }
+    }
+  | {
+      readonly id: string
+      readonly metadata?: { readonly [x: string]: unknown }
+      readonly type: "skill.updated"
+      readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+      readonly location?: { readonly directory: string; readonly workspaceID?: string }
+      readonly data: {}
     }
   | {
       readonly id: string

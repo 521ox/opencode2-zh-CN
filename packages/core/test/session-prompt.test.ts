@@ -4,6 +4,7 @@ import { eq } from "drizzle-orm"
 import { Database } from "@opencode-ai/core/database/database"
 import { EventV2 } from "@opencode-ai/core/event"
 import { EventTable } from "@opencode-ai/core/event/sql"
+import { Job } from "@opencode-ai/core/job"
 import { SessionEvent } from "@opencode-ai/core/session/event"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
@@ -45,6 +46,7 @@ const execution = Layer.succeed(
   }),
 )
 const sessions = SessionV2.layer.pipe(
+  Layer.provide(Job.layer),
   Layer.provide(locationServiceMapLayer),
   Layer.provide(EventV2.defaultLayer),
   Layer.provide(Database.defaultLayer),
@@ -114,7 +116,11 @@ const eventCount = (type: string) =>
 
 const encodeMessage = Schema.encodeSync(SessionMessage.Message)
 const assistantRow = (id: SessionMessage.ID, seq: number) => {
-  const { id: _, type, ...data } = encodeMessage(
+  const {
+    id: _,
+    type,
+    ...data
+  } = encodeMessage(
     SessionMessage.Assistant.make({
       id,
       type: "assistant",

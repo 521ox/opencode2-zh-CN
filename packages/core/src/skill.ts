@@ -2,10 +2,12 @@ export * as SkillV2 from "./skill"
 
 import { makeLocationNode } from "./effect/app-node"
 import path from "path"
-import { Context, Effect, Layer, Schema, Types } from "effect"
+import { Context, Effect, Layer, Schema, Stream, Types } from "effect"
+import { FileSystemWatcher } from "@opencode-ai/schema/filesystem-watcher"
 import { Skill } from "@opencode-ai/schema/skill"
 import { AgentV2 } from "./agent"
 import { ConfigMarkdown } from "./config/markdown"
+import { EventV2 } from "./event"
 import { FSUtil } from "./fs-util"
 import { PermissionV2 } from "./permission"
 import { AbsolutePath } from "./schema"
@@ -26,6 +28,8 @@ export type Source = typeof Source.Type
 
 export const Info = Skill.Info
 export type Info = Skill.Info
+
+export const Event = Skill.Event
 
 export const available = (skills: ReadonlyArray<Info>, agent: AgentV2.Info) =>
   skills.filter((skill) => PermissionV2.evaluate("skill", skill.name, agent.permissions).effect !== "deny")
@@ -58,6 +62,7 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const discovery = yield* SkillDiscovery.Service
     const fs = yield* FSUtil.Service
+    const events = yield* EventV2.Service
 
     const state = State.create<Data, Draft>({
       initial: () => ({ sources: [] }),
@@ -72,7 +77,15 @@ export const layer = Layer.effect(
 
     const load = Effect.fn("SkillV2.load")(function* (source: Source) {
       const skills: Info[] = []
-      if (source.type === "embedded") return [source.skill]
+      if (source.type === "embedded") {
+        yield* Effect.logDebug("skill source loaded", {
+          source: Source.key(source),
+          type: source.type,
+          directories: [],
+          skills: [source.skill.name],
+        })
+        return { skills: [source.skill], directories: [] }
+      }
       const directories = source.type === "directory" ? [source.path] : yield* discovery.pull(source.url)
       for (const directory of directories) {
         const files = yield* fs
@@ -101,19 +114,42 @@ export const layer = Layer.effect(
           })
         }
       }
-      return skills
+      yield* Effect.logDebug("skill source loaded", {
+        source: Source.key(source),
+        type: source.type,
+        directories,
+        skills: skills.map((skill) => skill.name),
+      })
+      return { skills, directories }
     })
 
-    // QUESTION(Dax): Should local skill sources invalidate on filesystem watch
-    // events, following the reload policy chosen for other context sources?
-    const cache = new Map<string, Info[]>()
+    const cache = new Map<string, { skills: Info[]; directories: readonly string[] }>()
+    const invalidate = Effect.fn("SkillV2.invalidateFromWatcher")(function* (file: string) {
+      const invalidated = Array.from(cache.entries()).filter(([, loaded]) =>
+        loaded.directories.some((directory) => FSUtil.contains(directory, file)),
+      )
+      if (invalidated.length === 0) return
+      for (const [key] of invalidated) cache.delete(key)
+      yield* Effect.logInfo("skill cache invalidated", {
+        file,
+        sources: invalidated.map(([key]) => key),
+        skills: invalidated.flatMap(([, loaded]) => loaded.skills.map((skill) => skill.name)),
+      })
+      yield* events.publish(Event.Updated, {}).pipe(Effect.asVoid)
+    })
+
+    yield* events.subscribe(FileSystemWatcher.Event.Updated).pipe(
+      Stream.runForEach((event) => invalidate(event.data.file)),
+      Effect.forkScoped({ startImmediately: true }),
+    )
+
     const list = Effect.fn("SkillV2.list")(function* () {
       const skills = new Map<string, Info>()
       for (const source of state.get().sources) {
         const key = Source.key(source)
         const loaded = cache.get(key) ?? (yield* load(source))
         cache.set(key, loaded)
-        for (const skill of loaded) skills.set(skill.name, skill)
+        for (const skill of loaded.skills) skills.set(skill.name, skill)
       }
       return Array.from(skills.values())
     })
@@ -131,4 +167,4 @@ export const layer = Layer.effect(
 
 export const locationLayer = layer.pipe(Layer.provide(SkillDiscovery.defaultLayer))
 
-export const node = makeLocationNode({ service: Service, layer, deps: [SkillDiscovery.node, FSUtil.node] })
+export const node = makeLocationNode({ service: Service, layer, deps: [SkillDiscovery.node, FSUtil.node, EventV2.node] })

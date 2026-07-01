@@ -12,6 +12,7 @@ import {
 import * as OpenAIChat from "@opencode-ai/llm/protocols/openai-chat"
 import { Database } from "@opencode-ai/core/database/database"
 import { EventV2 } from "@opencode-ai/core/event"
+import { Job } from "@opencode-ai/core/job"
 import { PermissionV2 } from "@opencode-ai/core/permission"
 import { EventTable } from "@opencode-ai/core/event/sql"
 import { Project } from "@opencode-ai/core/project"
@@ -266,6 +267,7 @@ const execution = Layer.effect(
   }),
 ).pipe(Layer.provide(runner))
 const sessions = SessionV2.layer.pipe(
+  Layer.provide(Job.layer),
   Layer.provide(locationServiceMapLayer),
   Layer.provide(EventV2.defaultLayer),
   Layer.provide(Database.defaultLayer),

@@ -2,7 +2,7 @@ import { $ } from "bun"
 import { describe, expect } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
-import { ConfigProvider, Deferred, Duration, Effect, Fiber, Layer, Option, Stream } from "effect"
+import { Deferred, Duration, Effect, Fiber, Layer, Option, Stream } from "effect"
 import { Config } from "@opencode-ai/core/config"
 import { EventV2 } from "@opencode-ai/core/event"
 import { FSUtil } from "@opencode-ai/core/fs-util"
@@ -27,13 +27,6 @@ const configLayer = Layer.succeed(
   }),
 )
 
-const flagsLayer = ConfigProvider.layer(
-  ConfigProvider.fromUnknown({
-    OPENCODE_EXPERIMENTAL_FILEWATCHER: "true",
-    OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: "false",
-  }),
-)
-
 function provide(directory: string, vcs?: Location.Interface["vcs"]) {
   const locationLayer = Layer.succeed(
     Location.Service,
@@ -44,7 +37,6 @@ function provide(directory: string, vcs?: Location.Interface["vcs"]) {
       Layer.provide(configLayer),
       Layer.provide(Git.defaultLayer),
       Layer.provide(locationLayer),
-      Layer.provide(flagsLayer),
     ),
   )
 }

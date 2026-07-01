@@ -9,6 +9,7 @@ import { Database } from "@opencode-ai/core/database/database"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Git } from "@opencode-ai/core/git"
 import { EventV2 } from "@opencode-ai/core/event"
+import { Job } from "@opencode-ai/core/job"
 import { Project } from "@opencode-ai/core/project"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { ProjectDirectories } from "@opencode-ai/core/project/directories"
@@ -29,6 +30,7 @@ const project = Project.layer.pipe(
   Layer.provide(ProjectDirectories.defaultLayer),
 )
 const sessions = SessionV2.layer.pipe(
+  Layer.provide(Job.layer),
   Layer.provide(locationServiceMapLayer),
   Layer.provide(Database.defaultLayer),
   Layer.provide(EventV2.defaultLayer),

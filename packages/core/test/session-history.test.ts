@@ -2,6 +2,7 @@ import { describe, expect } from "bun:test"
 import { Effect, Layer, Schema } from "effect"
 import { Database } from "@opencode-ai/core/database/database"
 import { EventV2 } from "@opencode-ai/core/event"
+import { Job } from "@opencode-ai/core/job"
 import { Location } from "@opencode-ai/core/location"
 import { locationServiceMapLayer } from "@opencode-ai/core/location-services"
 import { ProjectV2 } from "@opencode-ai/core/project"
@@ -23,6 +24,7 @@ const projects = Layer.succeed(
   }),
 )
 const sessions = SessionV2.layer.pipe(
+  Layer.provide(Job.layer),
   Layer.provide(locationServiceMapLayer),
   Layer.provide(EventV2.defaultLayer),
   Layer.provide(Database.defaultLayer),

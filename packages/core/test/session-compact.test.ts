@@ -4,6 +4,7 @@ import { OpenAIChat } from "@opencode-ai/llm/protocols"
 import { Config } from "@opencode-ai/core/config"
 import { Database } from "@opencode-ai/core/database/database"
 import { EventV2 } from "@opencode-ai/core/event"
+import { Job } from "@opencode-ai/core/job"
 import { Location } from "@opencode-ai/core/location"
 import { LocationServiceMap } from "@opencode-ai/core/location-service-map"
 import type { LocationServices } from "@opencode-ai/core/location-services"
@@ -60,6 +61,7 @@ const locations = Layer.effect(
   ),
 )
 const sessions = SessionV2.layer.pipe(
+  Layer.provide(Job.layer),
   Layer.provide(locations),
   Layer.provide(EventV2.defaultLayer),
   Layer.provide(Database.defaultLayer),

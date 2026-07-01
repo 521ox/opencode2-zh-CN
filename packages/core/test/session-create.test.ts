@@ -6,6 +6,7 @@ import { asc, eq } from "drizzle-orm"
 import { Database } from "@opencode-ai/core/database/database"
 import { EventV2 } from "@opencode-ai/core/event"
 import { EventTable } from "@opencode-ai/core/event/sql"
+import { Job } from "@opencode-ai/core/job"
 import { Location } from "@opencode-ai/core/location"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProjectV2 } from "@opencode-ai/core/project"
@@ -36,6 +37,7 @@ const projects = Layer.succeed(
   }),
 )
 const sessions = SessionV2.layer.pipe(
+  Layer.provide(Job.layer),
   Layer.provide(locationServiceMapLayer),
   Layer.provide(EventV2.defaultLayer),
   Layer.provide(Database.defaultLayer),
@@ -182,11 +184,9 @@ describe("SessionV2.create", () => {
       expect((yield* session.context(parent.id)).map((message) => message.type)).toEqual(["user", "synthetic", "user"])
       expect((yield* session.context(forked.id)).map((message) => message.type)).toEqual(["user", "synthetic", "user"])
       expect((yield* session.context(forked.id)).at(-1)).toMatchObject({ text: "Child continues" })
-      expect((yield* session.history({ sessionID: forked.id, limit: 10 })).events.map((event) => event.durable?.seq)).toEqual([
-        0,
-        4,
-        5,
-      ])
+      expect(
+        (yield* session.history({ sessionID: forked.id, limit: 10 })).events.map((event) => event.durable?.seq),
+      ).toEqual([0, 4, 5])
       expect(yield* SessionInput.find(db, admitted.id)).toMatchObject({ sessionID: parent.id })
     }),
   )
