@@ -201,6 +201,62 @@ describe("SessionInstructions", () => {
     }),
   )
 
+  it.effect("discovers AGENTS.md on a directory listing, including the listed directory's own, and dedups with a later file read", () =>
+    Effect.gen(function* () {
+      const location = yield* Location.Service
+      const dir = location.directory
+      const rootPath = path.resolve(dir, "AGENTS.md")
+      const pkgPath = path.resolve(dir, "packages", "foo", "AGENTS.md")
+      yield* mkdir(path.resolve(dir, "packages", "foo"))
+      yield* writeAgents(rootPath, "root-instructions")
+      yield* writeAgents(pkgPath, "pkg-instructions")
+      yield* Effect.promise(() => fs.writeFile(path.resolve(dir, "packages", "foo", "file.txt"), "content"))
+
+      const session = yield* SessionV2.Service
+      const registry = yield* ToolRegistry.Service
+      const sessionID = (yield* session.create({ location: Location.Ref.make({ directory: dir }) })).id
+
+      // Listing packages/foo/ discovers its own AGENTS.md, walking up to but excluding
+      // the Location root (already supplied by the core/instructions baseline).
+      yield* settleTool(registry, readCall(sessionID, "call-list", "packages/foo"))
+
+      const firstInjected = yield* synthetics(sessionID)
+      expect(firstInjected).toHaveLength(1)
+      expect(firstInjected[0]!.text).toBe(`Instructions from: ${pkgPath}\npkg-instructions`)
+      expect(firstInjected[0]!.description).toBe(`Loaded ${path.relative(dir, pkgPath)}`)
+      expect(firstInjected[0]!.metadata).toEqual({ instruction: { paths: [pkgPath] } })
+      expect(firstInjected[0]!.text).not.toContain("root-instructions")
+
+      // A subsequent file read under the listed directory is a dedup: pkg's AGENTS.md is
+      // already injected for this session, so nothing new is emitted.
+      yield* settleTool(registry, readCall(sessionID, "call-file", "packages/foo/file.txt"))
+
+      expect((yield* synthetics(sessionID))).toHaveLength(1)
+    }),
+  )
+
+  it.effect("listing the Location root directory injects no instructions", () =>
+    Effect.gen(function* () {
+      const location = yield* Location.Service
+      const dir = location.directory
+      const rootPath = path.resolve(dir, "AGENTS.md")
+      const subPath = path.resolve(dir, "sub", "AGENTS.md")
+      yield* mkdir(path.resolve(dir, "sub"))
+      yield* writeAgents(rootPath, "root-instructions")
+      yield* writeAgents(subPath, "sub-instructions")
+
+      const session = yield* SessionV2.Service
+      const registry = yield* ToolRegistry.Service
+      const sessionID = (yield* session.create({ location: Location.Ref.make({ directory: dir }) })).id
+
+      // The walk starts and stops at the Location root: the root AGENTS.md is searched but
+      // dropped by the dirname filter, and up() only walks upward so nested dirs are unseen.
+      yield* settleTool(registry, readCall(sessionID, "call-root-list", "."))
+
+      expect((yield* synthetics(sessionID))).toHaveLength(0)
+    }),
+  )
+
   it.effect("loads instructions directly without a read", () =>
     Effect.gen(function* () {
       const location = yield* Location.Service

@@ -85,22 +85,29 @@ const layer = Layer.effectDiscard(
                 agent: context.agent,
                 source,
               })
-              if (type === "directory")
-                return yield* reader.list(absolute, { offset: input.offset, limit: input.limit })
-              const content = yield* reader.read(absolute, resource, {
-                offset: input.offset,
-                limit: input.limit,
-              })
-              // After a successful file content read (not directory listings), discover
-              // nearby AGENTS.md walking up to the Location root exclusive and inject them
-              // as durable synthetic instructions. Discovery failures never fail the read.
+              const content =
+                type === "directory"
+                  ? yield* reader.list(absolute, { offset: input.offset, limit: input.limit })
+                  : yield* reader.read(absolute, resource, {
+                      offset: input.offset,
+                      limit: input.limit,
+                    })
+              // After a successful read, discover nearby AGENTS.md walking up to the Location
+              // root exclusive and inject them as durable synthetic instructions. For a
+              // directory listing the walk starts at the directory itself (so its own AGENTS.md
+              // is discovered); for a file it starts at the file's dirname. External reads are
+              // skipped, and discovery failures never fail the read.
               yield* Effect.gen(function* () {
                 if (target.externalDirectory !== undefined) return
                 const resolved = FSUtil.resolve(target.canonical)
                 const root = FSUtil.resolve(location.directory)
                 // up() searches its stop directory, so the Location-root AGENTS.md (already
                 // supplied by the core/instructions baseline) is dropped by the dirname filter.
-                const discovered = yield* fs.up({ targets: [FILENAME], start: dirname(resolved), stop: root })
+                const discovered = yield* fs.up({
+                  targets: [FILENAME],
+                  start: type === "directory" ? resolved : dirname(resolved),
+                  stop: root,
+                })
                 const candidates = discovered.map(FSUtil.resolve).filter((file) => dirname(file) !== root)
                 if (candidates.length === 0) return
                 yield* sessionInstructions.load({ sessionID: context.sessionID, paths: candidates })
