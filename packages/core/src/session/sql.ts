@@ -165,12 +165,12 @@ export const SessionInputTable = sqliteTable(
   ],
 )
 
-export const SessionContextEpochTable = sqliteTable("session_context_epoch", {
+export const SessionContextCheckpointTable = sqliteTable("session_context_epoch", {
   session_id: text()
     .$type<SessionSchema.ID>()
     .primaryKey()
     .references(() => SessionTable.id, { onDelete: "cascade" }),
   baseline: text().notNull(),
-  snapshot: text({ mode: "json" }).notNull().$type<SystemContext.Snapshot>(),
+  snapshot: text({ mode: "json" }).notNull().$type<SystemContext.Applied>(),
   baseline_seq: integer().notNull(),
 })

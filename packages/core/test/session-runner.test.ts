@@ -25,7 +25,6 @@ import { QuestionV2 } from "@opencode-ai/core/question"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { Snapshot } from "@opencode-ai/core/snapshot"
-import { ContextSnapshotDecodeError } from "@opencode-ai/core/session/error"
 import { SessionEvent } from "@opencode-ai/core/session/event"
 import { SessionCompaction } from "@opencode-ai/core/session/compaction"
 import { SessionTitle } from "@opencode-ai/core/session/title"
@@ -46,14 +45,15 @@ import { Config } from "@opencode-ai/core/config"
 import { ConfigCompaction } from "@opencode-ai/core/config/compaction"
 import { Tool } from "@opencode-ai/core/tool/tool"
 import {
-  SessionContextEpochTable,
+  SessionContextCheckpointTable,
   SessionInputTable,
   SessionMessageTable,
   SessionTable,
 } from "@opencode-ai/core/session/sql"
 import { SessionStore } from "@opencode-ai/core/session/store"
 import { SystemContext } from "@opencode-ai/core/system-context"
-import { SystemContextRegistry } from "@opencode-ai/core/system-context/registry"
+import { SystemContextBuiltIns } from "@opencode-ai/core/system-context/builtins"
+import { InstructionContext } from "@opencode-ai/core/instruction-context"
 import { SkillGuidance } from "@opencode-ai/core/skill/guidance"
 import { ReferenceGuidance } from "@opencode-ai/core/reference/guidance"
 import { McpGuidance } from "@opencode-ai/core/mcp/guidance"
@@ -169,35 +169,28 @@ let systemRemoved = false
 let systemUnavailable = false
 let systemLoadHook = Effect.void
 const skillBaselines = new Map<AgentV2.ID, string>()
-const systemContext = Layer.effectDiscard(
-  SystemContextRegistry.Service.pipe(
-    Effect.flatMap((registry) =>
-      registry.register({
-        key: systemContextKey,
-        load: Effect.sync(() =>
-          SystemContext.combine(
-            systemRemoved
-              ? []
-              : [
-                  SystemContext.make({
-                    key: systemContextKey,
-                    codec: Schema.toCodecJson(Schema.String),
-                    load: systemLoadHook.pipe(
-                      Effect.andThen(
-                        Effect.sync(() => (systemUnavailable ? SystemContext.unavailable : systemBaseline)),
-                      ),
-                    ),
-                    baseline: String,
-                    update: (_previous, current) => current,
-                    removed: () => "System context source removed: test/context",
-                  }),
-                ],
-          ),
-        ),
-      }),
+const systemContext = Layer.mock(SystemContextBuiltIns.Service, {
+  load: () =>
+    Effect.sync(() =>
+      SystemContext.combine(
+        systemRemoved
+          ? []
+          : [
+              SystemContext.make({
+                key: systemContextKey,
+                codec: Schema.toCodecJson(Schema.String),
+                load: systemLoadHook.pipe(
+                  Effect.andThen(Effect.sync(() => (systemUnavailable ? SystemContext.unavailable : systemBaseline))),
+                ),
+                baseline: String,
+                update: (_previous, current) => current,
+                removed: () => "System context source removed: test/context",
+              }),
+            ],
+      ),
     ),
-  ),
-).pipe(Layer.provideMerge(AppNodeBuilder.build(SystemContextRegistry.node)))
+})
+const instructionContext = Layer.mock(InstructionContext.Service, { load: () => Effect.succeed(SystemContext.empty) })
 const skillGuidance = Layer.mock(SkillGuidance.Service, {
   load: (agent) =>
     Effect.succeed(
@@ -236,7 +229,8 @@ const runnerLayer = AppNodeBuilder.build(SessionRunnerLLM.node, [
   [Snapshot.node, Snapshot.noopLayer],
   [LayerNodePlatform.llmClient, client],
   [SessionRunnerModel.node, models],
-  [SystemContextRegistry.node, systemContext],
+  [SystemContextBuiltIns.node, systemContext],
+  [InstructionContext.node, instructionContext],
   [Location.node, Location.boundNode({ directory: AbsolutePath.make("/project") })],
   [SkillGuidance.node, skillGuidance],
   [ReferenceGuidance.node, referenceGuidance],
@@ -274,7 +268,8 @@ const it = testEffect(
       ToolRegistry.toolsNode,
       echoNode,
       SessionRunnerModel.node,
-      SystemContextRegistry.node,
+      SystemContextBuiltIns.node,
+      InstructionContext.node,
       SkillGuidance.node,
       ReferenceGuidance.node,
       Config.node,
@@ -287,7 +282,8 @@ const it = testEffect(
       [LayerNodePlatform.llmClient, client],
       [PermissionV2.node, permission],
       [SessionRunnerModel.node, models],
-      [SystemContextRegistry.node, systemContext],
+      [SystemContextBuiltIns.node, systemContext],
+      [InstructionContext.node, instructionContext],
       [Location.node, Location.boundNode({ directory: AbsolutePath.make("/project") })],
       [SkillGuidance.node, skillGuidance],
       [ReferenceGuidance.node, referenceGuidance],
@@ -699,8 +695,8 @@ describe("SessionRunnerLLM", () => {
       expect(
         yield* db
           .select()
-          .from(SessionContextEpochTable)
-          .where(eq(SessionContextEpochTable.session_id, sessionID))
+          .from(SessionContextCheckpointTable)
+          .where(eq(SessionContextCheckpointTable.session_id, sessionID))
           .get(),
       ).toBeUndefined()
 
@@ -731,8 +727,8 @@ describe("SessionRunnerLLM", () => {
       expect(
         yield* db
           .select()
-          .from(SessionContextEpochTable)
-          .where(eq(SessionContextEpochTable.session_id, sessionID))
+          .from(SessionContextCheckpointTable)
+          .where(eq(SessionContextCheckpointTable.session_id, sessionID))
           .get(),
       ).toBeUndefined()
 
@@ -745,7 +741,36 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect("fails gracefully when a stored context snapshot cannot be decoded", () =>
+  it.effect("copies the context checkpoint to a fork", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const { db } = yield* Database.Service
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "First" }), resume: false })
+      response = []
+      yield* session.resume(sessionID)
+
+      const forked = yield* session.fork({ sessionID })
+
+      const parent = yield* db
+        .select()
+        .from(SessionContextCheckpointTable)
+        .where(eq(SessionContextCheckpointTable.session_id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
+      expect(parent).toBeDefined()
+      expect(
+        yield* db
+          .select()
+          .from(SessionContextCheckpointTable)
+          .where(eq(SessionContextCheckpointTable.session_id, forked.id))
+          .get()
+          .pipe(Effect.orDie),
+      ).toEqual({ ...parent!, session_id: forked.id })
+    }),
+  )
+
+  it.effect("heals an undecodable stored applied record by re-announcing context", () =>
     Effect.gen(function* () {
       yield* setup
       const session = yield* SessionV2.Service
@@ -754,19 +779,28 @@ describe("SessionRunnerLLM", () => {
       response = []
       yield* session.resume(sessionID)
       yield* db
-        .update(SessionContextEpochTable)
+        .update(SessionContextCheckpointTable)
         .set({ snapshot: { invalid: { value: "bad" } } })
-        .where(eq(SessionContextEpochTable.session_id, sessionID))
+        .where(eq(SessionContextCheckpointTable.session_id, sessionID))
         .run()
         .pipe(Effect.orDie)
       yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Second" }), resume: false })
       requests.length = 0
 
-      const exit = yield* session.resume(sessionID).pipe(Effect.exit)
+      yield* session.resume(sessionID)
 
-      expect(Exit.isFailure(exit)).toBe(true)
-      if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(ContextSnapshotDecodeError)
-      expect(requests).toHaveLength(0)
+      // Comparison state was lost, so every source re-announces as new.
+      expect(requests).toHaveLength(1)
+      expect(requests[0]?.system.map((part) => part.text)).toEqual([defaultSystem, "Initial context"])
+      expect(requests[0]?.messages.map((message) => message.role)).toEqual(["user", "system", "user"])
+      expect(requests[0]?.messages.at(1)?.content).toEqual([{ type: "text", text: "Initial context" }])
+      const healed = yield* db
+        .select({ snapshot: SessionContextCheckpointTable.snapshot })
+        .from(SessionContextCheckpointTable)
+        .where(eq(SessionContextCheckpointTable.session_id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
+      expect(healed?.snapshot).toEqual({ "test/context": { value: "Initial context", removed: expect.any(String) } })
     }),
   )
 
@@ -787,8 +821,8 @@ describe("SessionRunnerLLM", () => {
         [defaultSystem, "Initial context"],
         [defaultSystem, "Initial context"],
       ])
-      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "user", "system"])
-      expect(requests[1]?.messages.at(-1)?.content).toEqual([{ type: "text", text: "Changed context" }])
+      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "system", "user"])
+      expect(requests[1]?.messages.at(1)?.content).toEqual([{ type: "text", text: "Changed context" }])
       expect(yield* session.messages({ sessionID })).toHaveLength(3)
       const { db } = yield* Database.Service
       expect(
@@ -1049,8 +1083,8 @@ describe("SessionRunnerLLM", () => {
       yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Second" }), resume: false })
       yield* session.resume(sessionID)
 
-      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "user", "system"])
-      expect(requests[1]?.messages.at(-1)?.content).toEqual([
+      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "system", "user"])
+      expect(requests[1]?.messages.at(1)?.content).toEqual([
         { type: "text", text: "System context source removed: test/context" },
       ])
       expect(yield* session.messages({ sessionID })).toHaveLength(3)
@@ -1085,15 +1119,15 @@ describe("SessionRunnerLLM", () => {
         [defaultSystem, "Initial context"],
         [defaultSystem, "Initial context"],
       ])
-      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "user", "system"])
+      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "system", "user"])
       expect(requests[2]?.messages.filter((message) => message.role === "system")).toHaveLength(2)
       expect((yield* session.context(sessionID)).map((message) => message.type)).toEqual([
         "user",
-        "user",
         "system",
+        "user",
         "model-switched",
-        "user",
         "system",
+        "user",
       ])
       yield* replaySessionProjection(sessionID)
       expect(yield* session.messages({ sessionID })).toHaveLength(6)
@@ -1361,7 +1395,7 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect("preserves effective System updates while compaction rebaseline is blocked", () =>
+  it.effect("rebaselines after compaction from the last-applied belief while unobservable", () =>
     Effect.gen(function* () {
       yield* setup
       const session = yield* SessionV2.Service
@@ -1393,8 +1427,9 @@ describe("SessionRunnerLLM", () => {
       yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Third" }), resume: false })
       yield* session.resume(sessionID)
 
-      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual([defaultSystem, "Initial context"])
-      expect(systemTexts(requests.at(-1)!)).toContain("Changed context")
+      // The rebaseline proceeds while the source is unobservable, restating the model's belief.
+      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual([defaultSystem, "Changed context"])
+      expect(systemTexts(requests.at(-1)!)).not.toContain("Changed context")
     }),
   )
 
