@@ -38,6 +38,7 @@ import { SkillGuidance } from "./skill/guidance"
 import { Snapshot } from "./snapshot"
 import { SystemContextBuiltIns } from "./system-context/builtins"
 import { SystemContextRegistry } from "./system-context/registry"
+import { SessionInstructions } from "./session/instructions"
 import { BuiltInTools } from "./tool/builtins"
 import { McpTool } from "./tool/mcp"
 import { ReadToolFileSystem } from "./tool/read-filesystem"
@@ -85,6 +86,7 @@ export const locationServices = LayerNode.group([
   ReadToolFileSystem.node,
   BuiltInTools.node,
   McpTool.node,
+  SessionInstructions.node,
   SessionRunnerModel.node,
   SessionCompaction.node,
   SessionTitle.node,

@@ -248,6 +248,7 @@ describe("SessionProjector", () => {
         messageID: SessionMessage.ID.create(),
         timestamp: created,
         text: "synthetic context",
+        metadata: { source: "projector-test" },
       })
       yield* events.publish(SessionEvent.Shell.Started, {
         sessionID,
@@ -318,6 +319,10 @@ describe("SessionProjector", () => {
         "shell",
         "compaction",
       ])
+      expect(messages.find((message) => message.type === "synthetic")).toMatchObject({
+        text: "synthetic context",
+        metadata: { source: "projector-test" },
+      })
       expect(messages.find((message) => message.type === "shell")).toMatchObject({
         output: "/project",
         time: { completed: DateTime.makeUnsafe(1) },

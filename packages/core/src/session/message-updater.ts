@@ -154,6 +154,7 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
             sessionID: event.data.sessionID,
             text: event.data.text,
             description: event.data.description,
+            metadata: event.data.metadata,
             id: event.data.messageID,
             type: "synthetic",
             time: { created: event.data.timestamp },

@@ -25,6 +25,8 @@ import type {
   SessionPromptOutput,
   SessionSkillInput,
   SessionSkillOutput,
+  SessionSyntheticInput,
+  SessionSyntheticOutput,
   SessionCompactInput,
   SessionCompactOutput,
   SessionWaitInput,
@@ -455,6 +457,18 @@ export function make(options: ClientOptions) {
             method: "POST",
             path: `/api/session/${encodeURIComponent(input.sessionID)}/skill`,
             body: { id: input["id"], skill: input["skill"], resume: input["resume"] },
+            successStatus: 204,
+            declaredStatuses: [404, 400, 401],
+            empty: true,
+          },
+          requestOptions,
+        ),
+      synthetic: (input: SessionSyntheticInput, requestOptions?: RequestOptions) =>
+        request<SessionSyntheticOutput>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/synthetic`,
+            body: { text: input["text"], description: input["description"], metadata: input["metadata"] },
             successStatus: 204,
             declaredStatuses: [404, 400, 401],
             empty: true,

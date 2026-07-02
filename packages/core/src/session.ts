@@ -199,6 +199,7 @@ export interface Interface {
     sessionID: SessionSchema.ID
     text: string
     description?: string
+    metadata?: Record<string, unknown>
   }) => Effect.Effect<void, NotFoundError>
   readonly revert: {
     readonly stage: (input: {
@@ -547,6 +548,7 @@ const layer = Layer.effect(
           timestamp: yield* DateTime.now,
           text: input.text,
           description: input.description,
+          metadata: input.metadata,
         })
         yield* execution.resume(input.sessionID).pipe(Effect.ignore, Effect.forkIn(scope, { startImmediately: true }), Effect.asVoid)
       }),

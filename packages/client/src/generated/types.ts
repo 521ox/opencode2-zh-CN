@@ -584,6 +584,27 @@ export type SessionSkillInput = {
 
 export type SessionSkillOutput = void
 
+export type SessionSyntheticInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly text: {
+    readonly text: string
+    readonly description?: string | null
+    readonly metadata?: { readonly [x: string]: JsonValue }
+  }["text"]
+  readonly description?: {
+    readonly text: string
+    readonly description?: string | null
+    readonly metadata?: { readonly [x: string]: JsonValue }
+  }["description"]
+  readonly metadata?: {
+    readonly text: string
+    readonly description?: string | null
+    readonly metadata?: { readonly [x: string]: JsonValue }
+  }["metadata"]
+}
+
+export type SessionSyntheticOutput = void
+
 export type SessionCompactInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
 
 export type SessionCompactOutput = void
@@ -934,6 +955,7 @@ export type SessionHistoryOutput = {
           readonly messageID: string
           readonly text: string
           readonly description?: string
+          readonly metadata?: { readonly [x: string]: JsonValue }
         }
       }
     | {
@@ -1428,6 +1450,7 @@ export type SessionEventsOutput =
         readonly messageID: string
         readonly text: string
         readonly description?: string
+        readonly metadata?: { readonly [x: string]: unknown }
       }
     }
   | {
@@ -3530,6 +3553,7 @@ export type EventSubscribeOutput =
         readonly messageID: string
         readonly text: string
         readonly description?: string
+        readonly metadata?: { readonly [x: string]: unknown }
       }
     }
   | {
