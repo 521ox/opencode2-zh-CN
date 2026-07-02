@@ -1,9 +1,11 @@
 export * as SessionInstructions from "./instructions"
 
+import { relative } from "path"
 import { Context, DateTime, Effect, Layer, Option, Ref, Schema } from "effect"
 import { makeLocationNode } from "../effect/app-node"
 import { EventV2 } from "../event"
 import { FSUtil } from "../fs-util"
+import { Location } from "../location"
 import { SessionEvent } from "./event"
 import { MessageDecodeError } from "./error"
 import { SessionMessage } from "./message"
@@ -29,6 +31,10 @@ const layer = Layer.effect(
     const events = yield* EventV2.Service
     const fs = yield* FSUtil.Service
     const store = yield* SessionStore.Service
+    const location = yield* Location.Service
+    // Resolved once for the Location layer; the synthetic text and dedup ledger keep
+    // absolute paths, but the human-facing description shows paths relative to this root.
+    const root = FSUtil.resolve(location.directory)
     // Same-turn parallel reads settle concurrently, so an in-memory claim guards each
     // Session/path pair before any filesystem work. The durable history check below covers
     // paths injected in earlier turns after this Location layer was reopened.
@@ -70,7 +76,7 @@ const layer = Layer.effect(
         messageID: SessionMessage.ID.create(),
         timestamp: yield* DateTime.now,
         text: readable.map((file) => `Instructions from: ${file.path}\n${file.content}`).join("\n\n"),
-        description: `Loaded ${readable.map((file) => file.path).join(", ")}`,
+        description: `Loaded ${readable.map((file) => describePath(root, file.path)).join(", ")}`,
         metadata: { instruction: { paths: readable.map((file) => file.path) } },
       })
     })
@@ -94,8 +100,15 @@ function previouslyInjected(store: SessionStore.Interface, sessionID: SessionSch
   })
 }
 
+// Paths are normally discovered under the Location root, so the description shows them
+// relative to it. A directly-loaded path outside the root falls back to its absolute form
+// rather than emitting `../..` chains.
+function describePath(root: string, path: string) {
+  return FSUtil.contains(root, path) ? relative(root, path) : path
+}
+
 export const node = makeLocationNode({
   name: "session-instructions",
   layer,
-  deps: [EventV2.node, FSUtil.node, SessionStore.node],
+  deps: [EventV2.node, FSUtil.node, Location.node, SessionStore.node],
 })

@@ -156,7 +156,7 @@ describe("SessionInstructions", () => {
       expect(firstInjected[0]!.text).toBe(
         `Instructions from: ${deepPath}\ndeep-instructions\n\nInstructions from: ${subPath}\nsub-instructions`,
       )
-      expect(firstInjected[0]!.description).toBe(`Loaded ${deepPath}, ${subPath}`)
+      expect(firstInjected[0]!.description).toBe(`Loaded ${path.relative(dir, deepPath)}, ${path.relative(dir, subPath)}`)
       // The synthetic's metadata carries the durable dedup ledger.
       expect(firstInjected[0]!.metadata).toEqual({ instruction: { paths: [deepPath, subPath] } })
       expect(firstInjected[0]!.text).not.toContain("root-instructions")
@@ -168,7 +168,7 @@ describe("SessionInstructions", () => {
       const secondInjected = yield* synthetics(sessionID)
       expect(secondInjected).toHaveLength(2)
       expect(secondInjected[1]!.text).toBe(`Instructions from: ${otherPath}\nother-instructions`)
-      expect(secondInjected[1]!.description).toBe(`Loaded ${otherPath}`)
+      expect(secondInjected[1]!.description).toBe(`Loaded ${path.relative(dir, otherPath)}`)
       expect(secondInjected[1]!.metadata).toEqual({ instruction: { paths: [otherPath] } })
       expect(secondInjected.some((message) => message.text.includes("root-instructions"))).toBe(false)
     }),
@@ -218,7 +218,7 @@ describe("SessionInstructions", () => {
       const injected = yield* synthetics(sessionID)
       expect(injected).toHaveLength(1)
       expect(injected[0]!.text).toBe(`Instructions from: ${subPath}\nsub-instructions`)
-      expect(injected[0]!.description).toBe(`Loaded ${subPath}`)
+      expect(injected[0]!.description).toBe(`Loaded ${path.relative(dir, subPath)}`)
       expect(injected[0]!.metadata).toEqual({ instruction: { paths: [subPath] } })
     }),
   )
