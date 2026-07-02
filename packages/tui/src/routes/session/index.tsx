@@ -2262,7 +2262,7 @@ export function formatSubagentToolcalls(count: number) {
 }
 
 export function formatSubagentTitle(agent: string, description: string, background: boolean) {
-  return `${agent} Subagent${background ? " (background)" : ""} — ${description}`
+  return `${agent} Subagent — ${description}${background ? " [background]" : ""}`
 }
 
 export function formatSubagentRetry(attempt: number, message: string) {
