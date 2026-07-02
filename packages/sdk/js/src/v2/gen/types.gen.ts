@@ -942,6 +942,9 @@ export type GlobalEvent = {
           messageID: string
           text: string
           description?: string
+          metadata?: {
+            [key: string]: unknown
+          }
         }
       }
     | {
@@ -3618,6 +3621,9 @@ export type SyncEventSessionNextSynthetic = {
       messageID: string
       text: string
       description?: string
+      metadata?: {
+        [key: string]: unknown
+      }
     }
   }
 }
@@ -4091,7 +4097,12 @@ export type LocationInfo = {
   }
 }
 
+export type ProviderSettings = {
+  [key: string]: unknown
+}
+
 export type ProviderRequest = {
+  settings: ProviderSettings
   headers: {
     [key: string]: string
   }
@@ -4583,6 +4594,9 @@ export type SessionNextSynthetic = {
     messageID: string
     text: string
     description?: string
+    metadata?: {
+      [key: string]: unknown
+    }
   }
 }
 
@@ -5120,6 +5134,7 @@ export type ModelV2Info = {
   api: ModelApi
   capabilities: ModelCapabilities
   request: {
+    settings: ProviderSettings
     headers: {
       [key: string]: string
     }
@@ -5130,6 +5145,7 @@ export type ModelV2Info = {
   }
   variants: Array<{
     id: string
+    settings: ProviderSettings
     headers: {
       [key: string]: string
     }
@@ -6806,6 +6822,9 @@ export type EventSessionNextSynthetic = {
     messageID: string
     text: string
     description?: string
+    metadata?: {
+      [key: string]: unknown
+    }
   }
 }
 
@@ -12283,6 +12302,47 @@ export type V2SessionSkillResponses = {
 }
 
 export type V2SessionSkillResponse = V2SessionSkillResponses[keyof V2SessionSkillResponses]
+
+export type V2SessionSyntheticData = {
+  body: {
+    text: string
+    description?: string
+    metadata?: {
+      [key: string]: unknown
+    }
+  }
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/synthetic"
+}
+
+export type V2SessionSyntheticErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+}
+
+export type V2SessionSyntheticError = V2SessionSyntheticErrors[keyof V2SessionSyntheticErrors]
+
+export type V2SessionSyntheticResponses = {
+  /**
+   * <No Content>
+   */
+  204: void
+}
+
+export type V2SessionSyntheticResponse = V2SessionSyntheticResponses[keyof V2SessionSyntheticResponses]
 
 export type V2SessionCompactData = {
   body?: never
