@@ -10,13 +10,33 @@ import path from "path"
 import { createClient } from "@hey-api/openapi-ts"
 
 const opencode = path.resolve(dir, "../../opencode")
+const client = path.resolve(dir, "../../client")
 
 await $`bun dev generate > ${dir}/openapi.json`.cwd(opencode)
+await $`bun -e ${`
+  import { OpenApi } from "effect/unstable/httpapi"
+  import { ClientApi } from "@opencode-ai/protocol/client"
 
-const document = (await Bun.file("./openapi.json").json()) as {
+  const output = process.argv.at(-1)
+  if (!output) throw new Error("Missing OpenAPI output path")
+  await Bun.write(output, JSON.stringify(OpenApi.fromApi(ClientApi)))
+`} ${path.join(dir, "openapi-v2.json")}`.cwd(client)
+
+type OpenApiDocument = {
   components?: { schemas?: Record<string, unknown> }
+  paths?: Record<string, unknown>
   [key: string]: unknown
 }
+
+const document = (await Bun.file("./openapi.json").json()) as OpenApiDocument
+const v2Document = (await Bun.file("./openapi-v2.json").json()) as OpenApiDocument
+renameCollidingComponents(document, v2Document)
+document.paths = { ...document.paths, ...v2Document.paths }
+document.components = {
+  ...document.components,
+  schemas: { ...document.components?.schemas, ...v2Document.components?.schemas },
+}
+inlineTypedAllOfConstraints(document)
 const schemas = document.components?.schemas
 if (schemas) {
   const reachable = new Set<string>()
@@ -75,24 +95,24 @@ const generatedTypes = await Bun.file("./src/v2/gen/types.gen.ts").text()
 if (/export type SessionNext\w+1 =/.test(generatedTypes)) {
   throw new Error("Session history generated duplicate Session event variants")
 }
-const historyTypesPatched = generatedTypes.replace(
-  /(export type V2SessionHistoryData = \{[\s\S]*?query\?: \{\s*limit\?: )string([;,]\s*after\?: )string/,
-  "$1number$2number",
+const logTypesPatched = generatedTypes.replace(
+  /(export type V2SessionLogData = \{[\s\S]*?query\?: \{\s*after\?: )string/,
+  "$1number",
 )
-if (historyTypesPatched === generatedTypes) {
-  throw new Error("Session history numeric query patch did not apply")
+if (logTypesPatched === generatedTypes) {
+  throw new Error("Session log numeric query patch did not apply")
 }
-await Bun.write("./src/v2/gen/types.gen.ts", historyTypesPatched)
+await Bun.write("./src/v2/gen/types.gen.ts", logTypesPatched)
 
 const generatedSdk = await Bun.file("./src/v2/gen/sdk.gen.ts").text()
-const historySdkPatched = generatedSdk.replace(
-  /(Get session history[\s\S]*?parameters: \{\s*sessionID: string[;,]\s*limit\?: )string([;,]\s*after\?: )string/,
-  "$1number$2number",
+const logSdkPatched = generatedSdk.replace(
+  /(Read the session log[\s\S]*?parameters: \{[\s\S]*?after\?: )string(\s*\|\s*null)?/,
+  "$1number$2",
 )
-if (historySdkPatched === generatedSdk) {
-  throw new Error("Session history numeric SDK patch did not apply")
+if (logSdkPatched === generatedSdk) {
+  throw new Error("Session log numeric SDK patch did not apply")
 }
-await Bun.write("./src/v2/gen/sdk.gen.ts", historySdkPatched)
+await Bun.write("./src/v2/gen/sdk.gen.ts", logSdkPatched)
 
 // Patch a @hey-api/openapi-ts codegen bug: SseFn incorrectly passes the
 // endpoint's TError into the second generic of ServerSentEventsResult, which
@@ -116,4 +136,65 @@ await $`bun prettier --write src/gen`
 await $`bun prettier --write src/v2`
 await $`rm -rf dist`
 await $`bun tsc`
-await $`rm openapi.json`
+await $`rm openapi.json openapi-v2.json`
+
+function renameCollidingComponents(target: OpenApiDocument, source: OpenApiDocument) {
+  const targetSchemas = target.components?.schemas
+  const sourceSchemas = source.components?.schemas
+  if (!targetSchemas || !sourceSchemas) return
+
+  const renames = new Map<string, string>()
+  for (const name of Object.keys(sourceSchemas)) {
+    if (!Object.hasOwn(targetSchemas, name)) continue
+    let renamed = `${name}V2`
+    let index = 2
+    while (Object.hasOwn(targetSchemas, renamed) || Object.hasOwn(sourceSchemas, renamed)) {
+      renamed = `${name}V2${index}`
+      index++
+    }
+    renames.set(name, renamed)
+  }
+  if (renames.size === 0) return
+
+  source.components = {
+    ...source.components,
+    schemas: Object.fromEntries(
+      Object.entries(sourceSchemas).map(([name, schema]) => [renames.get(name) ?? name, rewriteRefs(schema, renames)]),
+    ),
+  }
+  source.paths = rewriteRefs(source.paths, renames) as Record<string, unknown> | undefined
+}
+
+function rewriteRefs(value: unknown, renames: Map<string, string>): unknown {
+  if (Array.isArray(value)) return value.map((item) => rewriteRefs(item, renames))
+  if (typeof value !== "object" || value === null) return value
+
+  return Object.fromEntries(
+    Object.entries(value).map(([key, child]) => {
+      if (key !== "$ref" || typeof child !== "string") return [key, rewriteRefs(child, renames)]
+      const prefix = "#/components/schemas/"
+      if (!child.startsWith(prefix)) return [key, child]
+      return [key, `${prefix}${renames.get(child.slice(prefix.length)) ?? child.slice(prefix.length)}`]
+    }),
+  )
+}
+
+function inlineTypedAllOfConstraints(value: unknown): void {
+  if (Array.isArray(value)) {
+    value.forEach(inlineTypedAllOfConstraints)
+    return
+  }
+  if (typeof value !== "object" || value === null) return
+
+  const schema = value as { allOf?: unknown; type?: unknown; [key: string]: unknown }
+  if (typeof schema.type === "string" && Array.isArray(schema.allOf) && schema.allOf.every(isConstraintSchema)) {
+    for (const item of schema.allOf) Object.assign(schema, item)
+    delete schema.allOf
+  }
+  Object.values(schema).forEach(inlineTypedAllOfConstraints)
+}
+
+function isConstraintSchema(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false
+  return !Object.keys(value).some((key) => key === "$ref" || key === "type" || key === "allOf" || key === "anyOf" || key === "oneOf")
+}

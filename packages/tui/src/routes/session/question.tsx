@@ -3,28 +3,31 @@ import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-j
 import { useRenderer } from "@opentui/solid"
 import type { TextareaRenderable } from "@opentui/core"
 import { selectedForeground, tint, useTheme } from "../../context/theme"
-import type { QuestionV2Answer, QuestionV2Request } from "@opencode-ai/sdk/v2"
 import { useSDK } from "../../context/sdk"
 import { SplitBorder } from "../../ui/border"
 import { useTuiConfig } from "../../config"
 import { useBindings, useOpencodeModeStack } from "../../keymap"
+import { questionAnswer, type QuestionAnswer, type QuestionForm } from "../../util/question-form"
+import { errorMessage } from "../../util/error"
 
 const QUESTION_MODE = "question"
 
-export function QuestionPrompt(props: { request: QuestionV2Request; directory?: string }) {
+export function QuestionPrompt(props: { request: QuestionForm; directory?: string }) {
   const sdk = useSDK()
   const { theme } = useTheme()
   const renderer = useRenderer()
   const tuiConfig = useTuiConfig()
   const modeStack = useOpencodeModeStack()
 
-  const questions = createMemo(() => props.request.questions)
-  const single = createMemo(() => questions().length === 1 && questions()[0]?.multiple !== true)
+  const questions = createMemo(() => props.request.fields)
+  const single = createMemo(() => questions().length === 1 && questions()[0]?.type !== "multiselect")
   const tabs = createMemo(() => (single() ? 1 : questions().length + 1)) // questions + confirm tab (no confirm for single select)
   const [tabHover, setTabHover] = createSignal<number | "confirm" | null>(null)
+  const [settling, setSettling] = createSignal<"reply" | "cancel">()
+  const [settleError, setSettleError] = createSignal<string>()
   const [store, setStore] = createStore({
     tab: 0,
-    answers: [] as QuestionV2Answer[],
+    answers: [] as QuestionAnswer[],
     custom: [] as string[],
     selected: 0,
     editing: false,
@@ -38,7 +41,7 @@ export function QuestionPrompt(props: { request: QuestionV2Request; directory?: 
   const custom = createMemo(() => question()?.custom !== false)
   const other = createMemo(() => custom() && store.selected === options().length)
   const input = createMemo(() => store.custom[store.tab] ?? "")
-  const multi = createMemo(() => question()?.multiple === true)
+  const multi = createMemo(() => question()?.type === "multiselect")
   const customPicked = createMemo(() => {
     const value = input()
     if (!value) return false
@@ -47,18 +50,35 @@ export function QuestionPrompt(props: { request: QuestionV2Request; directory?: 
 
   function submit() {
     const answers = questions().map((_, i) => store.answers[i] ?? [])
-    void sdk.api.question.reply({
-      sessionID: props.request.sessionID,
-      requestID: props.request.id,
-      answers,
-    })
+    settle("reply", () =>
+      sdk.api.form.reply({
+        sessionID: props.request.sessionID,
+        formID: props.request.id,
+        answer: questionAnswer(questions(), answers),
+      }),
+    )
   }
 
   function reject() {
-    void sdk.api.question.reject({
-      sessionID: props.request.sessionID,
-      requestID: props.request.id,
-    })
+    settle("cancel", () =>
+      sdk.api.form.cancel({
+        sessionID: props.request.sessionID,
+        formID: props.request.id,
+      }),
+    )
+  }
+
+  function settle(kind: "reply" | "cancel", run: () => Promise<unknown>) {
+    if (settling()) return
+    setSettling(kind)
+    setSettleError(undefined)
+    void run()
+      .catch((error) => {
+        setSettleError(errorMessage(error))
+      })
+      .finally(() => {
+        setSettling(undefined)
+      })
   }
 
   function pick(answer: string, custom: boolean = false) {
@@ -71,11 +91,13 @@ export function QuestionPrompt(props: { request: QuestionV2Request; directory?: 
       setStore("custom", inputs)
     }
     if (single()) {
-      void sdk.api.question.reply({
-        sessionID: props.request.sessionID,
-        requestID: props.request.id,
-        answers: [[answer]],
-      })
+      settle("reply", () =>
+        sdk.api.form.reply({
+          sessionID: props.request.sessionID,
+          formID: props.request.id,
+          answer: questionAnswer(questions(), [[answer]]),
+        }),
+      )
       return
     }
     setStore("tab", store.tab + 1)
@@ -328,7 +350,7 @@ export function QuestionPrompt(props: { request: QuestionV2Request; directory?: 
                             : theme.textMuted
                       }
                     >
-                      {q.header}
+                      {q.description ?? q.title}
                     </text>
                   </box>
                 )
@@ -356,7 +378,7 @@ export function QuestionPrompt(props: { request: QuestionV2Request; directory?: 
           <box paddingLeft={1} gap={1}>
             <box>
               <text fg={theme.text}>
-                {question()?.question}
+                {question()?.title}
                 {multi() ? " (select all that apply)" : ""}
               </text>
             </box>
@@ -466,7 +488,7 @@ export function QuestionPrompt(props: { request: QuestionV2Request; directory?: 
               return (
                 <box paddingLeft={1}>
                   <text>
-                    <span style={{ fg: theme.textMuted }}>{q.header}:</span>{" "}
+                    <span style={{ fg: theme.textMuted }}>{q.description ?? q.title}:</span>{" "}
                     <span style={{ fg: answered() ? theme.text : theme.error }}>
                       {answered() ? value() : "(not answered)"}
                     </span>
@@ -507,6 +529,12 @@ export function QuestionPrompt(props: { request: QuestionV2Request; directory?: 
           <text fg={theme.text}>
             esc <span style={{ fg: theme.textMuted }}>dismiss</span>
           </text>
+          <Show when={settling()}>
+            <text fg={theme.textMuted}>{settling() === "cancel" ? "Dismissing..." : "Submitting..."}</text>
+          </Show>
+          <Show when={settleError()}>
+            <text fg={theme.error}>{settleError()}</text>
+          </Show>
         </box>
       </box>
     </box>

@@ -6,6 +6,7 @@ import { ProviderHandler } from "./handlers/provider"
 import { SessionHandler } from "./handlers/session"
 import { PermissionHandler } from "./handlers/permission"
 import { FileSystemHandler } from "./handlers/fs"
+import { FormHandler } from "./handlers/form"
 import { CommandHandler } from "./handlers/command"
 import { SkillHandler } from "./handlers/skill"
 import { EventHandler } from "./handlers/event"
@@ -14,7 +15,6 @@ import { PluginHandler } from "./handlers/plugin"
 import { HealthHandler } from "./handlers/health"
 import { PtyHandler } from "./handlers/pty"
 import { ShellHandler } from "./handlers/shell"
-import { QuestionHandler } from "./handlers/question"
 import { ReferenceHandler } from "./handlers/reference"
 import { LocationHandler } from "./handlers/location"
 import { IntegrationHandler } from "./handlers/integration"
@@ -37,6 +37,7 @@ export const handlers = Layer.mergeAll(
   McpHandler,
   CredentialHandler,
   ProjectHandler,
+  FormHandler,
   PermissionHandler,
   FileSystemHandler,
   CommandHandler,
@@ -44,7 +45,6 @@ export const handlers = Layer.mergeAll(
   EventHandler,
   PtyHandler,
   ShellHandler,
-  QuestionHandler,
   ReferenceHandler,
   ProjectCopyHandler,
 )

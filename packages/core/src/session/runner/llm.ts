@@ -14,7 +14,9 @@ import { Config } from "../../config"
 import { Database } from "../../database/database"
 import { EventV2 } from "../../event"
 import { Location } from "../../location"
-import { QuestionV2 } from "../../question"
+import { ModelV2 } from "../../model"
+import { ProviderV2 } from "../../provider"
+import { QuestionTool } from "../../tool/question"
 import { SystemContext } from "../../system-context/index"
 import { SystemContextBuiltIns } from "../../system-context/builtins"
 import { InstructionContext } from "../../instruction-context"
@@ -153,7 +155,7 @@ const layer = Layer.effect(
 
     // Match V1: dismissing a question halts the loop instead of becoming model-facing tool output.
     const isQuestionRejected = (cause: Cause.Cause<unknown>) =>
-      cause.reasons.some((reason) => Cause.isDieReason(reason) && reason.defect instanceof QuestionV2.RejectedError)
+      cause.reasons.some((reason) => Cause.isDieReason(reason) && reason.defect instanceof QuestionTool.RejectedError)
 
     type TurnTransition =
       // Automatic compaction completed; rebuild the request from compacted history.

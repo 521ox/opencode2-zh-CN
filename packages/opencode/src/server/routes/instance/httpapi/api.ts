@@ -25,9 +25,6 @@ import { SessionApi } from "./groups/session"
 import { SyncApi } from "./groups/sync"
 import { TuiApi } from "./groups/tui"
 import { WorkspaceApi } from "./groups/workspace"
-import { makeApi } from "@opencode-ai/protocol/api"
-import { LocationMiddleware } from "@opencode-ai/server/location"
-import { SessionLocationMiddleware } from "@opencode-ai/server/middleware/session-location"
 import { GlobalApi } from "./groups/global"
 import { Authorization } from "./middleware/authorization"
 import { SchemaErrorMiddleware } from "./middleware/schema-error"
@@ -44,12 +41,6 @@ const EventSchema = Schema.Union([
     .toArray(),
   InstanceDisposed,
 ]).annotate({ identifier: "Event" })
-
-export const ServerApi = makeApi({
-  definitions: EventManifest.Latest.values().toArray(),
-  locationMiddleware: LocationMiddleware,
-  sessionLocationMiddleware: SessionLocationMiddleware,
-})
 
 export const RootHttpApi = HttpApi.make("opencode-root")
   .addHttpApi(ControlApi)
@@ -80,7 +71,6 @@ export const OpenCodeHttpApi = HttpApi.make("opencode")
   .addHttpApi(RootHttpApi)
   .addHttpApi(EventApi)
   .addHttpApi(InstanceHttpApi)
-  .addHttpApi(ServerApi)
   .addHttpApi(PtyConnectApi)
   .annotate(HttpApi.AdditionalSchemas, [
     EventSchema,

@@ -122,13 +122,31 @@ export class PermissionNotFoundError extends Schema.TaggedErrorClass<PermissionN
   { httpApiStatus: 404 },
 ) {}
 
-export class QuestionNotFoundError extends Schema.TaggedErrorClass<QuestionNotFoundError>()(
-  "QuestionNotFoundError",
+export class FormNotFoundError extends Schema.TaggedErrorClass<FormNotFoundError>()(
+  "FormNotFoundError",
   {
-    requestID: Schema.String,
+    id: Schema.String,
     message: Schema.String,
   },
   { httpApiStatus: 404 },
+) {}
+
+export class FormAlreadySettledError extends Schema.TaggedErrorClass<FormAlreadySettledError>()(
+  "FormAlreadySettledError",
+  {
+    id: Schema.String,
+    message: Schema.String,
+  },
+  { httpApiStatus: 409 },
+) {}
+
+export class FormInvalidAnswerError extends Schema.TaggedErrorClass<FormInvalidAnswerError>()(
+  "FormInvalidAnswerError",
+  {
+    id: Schema.String,
+    message: Schema.String,
+  },
+  { httpApiStatus: 400 },
 ) {}
 
 export class ForbiddenError extends Schema.TaggedErrorClass<ForbiddenError>()(

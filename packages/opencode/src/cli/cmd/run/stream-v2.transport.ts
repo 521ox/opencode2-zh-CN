@@ -3,7 +3,6 @@ import type {
   PermissionRequest,
   PermissionV2Request,
   QuestionRequest,
-  QuestionV2Request,
   SessionMessage,
   SessionMessageAssistant,
   SessionMessageAssistantTool,
@@ -130,15 +129,6 @@ function permission(request: PermissionV2Request): PermissionRequest {
     metadata: request.metadata ?? {},
     always: request.save ?? [],
     tool: request.source?.type === "tool" ? request.source : undefined,
-  }
-}
-
-function question(request: QuestionV2Request): QuestionRequest {
-  return {
-    id: request.id,
-    sessionID: request.sessionID,
-    questions: request.questions,
-    tool: request.tool,
   }
 }
 
@@ -369,13 +359,13 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
         { throwOnError: true },
       ),
       input.sdk.v2.session.permission.list({ sessionID: input.sessionID }, { throwOnError: true }),
-      input.sdk.v2.session.question.list({ sessionID: input.sessionID }, { throwOnError: true }),
+      input.sdk.question.list({ directory: input.directory }, { throwOnError: true }),
       input.sdk.v2.session.active({ throwOnError: true }),
     ])
     const projected = messages.data.data.toReversed()
     for (const message of projected) renderMessage(message, next.render, next.reuseVisibleWait)
     state.permissions = permissions.data.data.map(permission)
-    state.questions = questions.data.data.map(question)
+    state.questions = questions.data.filter((item) => item.sessionID === input.sessionID)
     syncBlockers()
     await subagents.hydrate({ messages: projected, active: active.data.data })
     const running = input.sessionID in active.data.data
@@ -544,12 +534,12 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
       syncBlockers()
       return
     }
-    if (event.type === "question.v2.asked") {
-      if (!state.questions.some((item) => item.id === event.data.id)) state.questions.push(question(event.data))
+    if (event.type === "question.asked") {
+      if (!state.questions.some((item) => item.id === event.data.id)) state.questions.push(event.data)
       syncBlockers()
       return
     }
-    if (event.type === "question.v2.replied" || event.type === "question.v2.rejected") {
+    if (event.type === "question.replied" || event.type === "question.rejected") {
       state.questions = state.questions.filter((item) => item.id !== event.data.requestID)
       syncBlockers()
       return
