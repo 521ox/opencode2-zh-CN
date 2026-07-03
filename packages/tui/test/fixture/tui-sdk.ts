@@ -1,4 +1,4 @@
-import { OpenCode } from "@opencode-ai/client"
+import { OpenCode } from "@opencode-ai/client/promise"
 import { createOpencodeClient } from "@opencode-ai/sdk/v2"
 import type { V2Event } from "@opencode-ai/sdk/v2"
 

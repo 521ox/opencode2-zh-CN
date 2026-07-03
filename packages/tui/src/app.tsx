@@ -77,7 +77,7 @@ import {
   useOpencodeKeymap,
 } from "./keymap"
 
-import type { OpenCodeClient } from "@opencode-ai/client"
+import type { OpenCodeClient } from "@opencode-ai/client/promise"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { DialogVariant } from "./component/dialog-variant"
 import { createTuiAttention } from "./attention"

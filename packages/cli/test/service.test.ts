@@ -5,13 +5,13 @@ import { Effect } from "effect"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { Service } from "../src/services/service"
+import { ServiceConfig } from "../src/services/service-config"
 
 test("local channel stores service config with the local service filename", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "opencode-service-"))
   try {
     await Effect.runPromise(
-      Service.set("hostname", "127.0.0.2").pipe(
+      ServiceConfig.set("hostname", "127.0.0.2").pipe(
         Effect.provide(Global.layerWith({ config: path.join(root, "config"), state: path.join(root, "state") })),
         Effect.provide(NodeFileSystem.layer),
       ),

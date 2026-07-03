@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { DateTime, Effect, Stream } from "effect"
 import { HttpClient, HttpClientResponse } from "effect/unstable/http"
-import { AbsolutePath, Agent, Event, Location, Model, OpenCode, Prompt, Session, SessionMessage } from "../src/effect"
+import { AbsolutePath, Agent, Event, Location, Model, OpenCode, Prompt, Session, SessionMessage } from "../src/effect/index"
 
 const synced = { type: "log.synced" as const, aggregateID: "ses_test", seq: Event.Seq.make(1) }
 
