@@ -1,7 +1,7 @@
 import { createServer } from "node:http"
 import type { IntegrationOAuthMethodRegistration } from "@opencode-ai/plugin/v2/effect/integration"
 import { define } from "@opencode-ai/plugin/v2/effect/plugin"
-import { Deferred, Effect, Semaphore, Stream } from "effect"
+import { Deferred, Effect, Option, Schema, Semaphore, Stream } from "effect"
 import type { Scope } from "effect"
 import { Credential } from "../../credential"
 import { EventV2 } from "../../event"
@@ -32,11 +32,16 @@ type TokenResponse = {
   expires_in?: number
 }
 
-type Claims = {
-  chatgpt_account_id?: string
-  organizations?: Array<{ id: string }>
-  "https://api.openai.com/auth"?: { chatgpt_account_id?: string }
-}
+const Claims = Schema.fromJsonString(
+  Schema.Struct({
+    chatgpt_account_id: Schema.optional(Schema.String),
+    organizations: Schema.optional(Schema.Array(Schema.Struct({ id: Schema.String }))),
+    "https://api.openai.com/auth": Schema.optional(
+      Schema.Struct({ chatgpt_account_id: Schema.optional(Schema.String) }),
+    ),
+  }),
+)
+const decodeClaims = Schema.decodeUnknownOption(Claims)
 
 const browser = {
   integrationID: Integration.ID.make("openai"),
@@ -315,14 +320,11 @@ function extractAccountID(tokens: TokenResponse) {
 function claim(token: string) {
   const part = token.split(".")[1]
   if (!part) return
-  try {
-    const claims = JSON.parse(Buffer.from(part, "base64url").toString()) as Claims
-    return (
-      claims.chatgpt_account_id ??
-      claims["https://api.openai.com/auth"]?.chatgpt_account_id ??
-      claims.organizations?.[0]?.id
-    )
-  } catch {
-    return
-  }
+  const claims = Option.getOrUndefined(decodeClaims(Buffer.from(part, "base64url").toString()))
+  if (!claims) return
+  return (
+    claims.chatgpt_account_id ??
+    claims["https://api.openai.com/auth"]?.chatgpt_account_id ??
+    claims.organizations?.[0]?.id
+  )
 }

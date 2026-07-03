@@ -202,7 +202,8 @@ const layer = Layer.effect(
       const copyDirectory = yield* canonical(input.directory)
       const stored = yield* directories.get({ projectID: input.projectID, directory: copyDirectory })
       if (!stored?.strategy) return yield* new InvalidDirectoryError({ directory: copyDirectory })
-      yield* (yield* getStrategy(StrategyID.make(stored.strategy))).remove({
+      const strategy = yield* getStrategy(StrategyID.make(stored.strategy))
+      yield* strategy.remove({
         directory: copyDirectory,
         force: input.force,
       })

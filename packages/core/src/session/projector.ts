@@ -438,7 +438,7 @@ function insertMessage(db: DatabaseService, event: SessionEvent.DurableEvent, me
 const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const events = yield* EventV2.Service
-    const { db } = yield* Database.Service
+    const db = (yield* Database.Service).db
     yield* events.project(SessionV1.Event.Created, (event) =>
       Effect.gen(function* () {
         const stored = yield* db
