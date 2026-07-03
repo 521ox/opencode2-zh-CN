@@ -47,6 +47,7 @@ Effect.logInfo("cli starting", {
   version: InstallationVersion,
   channel: InstallationChannel,
   local: InstallationLocal,
+  args: process.argv.slice(2),
 }).pipe(
   Effect.flatMap(() => Runtime.run(Commands, Handlers, { version: InstallationVersion })),
   Effect.annotateLogs({ role: "cli" }),
