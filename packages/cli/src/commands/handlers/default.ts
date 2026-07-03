@@ -19,7 +19,7 @@ export default Runtime.handler(Commands, (input) =>
       return yield* Effect.fail(new Error("--server and --standalone cannot be combined"))
     const transport = yield* Effect.gen(function* () {
       if (server !== undefined) {
-        const password = Option.getOrUndefined(yield* Env.password)
+        const password = yield* Env.password
         const explicit = {
           url: server,
           headers: password

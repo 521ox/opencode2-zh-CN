@@ -4,15 +4,12 @@ import { Config } from "effect"
 // these instead of touching process.env so the full surface stays visible,
 // typed, and redacted where secret.
 
-// Client-side password for an explicit --server target. The legacy name is
-// still honored; it also remains the variable a standalone child inherits.
+// The opencode server password: sent by clients connecting to an explicit
+// --server, and adopted by a manually run or standalone server. The legacy
+// name is still honored.
 export const password = Config.redacted("OPENCODE_PASSWORD").pipe(
   Config.orElse(() => Config.redacted("OPENCODE_SERVER_PASSWORD")),
-  Config.option,
+  Config.withDefault(undefined),
 )
-
-// Server-side lease password: set by the standalone spawner for its child,
-// or preset for a manually managed `opencode serve`.
-export const serverPassword = Config.redacted("OPENCODE_SERVER_PASSWORD").pipe(Config.option)
 
 export * as Env from "./env"

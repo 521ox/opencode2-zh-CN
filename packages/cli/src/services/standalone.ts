@@ -15,7 +15,9 @@ function command(password: string) {
   if (!compiled && entrypoint.length === 0) throw new Error("Failed to resolve CLI entrypoint")
   return ChildProcess.make(process.execPath, [...entrypoint, "serve", "--stdio", "--port", "0"], {
     cwd: process.cwd(),
-    env: { OPENCODE_SERVER_PASSWORD: password },
+    // Explicit entry wins over anything inherited, so a user-exported
+    // OPENCODE_PASSWORD cannot shadow the child's lease credential.
+    env: { OPENCODE_PASSWORD: password },
     extendEnv: true,
     // The server treats EOF on this pipe as the end of its ownership lease.
     // The OS closes it even when the TUI is killed before Effect finalizers run.
