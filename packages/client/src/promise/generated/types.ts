@@ -2427,7 +2427,7 @@ export type ServerMcpListOutput = {
     readonly name: string
     readonly status:
       | { readonly status: "connected" }
-      | { readonly status: "disconnected" }
+      | { readonly status: "pending" }
       | { readonly status: "disabled" }
       | { readonly status: "failed"; readonly error: string }
       | { readonly status: "needs_auth" }

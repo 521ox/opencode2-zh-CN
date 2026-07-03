@@ -7,8 +7,8 @@ import { IntegrationID } from "./integration-id.js"
 const Connected = Schema.Struct({ status: Schema.Literal("connected") }).annotate({
   identifier: "Mcp.Status.Connected",
 })
-const Disconnected = Schema.Struct({ status: Schema.Literal("disconnected") }).annotate({
-  identifier: "Mcp.Status.Disconnected",
+const Pending = Schema.Struct({ status: Schema.Literal("pending") }).annotate({
+  identifier: "Mcp.Status.Pending",
 })
 const Disabled = Schema.Struct({ status: Schema.Literal("disabled") }).annotate({
   identifier: "Mcp.Status.Disabled",
@@ -27,7 +27,7 @@ const NeedsClientRegistration = Schema.Struct({
 export type Status = typeof Status.Type
 export const Status = Schema.Union([
   Connected,
-  Disconnected,
+  Pending,
   Disabled,
   Failed,
   NeedsAuth,

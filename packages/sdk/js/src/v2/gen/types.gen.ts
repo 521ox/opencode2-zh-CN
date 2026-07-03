@@ -5418,8 +5418,8 @@ export type McpStatusConnected2 = {
   status: "connected"
 }
 
-export type McpStatusDisconnected = {
-  status: "disconnected"
+export type McpStatusPending = {
+  status: "pending"
 }
 
 export type McpStatusDisabled2 = {
@@ -5444,7 +5444,7 @@ export type McpServer = {
   name: string
   status:
     | McpStatusConnected2
-    | McpStatusDisconnected
+    | McpStatusPending
     | McpStatusDisabled2
     | McpStatusFailed2
     | McpStatusNeedsAuth2
@@ -9242,8 +9242,8 @@ export type McpStatusConnected3 = {
   status: "connected"
 }
 
-export type McpStatusDisconnected2 = {
-  status: "disconnected"
+export type McpStatusPending2 = {
+  status: "pending"
 }
 
 export type McpStatusDisabled3 = {
@@ -9268,7 +9268,7 @@ export type McpServer2 = {
   name: string
   status:
     | McpStatusConnected3
-    | McpStatusDisconnected2
+    | McpStatusPending2
     | McpStatusDisabled3
     | McpStatusFailed3
     | McpStatusNeedsAuth3
