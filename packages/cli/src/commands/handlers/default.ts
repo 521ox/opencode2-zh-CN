@@ -19,10 +19,26 @@ export default Runtime.handler(Commands, (input) =>
     const transport = yield* Effect.gen(function* () {
       if (server !== undefined) {
         const password = process.env["OPENCODE_PASSWORD"]
-        return {
+        const explicit = {
           url: server,
           headers: password ? { authorization: "Basic " + btoa("opencode:" + password) } : undefined,
         } satisfies Service.Transport
+        // Fail loudly before entering the TUI: an explicit server that is
+        // unreachable or rejects auth should not present as reconnect churn.
+        const response = yield* Effect.tryPromise(() =>
+          fetch(new URL("/api/health", server), { headers: explicit.headers, signal: AbortSignal.timeout(5_000) }),
+        ).pipe(Effect.mapError((cause) => new Error(`Could not reach server at ${server}`, { cause })))
+        if (response.status === 401)
+          return yield* Effect.fail(
+            new Error(
+              password
+                ? `Server at ${server} rejected the password`
+                : `Server at ${server} requires a password; set OPENCODE_PASSWORD`,
+            ),
+          )
+        if (!response.ok)
+          return yield* Effect.fail(new Error(`Server at ${server} responded with status ${response.status}`))
+        return explicit
       }
       if (input.standalone) return yield* Standalone.transport()
       const options = yield* ServiceConfig.options()
