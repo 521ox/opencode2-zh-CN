@@ -66,6 +66,18 @@ export const ServerDefinitions = Event.inventory(
   ...foundationDefinitions,
   ...featureDefinitions,
   ...SessionTodo.Event.Definitions,
+  // Current events the TUI consumes from the public stream.
+  ...SessionStatusEvent.Definitions,
+  ...TuiEvent.Definitions,
+  ...InstallationEvent.Definitions,
+  ...VcsEvent.Definitions,
+  McpEvent.StatusChanged,
+  // Shared transitional: V1 contracts the current TUI still consumes during
+  // the migration (permission.asked/replied, question.asked, session.error).
+  // Remove when the TUI moves to the current permission/question surfaces.
+  ...PermissionV1.Event.Definitions,
+  ...QuestionV1.Event.Definitions,
+  SessionV1.Error,
 )
 
 export const Definitions = Event.inventory(
