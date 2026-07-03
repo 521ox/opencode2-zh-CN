@@ -1,8 +1,9 @@
 import { NodeFileSystem } from "@effect/platform-node"
 import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
-import { Effect, Option } from "effect"
+import { Effect, Option, Redacted } from "effect"
 import { Service } from "@opencode-ai/client/effect"
+import { Env } from "../../env"
 import { ServiceConfig } from "../../services/service-config"
 import { Standalone } from "../../services/standalone"
 import { Updater } from "../../services/updater"
@@ -18,10 +19,12 @@ export default Runtime.handler(Commands, (input) =>
       return yield* Effect.fail(new Error("--server and --standalone cannot be combined"))
     const transport = yield* Effect.gen(function* () {
       if (server !== undefined) {
-        const password = process.env["OPENCODE_PASSWORD"]
+        const password = Option.getOrUndefined(yield* Env.password)
         const explicit = {
           url: server,
-          headers: password ? { authorization: "Basic " + btoa("opencode:" + password) } : undefined,
+          headers: password
+            ? { authorization: "Basic " + btoa("opencode:" + Redacted.value(password)) }
+            : undefined,
         } satisfies Service.Transport
         // Fail loudly before entering the TUI: an explicit server that is
         // unreachable or rejects auth should not present as reconnect churn.
