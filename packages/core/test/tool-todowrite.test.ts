@@ -15,7 +15,14 @@ import { TodoWriteTool } from "@opencode-ai/core/tool/todowrite"
 import { ToolRegistry } from "@opencode-ai/core/tool/registry"
 import { ToolOutputStore } from "@opencode-ai/core/tool-output-store"
 import { testEffect } from "./lib/effect"
-import { toolIdentity, executeTool, settleTool, toolDefinitions } from "./lib/tool"
+import { makeLocationNode } from "@opencode-ai/core/effect/app-node"
+import { toolIdentity, executeTool, registerToolPlugin, settleTool, toolDefinitions } from "./lib/tool"
+
+const todoWriteToolNode = makeLocationNode({
+  name: "test/todowrite-tool-plugin",
+  layer: Layer.effectDiscard(registerToolPlugin(TodoWriteTool.Plugin)),
+  deps: [ToolRegistry.toolsNode, PermissionV2.node, SessionTodo.node],
+})
 
 const sessionID = SessionV2.ID.make("ses_todowrite_tool_test")
 const assertions: PermissionV2.AssertInput[] = []
@@ -43,7 +50,7 @@ const it = testEffect(
       SessionTodo.node,
       ToolRegistry.node,
       ToolRegistry.toolsNode,
-      TodoWriteTool.node,
+      todoWriteToolNode,
     ]),
     [
       [PermissionV2.node, permission],

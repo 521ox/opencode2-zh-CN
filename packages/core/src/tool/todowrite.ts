@@ -1,13 +1,11 @@
 export * as TodoWriteTool from "./todowrite"
 
+import type { PluginContext } from "@opencode-ai/plugin/v2/effect"
 import { ToolFailure } from "@opencode-ai/llm"
-import { Effect, Layer, Schema } from "effect"
-import { makeLocationNode } from "../effect/app-node"
+import { Effect, Schema } from "effect"
 import { PermissionV2 } from "../permission"
 import { SessionTodo } from "../session/todo"
-import { ToolRegistry } from "./registry"
 import { Tool } from "./tool"
-import { Tools } from "./tools"
 
 export const name = "todowrite"
 
@@ -22,13 +20,13 @@ export type Output = typeof Output.Type
 
 export const toModelOutput = (output: Output) => JSON.stringify(output.todos, null, 2)
 
-const layer = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const tools = yield* Tools.Service
+export const Plugin = {
+  id: "core-todowrite-tool",
+  effect: Effect.fn("TodoWriteTool.Plugin")(function* (ctx: PluginContext) {
     const todos = yield* SessionTodo.Service
     const permission = yield* PermissionV2.Service
 
-    yield* tools
+    yield* ctx.tool
       .register({
         [name]: Tool.make({
           description:
@@ -53,10 +51,4 @@ const layer = Layer.effectDiscard(
       })
       .pipe(Effect.orDie)
   }),
-)
-
-export const node = makeLocationNode({
-  name: "tool/todowrite",
-  layer,
-  deps: [ToolRegistry.node, PermissionV2.node, SessionTodo.node],
-})
+}

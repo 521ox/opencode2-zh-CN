@@ -1,17 +1,14 @@
 export * as WebFetchTool from "./webfetch"
 
+import type { PluginContext } from "@opencode-ai/plugin/v2/effect"
 import { ToolFailure } from "@opencode-ai/llm"
-import { Duration, Effect, Layer, Schema } from "effect"
+import { Duration, Effect, Schema } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { Parser } from "htmlparser2"
 import TurndownService from "turndown"
-import { makeLocationNode } from "../effect/app-node"
-import { LayerNodePlatform } from "../effect/app-node-platform"
 import { PermissionV2 } from "../permission"
 import { collectBoundedResponseBody } from "./http-body"
-import { ToolRegistry } from "./registry"
 import { Tool } from "./tool"
-import { Tools } from "./tools"
 
 export const name = "webfetch"
 export const MAX_RESPONSE_BYTES = 5 * 1024 * 1024
@@ -115,13 +112,13 @@ const convert = (content: string, contentType: string, format: Format) => {
   return content
 }
 
-const layer = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const tools = yield* Tools.Service
+export const Plugin = {
+  id: "core-webfetch-tool",
+  effect: Effect.fn("WebFetchTool.Plugin")(function* (ctx: PluginContext) {
     const http = yield* HttpClient.HttpClient
     const permission = yield* PermissionV2.Service
 
-    yield* tools
+    yield* ctx.tool
       .register({
         [name]: Tool.make({
           description,
@@ -178,13 +175,7 @@ const layer = Layer.effectDiscard(
       })
       .pipe(Effect.orDie)
   }),
-)
-
-export const node = makeLocationNode({
-  name: "tool/webfetch",
-  layer,
-  deps: [ToolRegistry.node, PermissionV2.node, LayerNodePlatform.httpClient],
-})
+}
 
 export function extractTextFromHTML(html: string) {
   let text = ""

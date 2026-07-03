@@ -1,15 +1,13 @@
 export * as SkillTool from "./skill"
 
+import type { PluginContext } from "@opencode-ai/plugin/v2/effect"
 import path from "path"
 import { ToolFailure } from "@opencode-ai/llm"
-import { Effect, Layer, Schema } from "effect"
-import { makeLocationNode } from "../effect/app-node"
+import { Effect, Schema } from "effect"
 import { FSUtil } from "../fs-util"
 import { SkillV2 } from "../skill"
 import { PermissionV2 } from "../permission"
-import { ToolRegistry } from "./registry"
 import { Tool } from "./tool"
-import { Tools } from "./tools"
 
 export const name = "skill"
 const FILE_LIMIT = 10
@@ -54,13 +52,13 @@ export const toModelOutput = (skill: SkillV2.Info, files: ReadonlyArray<string>)
 const unableToLoad = (name: string, error?: unknown) =>
   new ToolFailure({ message: `Unable to load skill ${name}`, error })
 
-const layer = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const tools = yield* Tools.Service
+export const Plugin = {
+  id: "core-skill-tool",
+  effect: Effect.fn("SkillTool.Plugin")(function* (ctx: PluginContext) {
     const fs = yield* FSUtil.Service
     const skills = yield* SkillV2.Service
     const permission = yield* PermissionV2.Service
-    yield* tools
+    yield* ctx.tool
       .register({
         [name]: Tool.make({
           description,
@@ -100,10 +98,4 @@ const layer = Layer.effectDiscard(
       })
       .pipe(Effect.orDie)
   }),
-)
-
-export const node = makeLocationNode({
-  name: "tool/skill",
-  layer,
-  deps: [ToolRegistry.node, FSUtil.node, SkillV2.node, PermissionV2.node],
-})
+}

@@ -1,9 +1,9 @@
 export * as ReadTool from "./read"
 
+import type { PluginContext } from "@opencode-ai/plugin/v2/effect"
 import { dirname } from "path"
 import { ToolFailure } from "@opencode-ai/llm"
-import { Effect, Layer, Schema } from "effect"
-import { makeLocationNode } from "../effect/app-node"
+import { Effect, Schema } from "effect"
 import { FileSystem } from "../filesystem"
 import { FSUtil } from "../fs-util"
 import { Image } from "../image"
@@ -13,9 +13,7 @@ import { PermissionV2 } from "../permission"
 import { SessionInstructions } from "../session/instructions"
 import { AbsolutePath } from "../schema"
 import { ReadToolFileSystem } from "./read-filesystem"
-import { ToolRegistry } from "./registry"
 import { Tool } from "./tool"
-import { Tools } from "./tools"
 
 export const name = "read"
 const FILENAME = "AGENTS.md"
@@ -32,9 +30,9 @@ const LocationInput = Schema.Struct({
 const Input = LocationInput
 const Output = Schema.Union([FileSystem.Content, ReadToolFileSystem.TextPage, ReadToolFileSystem.ListPage])
 
-const layer = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const tools = yield* Tools.Service
+export const Plugin = {
+  id: "core-read-tool",
+  effect: Effect.fn("ReadTool.Plugin")(function* (ctx: PluginContext) {
     const reader = yield* ReadToolFileSystem.Service
     const mutation = yield* LocationMutation.Service
     const image = yield* Image.Service
@@ -43,7 +41,7 @@ const layer = Layer.effectDiscard(
     const fs = yield* FSUtil.Service
     const location = yield* Location.Service
 
-    yield* tools
+    yield* ctx.tool
       .register({
         [name]: Tool.make({
           description:
@@ -111,7 +109,10 @@ const layer = Layer.effectDiscard(
                 const candidates = discovered.map(FSUtil.resolve).filter((file) => dirname(file) !== root)
                 if (candidates.length === 0) return
                 yield* sessionInstructions.load({ sessionID: context.sessionID, paths: candidates })
-              }).pipe(Effect.catch(() => Effect.void), Effect.catchDefect(() => Effect.void))
+              }).pipe(
+                Effect.catch(() => Effect.void),
+                Effect.catchDefect(() => Effect.void),
+              )
               if ("encoding" in content && content.encoding === "base64" && SUPPORTED_IMAGE_MIMES.has(content.mime)) {
                 return yield* image
                   .normalize(resource, { ...content, encoding: "base64" })
@@ -137,19 +138,4 @@ const layer = Layer.effectDiscard(
       })
       .pipe(Effect.orDie)
   }),
-)
-
-export const node = makeLocationNode({
-  name: "tool/read",
-  layer,
-  deps: [
-    ToolRegistry.node,
-    ReadToolFileSystem.node,
-    LocationMutation.node,
-    Image.node,
-    PermissionV2.node,
-    SessionInstructions.node,
-    FSUtil.node,
-    Location.node,
-  ],
-})
+}

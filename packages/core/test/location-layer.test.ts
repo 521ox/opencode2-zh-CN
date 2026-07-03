@@ -73,9 +73,25 @@ describe("LocationServiceMap", () => {
               const catalog = yield* Catalog.Service
               yield* catalog.transform((editor) => editor.provider.update(ProviderV2.ID.make("test"), () => {}))
               const registry = yield* ToolRegistry.Service
-              yield* waitForTool(registry, "glob")
-              yield* waitForTool(registry, "shell")
-              yield* waitForTool(registry, "subagent")
+              // Tool plugins register during the forked PluginInternal boot; wait for
+              // every expected tool rather than relying on batch ordering.
+              yield* Effect.forEach(
+                [
+                  "edit",
+                  "glob",
+                  "grep",
+                  "question",
+                  "read",
+                  "shell",
+                  "skill",
+                  "subagent",
+                  "todowrite",
+                  "webfetch",
+                  "websearch",
+                  "write",
+                ],
+                (name) => waitForTool(registry, name),
+              )
               return {
                 providers: yield* catalog.provider.all(),
                 tools: yield* toolDefinitions(registry),

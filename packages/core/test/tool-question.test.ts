@@ -9,7 +9,8 @@ import { ToolRegistry } from "@opencode-ai/core/tool/registry"
 import { QuestionTool } from "@opencode-ai/core/tool/question"
 import { ToolOutputStore } from "@opencode-ai/core/tool-output-store"
 import { testEffect } from "./lib/effect"
-import { toolIdentity, executeTool, settleTool, toolDefinitions } from "./lib/tool"
+import { makeLocationNode } from "@opencode-ai/core/effect/app-node"
+import { toolIdentity, executeTool, registerToolPlugin, settleTool, toolDefinitions } from "./lib/tool"
 
 const sessionID = SessionV2.ID.make("ses_question_tool_test")
 const assertions: PermissionV2.AssertInput[] = []
@@ -43,8 +44,14 @@ const question = Layer.succeed(
     list: () => Effect.die("unused"),
   }),
 )
+const questionToolNode = makeLocationNode({
+  name: "test/question-tool-plugin",
+  layer: Layer.effectDiscard(registerToolPlugin(QuestionTool.Plugin)),
+  deps: [ToolRegistry.toolsNode, PermissionV2.node, QuestionV2.node],
+})
+
 const it = testEffect(
-  AppNodeBuilder.build(LayerNode.group([ToolRegistry.node, ToolRegistry.toolsNode, QuestionTool.node]), [
+  AppNodeBuilder.build(LayerNode.group([ToolRegistry.node, ToolRegistry.toolsNode, questionToolNode]), [
     [PermissionV2.node, permission],
     [QuestionV2.node, question],
     [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],

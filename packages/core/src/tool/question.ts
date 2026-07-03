@@ -1,13 +1,11 @@
 export * as QuestionTool from "./question"
 
+import type { PluginContext } from "@opencode-ai/plugin/v2/effect"
 import { ToolFailure } from "@opencode-ai/llm"
-import { Effect, Layer, Schema } from "effect"
-import { makeLocationNode } from "../effect/app-node"
+import { Effect, Schema } from "effect"
 import { PermissionV2 } from "../permission"
 import { QuestionV2 } from "../question"
-import { ToolRegistry } from "./registry"
 import { Tool } from "./tool"
-import { Tools } from "./tools"
 
 export const name = "question"
 
@@ -44,13 +42,13 @@ export const toModelOutput = (
   return `User has answered your questions: ${formatted}. You can now continue with the user's answers in mind.`
 }
 
-const layer = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const tools = yield* Tools.Service
+export const Plugin = {
+  id: "core-question-tool",
+  effect: Effect.fn("QuestionTool.Plugin")(function* (ctx: PluginContext) {
     const question = yield* QuestionV2.Service
     const permission = yield* PermissionV2.Service
 
-    yield* tools
+    yield* ctx.tool
       .register({
         [name]: Tool.make({
           description,
@@ -85,10 +83,4 @@ const layer = Layer.effectDiscard(
       })
       .pipe(Effect.orDie)
   }),
-)
-
-export const node = makeLocationNode({
-  name: "tool/question",
-  layer,
-  deps: [ToolRegistry.node, PermissionV2.node, QuestionV2.node],
-})
+}

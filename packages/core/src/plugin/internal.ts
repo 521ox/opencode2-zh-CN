@@ -15,9 +15,11 @@ import { ConfigProviderPlugin } from "../config/plugin/provider"
 import { ConfigReferencePlugin } from "../config/plugin/reference"
 import { ConfigSkillPlugin } from "../config/plugin/skill"
 import { EventV2 } from "../event"
+import { FileMutation } from "../file-mutation"
 import { FileSystem } from "../filesystem"
 import { FSUtil } from "../fs-util"
 import { Global } from "../global"
+import { Image } from "../image"
 import { Integration } from "../integration"
 import { Location } from "../location"
 import { LocationMutation } from "../location-mutation"
@@ -26,8 +28,11 @@ import { Npm } from "../npm"
 import { PluginV2 } from "../plugin"
 import { PluginRuntime } from "../plugin/runtime"
 import { PermissionV2 } from "../permission"
+import { QuestionV2 } from "../question"
 import { Reference } from "../reference"
 import { Ripgrep } from "../ripgrep"
+import { SessionInstructions } from "../session/instructions"
+import { SessionTodo } from "../session/todo"
 import { Shell } from "../shell"
 import { SkillV2 } from "../skill"
 import { State } from "../state"
@@ -41,9 +46,20 @@ import { ProviderPlugins } from "./provider"
 import { SdkPlugins } from "./sdk"
 import { SkillPlugin } from "./skill"
 import { VariantPlugin } from "./variant"
+import { ApplyPatchTool } from "../tool/apply-patch"
+import { EditTool } from "../tool/edit"
 import { GlobTool } from "../tool/glob"
+import { GrepTool } from "../tool/grep"
+import { QuestionTool } from "../tool/question"
+import { ReadTool } from "../tool/read"
+import { ReadToolFileSystem } from "../tool/read-filesystem"
 import { ShellTool } from "../tool/shell"
+import { SkillTool } from "../tool/skill"
 import { SubagentTool } from "../tool/subagent"
+import { TodoWriteTool } from "../tool/todowrite"
+import { WebFetchTool } from "../tool/webfetch"
+import { WebSearchTool } from "../tool/websearch"
+import { WriteTool } from "../tool/write"
 
 export type Requirements =
   | AgentV2.Service
@@ -51,10 +67,12 @@ export type Requirements =
   | CommandV2.Service
   | Config.Service
   | EventV2.Service
+  | FileMutation.Service
   | FileSystem.Service
   | FSUtil.Service
   | Global.Service
   | HttpClient.HttpClient
+  | Image.Service
   | Integration.Service
   | Location.Service
   | LocationMutation.Service
@@ -62,11 +80,16 @@ export type Requirements =
   | Npm.Service
   | PermissionV2.Service
   | PluginRuntime.Service
+  | QuestionV2.Service
+  | ReadToolFileSystem.Service
   | Reference.Service
   | Ripgrep.Service
+  | SessionInstructions.Service
+  | SessionTodo.Service
   | Shell.Service
   | SkillV2.Service
   | Tools.Service
+  | WebSearchTool.ConfigService
 
 export interface Plugin<R = never> {
   readonly id: string
@@ -96,13 +119,20 @@ const layer = Layer.effectDiscard(
       Context.make(Global.Service, yield* Global.Service),
       Context.make(HttpClient.HttpClient, yield* HttpClient.HttpClient),
       Context.make(LocationMutation.Service, yield* LocationMutation.Service),
+      Context.make(FileMutation.Service, yield* FileMutation.Service),
+      Context.make(Image.Service, yield* Image.Service),
       Context.make(PermissionV2.Service, yield* PermissionV2.Service),
+      Context.make(QuestionV2.Service, yield* QuestionV2.Service),
+      Context.make(ReadToolFileSystem.Service, yield* ReadToolFileSystem.Service),
+      Context.make(SessionInstructions.Service, yield* SessionInstructions.Service),
+      Context.make(SessionTodo.Service, yield* SessionTodo.Service),
       Context.make(SkillV2.Service, yield* SkillV2.Service),
       Context.make(Reference.Service, yield* Reference.Service),
       Context.make(Ripgrep.Service, yield* Ripgrep.Service),
       Context.make(Shell.Service, yield* Shell.Service),
       Context.make(Tools.Service, yield* Tools.Service),
       Context.make(PluginRuntime.Service, yield* PluginRuntime.Service),
+      Context.make(WebSearchTool.ConfigService, yield* WebSearchTool.ConfigService),
     )
     const add = (input: Plugin<Requirements | Scope.Scope>) =>
       plugin.add(PluginV2.ID.make(input.id), (context: PluginContext) =>
@@ -117,9 +147,19 @@ const layer = Layer.effectDiscard(
         yield* add(SkillPlugin.Plugin)
         yield* add(ModelsDevPlugin)
         yield* add(ConfigExternalPlugin.Plugin)
+        yield* add(ApplyPatchTool.Plugin)
+        yield* add(EditTool.Plugin)
         yield* add(GlobTool.Plugin)
+        yield* add(GrepTool.Plugin)
+        yield* add(QuestionTool.Plugin)
+        yield* add(ReadTool.Plugin)
         yield* add(ShellTool.Plugin)
+        yield* add(SkillTool.Plugin)
         yield* add(SubagentTool.Plugin)
+        yield* add(TodoWriteTool.Plugin)
+        yield* add(WebFetchTool.Plugin)
+        yield* add(WebSearchTool.Plugin)
+        yield* add(WriteTool.Plugin)
         yield* add(ConfigAgentPlugin.Plugin)
         yield* add(ConfigCommandPlugin.Plugin)
         yield* add(ConfigSkillPlugin.Plugin)
@@ -145,6 +185,8 @@ export const node = makeLocationNode({
     Config.node,
     Location.node,
     LocationMutation.node,
+    FileMutation.node,
+    Image.node,
     ModelsDev.node,
     Npm.node,
     EventV2.node,
@@ -153,6 +195,10 @@ export const node = makeLocationNode({
     Global.node,
     httpClient,
     PermissionV2.node,
+    QuestionV2.node,
+    ReadToolFileSystem.node,
+    SessionInstructions.node,
+    SessionTodo.node,
     SkillV2.node,
     Reference.node,
     Ripgrep.node,
@@ -160,5 +206,6 @@ export const node = makeLocationNode({
     ToolRegistry.toolsNode,
     PluginRuntime.node,
     SdkPlugins.node,
+    WebSearchTool.configNode,
   ],
 })

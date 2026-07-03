@@ -13,7 +13,15 @@ import { ToolRegistry } from "@opencode-ai/core/tool/registry"
 import { ToolOutputStore } from "@opencode-ai/core/tool-output-store"
 import { tmpdir } from "./fixture/tmpdir"
 import { it } from "./lib/effect"
-import { toolIdentity, executeTool, settleTool, toolDefinitions } from "./lib/tool"
+import { makeLocationNode } from "@opencode-ai/core/effect/app-node"
+import { FSUtil } from "@opencode-ai/core/fs-util"
+import { toolIdentity, executeTool, registerToolPlugin, settleTool, toolDefinitions } from "./lib/tool"
+
+const skillToolNode = makeLocationNode({
+  name: "test/skill-tool-plugin",
+  layer: Layer.effectDiscard(registerToolPlugin(SkillTool.Plugin)),
+  deps: [ToolRegistry.toolsNode, FSUtil.node, SkillV2.node, PermissionV2.node],
+})
 
 const sessionID = SessionV2.ID.make("ses_skill_tool_test")
 
@@ -66,7 +74,7 @@ describe("SkillTool", () => {
             }),
           )
           const skillToolLayer = AppNodeBuilder.build(
-            LayerNode.group([ToolRegistry.node, ToolRegistry.toolsNode, SkillTool.node]),
+            LayerNode.group([ToolRegistry.node, ToolRegistry.toolsNode, skillToolNode]),
             [
               [PermissionV2.node, permission],
               [SkillV2.node, skills],

@@ -33,8 +33,24 @@ import { ToolHooks } from "@opencode-ai/core/tool/hooks"
 import { ToolOutputStore } from "@opencode-ai/core/tool-output-store"
 import { ToolRegistry } from "@opencode-ai/core/tool/registry"
 import { tempLocationLayer } from "./fixture/location"
+import { makeLocationNode } from "@opencode-ai/core/effect/app-node"
 import { testEffect } from "./lib/effect"
-import { settleTool, testModel } from "./lib/tool"
+import { registerToolPlugin, settleTool, testModel } from "./lib/tool"
+
+const readToolNode = makeLocationNode({
+  name: "test/read-tool-plugin",
+  layer: Layer.effectDiscard(registerToolPlugin(ReadTool.Plugin)),
+  deps: [
+    ToolRegistry.toolsNode,
+    ReadToolFileSystem.node,
+    LocationMutation.node,
+    Image.node,
+    PermissionV2.node,
+    SessionInstructions.node,
+    FSUtil.node,
+    Location.node,
+  ],
+})
 
 const projects = Layer.succeed(
   ProjectV2.Service,
@@ -69,7 +85,7 @@ const testLayer = AppNodeBuilder.build(
     FSUtil.node,
     LocationMutation.node,
     ReadToolFileSystem.node,
-    ReadTool.node,
+    readToolNode,
     ToolRegistry.node,
     ToolRegistry.toolsNode,
     ToolHooks.node,
@@ -156,7 +172,9 @@ describe("SessionInstructions", () => {
       expect(firstInjected[0]!.text).toBe(
         `Instructions from: ${deepPath}\ndeep-instructions\n\nInstructions from: ${subPath}\nsub-instructions`,
       )
-      expect(firstInjected[0]!.description).toBe(`Loaded ${path.relative(dir, deepPath)}, ${path.relative(dir, subPath)}`)
+      expect(firstInjected[0]!.description).toBe(
+        `Loaded ${path.relative(dir, deepPath)}, ${path.relative(dir, subPath)}`,
+      )
       // The synthetic's metadata carries the durable dedup ledger.
       expect(firstInjected[0]!.metadata).toEqual({ instruction: { paths: [deepPath, subPath] } })
       expect(firstInjected[0]!.text).not.toContain("root-instructions")
@@ -192,47 +210,49 @@ describe("SessionInstructions", () => {
       // Seed the durable history with a prior synthetic that already claims sub's AGENTS.md
       // via the instruction metadata ledger.
       yield* seedSynthetic(sessionID, [subPath])
-      expect((yield* synthetics(sessionID))).toHaveLength(1)
+      expect(yield* synthetics(sessionID)).toHaveLength(1)
 
       yield* settleTool(registry, readCall(sessionID, "call-sub", "sub/file.txt"))
 
       // The durable claim on the prior synthetic prevents re-injection; no new synthetic.
-      expect((yield* synthetics(sessionID))).toHaveLength(1)
+      expect(yield* synthetics(sessionID)).toHaveLength(1)
     }),
   )
 
-  it.effect("discovers AGENTS.md on a directory listing, including the listed directory's own, and dedups with a later file read", () =>
-    Effect.gen(function* () {
-      const location = yield* Location.Service
-      const dir = location.directory
-      const rootPath = path.resolve(dir, "AGENTS.md")
-      const pkgPath = path.resolve(dir, "packages", "foo", "AGENTS.md")
-      yield* mkdir(path.resolve(dir, "packages", "foo"))
-      yield* writeAgents(rootPath, "root-instructions")
-      yield* writeAgents(pkgPath, "pkg-instructions")
-      yield* Effect.promise(() => fs.writeFile(path.resolve(dir, "packages", "foo", "file.txt"), "content"))
+  it.effect(
+    "discovers AGENTS.md on a directory listing, including the listed directory's own, and dedups with a later file read",
+    () =>
+      Effect.gen(function* () {
+        const location = yield* Location.Service
+        const dir = location.directory
+        const rootPath = path.resolve(dir, "AGENTS.md")
+        const pkgPath = path.resolve(dir, "packages", "foo", "AGENTS.md")
+        yield* mkdir(path.resolve(dir, "packages", "foo"))
+        yield* writeAgents(rootPath, "root-instructions")
+        yield* writeAgents(pkgPath, "pkg-instructions")
+        yield* Effect.promise(() => fs.writeFile(path.resolve(dir, "packages", "foo", "file.txt"), "content"))
 
-      const session = yield* SessionV2.Service
-      const registry = yield* ToolRegistry.Service
-      const sessionID = (yield* session.create({ location: Location.Ref.make({ directory: dir }) })).id
+        const session = yield* SessionV2.Service
+        const registry = yield* ToolRegistry.Service
+        const sessionID = (yield* session.create({ location: Location.Ref.make({ directory: dir }) })).id
 
-      // Listing packages/foo/ discovers its own AGENTS.md, walking up to but excluding
-      // the Location root (already supplied by the core/instructions baseline).
-      yield* settleTool(registry, readCall(sessionID, "call-list", "packages/foo"))
+        // Listing packages/foo/ discovers its own AGENTS.md, walking up to but excluding
+        // the Location root (already supplied by the core/instructions baseline).
+        yield* settleTool(registry, readCall(sessionID, "call-list", "packages/foo"))
 
-      const firstInjected = yield* synthetics(sessionID)
-      expect(firstInjected).toHaveLength(1)
-      expect(firstInjected[0]!.text).toBe(`Instructions from: ${pkgPath}\npkg-instructions`)
-      expect(firstInjected[0]!.description).toBe(`Loaded ${path.relative(dir, pkgPath)}`)
-      expect(firstInjected[0]!.metadata).toEqual({ instruction: { paths: [pkgPath] } })
-      expect(firstInjected[0]!.text).not.toContain("root-instructions")
+        const firstInjected = yield* synthetics(sessionID)
+        expect(firstInjected).toHaveLength(1)
+        expect(firstInjected[0]!.text).toBe(`Instructions from: ${pkgPath}\npkg-instructions`)
+        expect(firstInjected[0]!.description).toBe(`Loaded ${path.relative(dir, pkgPath)}`)
+        expect(firstInjected[0]!.metadata).toEqual({ instruction: { paths: [pkgPath] } })
+        expect(firstInjected[0]!.text).not.toContain("root-instructions")
 
-      // A subsequent file read under the listed directory is a dedup: pkg's AGENTS.md is
-      // already injected for this session, so nothing new is emitted.
-      yield* settleTool(registry, readCall(sessionID, "call-file", "packages/foo/file.txt"))
+        // A subsequent file read under the listed directory is a dedup: pkg's AGENTS.md is
+        // already injected for this session, so nothing new is emitted.
+        yield* settleTool(registry, readCall(sessionID, "call-file", "packages/foo/file.txt"))
 
-      expect((yield* synthetics(sessionID))).toHaveLength(1)
-    }),
+        expect(yield* synthetics(sessionID)).toHaveLength(1)
+      }),
   )
 
   it.effect("listing the Location root directory injects no instructions", () =>
@@ -253,7 +273,7 @@ describe("SessionInstructions", () => {
       // dropped by the dirname filter, and up() only walks upward so nested dirs are unseen.
       yield* settleTool(registry, readCall(sessionID, "call-root-list", "."))
 
-      expect((yield* synthetics(sessionID))).toHaveLength(0)
+      expect(yield* synthetics(sessionID)).toHaveLength(0)
     }),
   )
 
