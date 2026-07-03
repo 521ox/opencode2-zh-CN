@@ -213,7 +213,7 @@ describe("SessionV2.create", () => {
       expect(forkContext.map((message) => message.id)).not.toEqual(parentContext.map((message) => message.id))
       expect(history).toHaveLength(1)
       expect(history[0]).toMatchObject({
-        type: "forked",
+        type: "session.forked",
         durable: { seq: 0 },
         data: { sessionID: forked.id, parentID: parent.id },
       })
@@ -378,8 +378,8 @@ describe("SessionV2.create", () => {
       expect(
         Array.from(yield* logEvents(session, created.id, true).pipe(Stream.take(2), Stream.runCollect)),
       ).toMatchObject([
-        { durable: { seq: 1 }, type: "prompt.admitted", data: { prompt: { text: "Hello" } } },
-        { durable: { seq: 2 }, type: "prompt.promoted" },
+        { durable: { seq: 1 }, type: "session.prompt.admitted", data: { prompt: { text: "Hello" } } },
+        { durable: { seq: 2 }, type: "session.prompt.promoted" },
       ])
     }),
   )
@@ -494,8 +494,9 @@ describe("SessionV2.create", () => {
 
         const messages = yield* session.messages({ sessionID: created.id, order: "asc" })
         const shell = messages.find((message): message is SessionMessage.Shell => message.type === "shell")
-        expect(shell).toMatchObject({ type: "shell", command: "echo hello" })
-        expect(shell?.output).toContain("hello")
+        expect(shell).toMatchObject({ type: "shell", shell: { command: "echo hello", status: "exited", exit: 0 } })
+        expect(shell?.output?.output).toContain("hello")
+        expect(shell?.output?.truncated).toBe(false)
         expect(shell?.time.completed).toBeDefined()
       }),
     ),
@@ -513,7 +514,8 @@ describe("SessionV2.create", () => {
 
         const messages = yield* session.messages({ sessionID: created.id, order: "asc" })
         const shell = messages.find((message): message is SessionMessage.Shell => message.type === "shell")
-        expect(shell).toMatchObject({ type: "shell", command: "false" })
+        expect(shell).toMatchObject({ type: "shell", shell: { command: "false", status: "exited" } })
+        expect(shell?.shell.exit).not.toBe(0)
         expect(shell?.time.completed).toBeDefined()
       }),
     ),
@@ -529,7 +531,7 @@ describe("SessionV2.create", () => {
       expect(yield* session.get(created.id)).toMatchObject({ agent: "plan" })
       expect(
         Array.from(yield* logEvents(session, created.id, true).pipe(Stream.take(1), Stream.runCollect)),
-      ).toMatchObject([{ type: "agent.selected", data: { agent: "plan" } }])
+      ).toMatchObject([{ type: "session.agent.selected", data: { agent: "plan" } }])
     }),
   )
 
@@ -562,7 +564,7 @@ describe("SessionV2.create", () => {
       expect(yield* session.get(created.id)).toMatchObject({ model })
       expect(
         Array.from(yield* logEvents(session, created.id, true).pipe(Stream.take(1), Stream.runCollect)),
-      ).toMatchObject([{ type: "model.selected", data: { model } }])
+      ).toMatchObject([{ type: "session.model.selected", data: { model } }])
     }),
   )
 

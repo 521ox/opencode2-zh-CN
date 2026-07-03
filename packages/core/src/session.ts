@@ -41,8 +41,8 @@ import type { EventLog } from "@opencode-ai/schema/event-log"
 import { SkillV2 } from "./skill"
 import { Job } from "./job"
 import { CommandV2 } from "./command"
-import { Identifier } from "./util/identifier"
 import { Shell } from "./shell"
+import { Shell as ShellSchema } from "@opencode-ai/schema/shell"
 import { KeyedMutex } from "./effect/keyed-mutex"
 
 export const RevertState = Revert.State
@@ -270,19 +270,6 @@ const layer = Layer.effect(
               messageID: SessionMessage.ID.make(row.id),
             }),
         ),
-      )
-
-    // Session shell is user-initiated and synchronous at the API boundary, while
-    // the Location shell service owns process lifecycle and file-backed output.
-    const runShellCommand = (command: string, cwd: string) =>
-      Effect.gen(function* () {
-        const shell = yield* Shell.Service
-        const info = yield* shell.create({ command, cwd })
-        yield* shell.wait(info.id)
-        const output = yield* shell.output(info.id, { limit: SHELL_MAX_CAPTURE_BYTES })
-        return output.output || "(no output)"
-      }).pipe(
-        Effect.catchTag("Shell.NotFoundError", () => Effect.succeed("Shell command output is no longer available.")),
       )
 
     const result = Service.of({
@@ -550,23 +537,38 @@ const layer = Layer.effect(
           Effect.gen(function* () {
             activeShells.add(input.sessionID)
             if ((yield* execution.active).has(input.sessionID)) yield* execution.awaitIdle(input.sessionID)
-            const callID = Identifier.ascending()
+            const started = yield* Effect.gen(function* () {
+              const shell = yield* Shell.Service
+              return yield* shell.create({ command: input.command, cwd: session.location.directory })
+            }).pipe(Effect.provide(locations.get(session.location)))
             yield* events.publish(
               SessionEvent.Shell.Started,
               {
                 sessionID: input.sessionID,
-                callID,
-                command: input.command,
+                shell: started,
               },
               { id: input.id },
             )
-            const output = yield* runShellCommand(input.command, session.location.directory).pipe(
-              Effect.provide(locations.get(session.location)),
-            )
+            const completed = yield* Effect.gen(function* () {
+              const shell = yield* Shell.Service
+              const terminal = yield* shell.wait(started.id).pipe(
+                Effect.map((info) => ({ info, retained: true as const })),
+                Effect.catchTag("Shell.NotFoundError", () =>
+                  Effect.succeed({ info: synthesizeTerminalShellInfo(started), retained: false as const }),
+                ),
+              )
+              const output = terminal.retained
+                ? yield* shell
+                    .output(started.id, { limit: SHELL_MAX_CAPTURE_BYTES })
+                    .pipe(Effect.catchTag("Shell.NotFoundError", () => Effect.succeed(missingShellOutput())))
+                : missingShellOutput()
+              return { shell: terminal.info, output }
+            })
+              .pipe(Effect.provide(locations.get(session.location)))
             yield* events.publish(SessionEvent.Shell.Ended, {
               sessionID: input.sessionID,
-              callID,
-              output,
+              shell: completed.shell,
+              output: completed.output,
             })
           }).pipe(
             Effect.ensuring(
@@ -705,6 +707,26 @@ const layer = Layer.effect(
     return result
   }),
 )
+
+function missingShellOutput() {
+  const output = "Shell command output is no longer available."
+  return {
+    output,
+    cursor: Buffer.byteLength(output),
+    size: Buffer.byteLength(output),
+    truncated: false,
+  }
+}
+
+function synthesizeTerminalShellInfo(started: ShellSchema.Info): ShellSchema.Info {
+  return {
+    ...started,
+    // The Shell record was removed before waiters could observe it; publish a terminal
+    // boundary instead of leaving the Session shell message permanently running.
+    status: "killed",
+    time: { ...started.time, completed: Date.now() },
+  }
+}
 
 const resolvePrompt = (input: PromptInput.Prompt) =>
   Prompt.make({
