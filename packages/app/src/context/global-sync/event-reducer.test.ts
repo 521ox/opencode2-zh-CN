@@ -527,7 +527,8 @@ describe("applyDirectoryEvent", () => {
       directory: "/tmp",
       loadLsp() {},
     })
-    expect(store.question[sessionID]?.find((x) => x.id === "q_2")?.fields[0]?.description).toBe("updated")
+    const form = store.question[sessionID]?.find((x) => x.id === "q_2")
+    expect(form?.mode === "form" ? form.fields[0]?.description : undefined).toBe("updated")
 
     applyDirectoryEvent({
       event: { type: "form.cancelled", properties: { sessionID, id: "q_2" } },
@@ -538,6 +539,34 @@ describe("applyDirectoryEvent", () => {
       loadLsp() {},
     })
     expect(store.question[sessionID]?.map((x) => x.id)).toEqual(["q_1", "q_3"])
+  })
+
+  test("tracks global form lifecycles when session content is delegated", () => {
+    const [store, setStore] = createStore(baseState())
+
+    applyDirectoryEvent({
+      event: { type: "form.created", properties: { form: questionRequest("q_1", "global") } },
+      store,
+      setStore,
+      push() {},
+      directory: "/tmp",
+      loadLsp() {},
+      sessionContent: false,
+    })
+
+    expect(store.question.global?.map((x) => x.id)).toEqual(["q_1"])
+
+    applyDirectoryEvent({
+      event: { type: "form.cancelled", properties: { sessionID: "global", id: "q_1" } },
+      store,
+      setStore,
+      push() {},
+      directory: "/tmp",
+      loadLsp() {},
+      sessionContent: false,
+    })
+
+    expect(store.question.global).toEqual([])
   })
 
   test("updates vcs branch in store and cache", () => {
