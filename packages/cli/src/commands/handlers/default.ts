@@ -18,7 +18,7 @@ export default Runtime.handler(Commands, (input) =>
       return yield* Effect.fail(new Error("--server and --standalone cannot be combined"))
     const transport = yield* Effect.gen(function* () {
       if (server !== undefined) {
-        const password = process.env["OPENCODE_SERVER_PASSWORD"]
+        const password = process.env["OPENCODE_PASSWORD"]
         return {
           url: server,
           headers: password ? { authorization: "Basic " + btoa("opencode:" + password) } : undefined,
