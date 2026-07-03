@@ -232,7 +232,7 @@ test("session methods use the public HTTP contract", async () => {
         })
       }
       if (url.includes("/log")) {
-        return new Response(`data: ${JSON.stringify(modelSwitchedEvent)}\n\ndata: ${JSON.stringify(caughtUp)}\n\n`, {
+        return new Response(`data: ${JSON.stringify(modelSwitchedEvent)}\n\ndata: ${JSON.stringify(synced)}\n\n`, {
           headers: { "content-type": "text/event-stream" },
         })
       }
@@ -273,7 +273,7 @@ test("session methods use the public HTTP contract", async () => {
   expect(created.id).toBe("ses_test")
   expect(admitted.id).toBe("msg_test")
   expect(context).toEqual([])
-  expect(log).toEqual([modelSwitchedEvent, caughtUp])
+  expect(log).toEqual([modelSwitchedEvent, synced])
   expect(message).toEqual(modelSwitchedMessage)
   expect(requests.map((request) => [request.init?.method, request.url])).toEqual([
     ["GET", "http://localhost:3000/api/session?limit=10&order=desc&parentID=null"],
@@ -368,7 +368,7 @@ const modelSwitchedMessage = {
   model: { id: "claude", providerID: "anthropic" },
 }
 
-const caughtUp = { type: "log.caught_up", aggregateID: "ses_test", seq: 1 }
+const synced = { type: "log.synced", aggregateID: "ses_test", seq: 1 }
 
 const modelSwitchedEvent = {
   id: "evt_model",
