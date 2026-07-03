@@ -5,7 +5,7 @@ import { Effect, FileSystem, Schema } from "effect"
 import { randomBytes } from "crypto"
 import path from "path"
 
-// The CLI's service configuration file, plus the ServiceOptions binding that
+// The CLI's service configuration file, plus the Service.Options binding that
 // points the client package's service operations at this CLI: which
 // registration file (by channel), which version, and how to spawn opencode.
 

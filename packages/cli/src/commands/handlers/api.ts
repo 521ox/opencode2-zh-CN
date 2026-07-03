@@ -4,7 +4,6 @@ import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
 import { Service } from "@opencode-ai/client/effect"
 import { ServiceConfig } from "../../services/service-config"
-import type { Transport } from "@opencode-ai/client/effect"
 
 const methods = new Set(["delete", "get", "head", "options", "patch", "post", "put"])
 
@@ -61,7 +60,7 @@ export function rawRequest(input: readonly string[]) {
 }
 
 function resolveRequest(
-  transport: Transport,
+  transport: Service.Transport,
   input: readonly string[],
   params: Record<string, string>,
 ) {

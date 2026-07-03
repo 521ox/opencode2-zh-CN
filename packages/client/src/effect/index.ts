@@ -2,7 +2,6 @@
 // Core or Server. Preserve these datatype exports so internal model reorganizations do not require caller migrations.
 export * from "./generated/index"
 export { Service } from "./service.js"
-export type { Transport, ServiceOptions } from "./service.js"
 export { Agent } from "@opencode-ai/schema/agent"
 export { Command } from "@opencode-ai/schema/command"
 export { Credential } from "@opencode-ai/schema/credential"

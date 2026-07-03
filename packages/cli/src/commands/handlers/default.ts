@@ -3,7 +3,6 @@ import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
 import { Effect, Option } from "effect"
 import { Service } from "@opencode-ai/client/effect"
-import type { Transport } from "@opencode-ai/client/effect"
 import { ServiceConfig } from "../../services/service-config"
 import { Standalone } from "../../services/standalone"
 import { Updater } from "../../services/updater"
@@ -23,7 +22,7 @@ export default Runtime.handler(Commands, (input) =>
         return {
           url: server,
           headers: password ? { authorization: "Basic " + btoa("opencode:" + password) } : undefined,
-        } satisfies Transport
+        } satisfies Service.Transport
       }
       if (input.standalone) return yield* Standalone.transport()
       const options = yield* ServiceConfig.options()

@@ -14,6 +14,7 @@ import { InstallationVersion } from "@opencode-ai/core/installation/version"
 import { createOpencodeClient } from "@opencode-ai/sdk/v2/client"
 import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
+import { Service } from "@opencode-ai/client/effect"
 import { ServiceConfig } from "../../services/service-config"
 import { Updater } from "../../services/updater"
 import { randomBytes, randomUUID } from "crypto"
@@ -63,8 +64,11 @@ export default Runtime.handler(
 // not a startup lock: the atomic rename elects the latest writer, the watcher
 // self-evicts losers, and the finalizer id-guard keeps an exiting server from
 // deleting its successor's registration.
-const RegistrationId = Schema.Struct({ id: Schema.optional(Schema.String) })
-const decodeRegistrationId = Schema.decodeUnknownEffect(Schema.fromJsonString(RegistrationId))
+// Written and read through Service.Info so the file the server registers is
+// provably the contract clients discover with.
+const infoJson = Schema.fromJsonString(Service.Info)
+const encodeInfo = Schema.encodeEffect(infoJson)
+const decodeInfo = Schema.decodeUnknownEffect(infoJson)
 
 const register = Effect.fnUntraced(function* (address: HttpServer.Address) {
   const fs = yield* FileSystem.FileSystem
@@ -73,20 +77,17 @@ const register = Effect.fnUntraced(function* (address: HttpServer.Address) {
   const secret = yield* ServiceConfig.password()
   const temp = file + "." + id + ".tmp"
   yield* fs.makeDirectory(path.dirname(file), { recursive: true })
-  yield* fs.writeFileString(
-    temp,
-    JSON.stringify({
-      id,
-      version: InstallationVersion,
-      url: HttpServer.formatAddress(address),
-      pid: process.pid,
-      password: secret,
-    }),
-    { mode: 0o600 },
-  )
+  const encoded = yield* encodeInfo({
+    id,
+    version: InstallationVersion,
+    url: HttpServer.formatAddress(address),
+    pid: process.pid,
+    password: secret,
+  })
+  yield* fs.writeFileString(temp, encoded, { mode: 0o600 })
   yield* fs.rename(temp, file)
   const currentID = fs.readFileString(file).pipe(
-    Effect.flatMap(decodeRegistrationId),
+    Effect.flatMap(decodeInfo),
     Effect.map((info) => info.id),
     Effect.orElseSucceed(() => undefined),
   )

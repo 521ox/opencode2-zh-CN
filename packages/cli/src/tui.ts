@@ -5,11 +5,11 @@ import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { Global } from "@opencode-ai/core/global"
 import { loadBuiltinPlugins } from "@opencode-ai/tui/builtins"
 import { OpenCode } from "@opencode-ai/client/promise"
-import type { Transport } from "@opencode-ai/client/effect"
+import type { Service } from "@opencode-ai/client/effect"
 import { createOpencodeClient } from "@opencode-ai/sdk/v2/client"
 import type { Args } from "@opencode-ai/tui/context/args"
 
-export function runTui(transport: Transport, args: Args, discover?: () => Promise<Transport>) {
+export function runTui(transport: Service.Transport, args: Args, discover?: () => Promise<Service.Transport>) {
   const config = TuiConfig.resolve({}, { terminalSuspend: false })
   let disposeSlots: (() => void) | undefined
   return Effect.gen(function* () {
