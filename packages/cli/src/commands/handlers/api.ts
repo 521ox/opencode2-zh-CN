@@ -2,7 +2,8 @@ import { EOL } from "node:os"
 import { Effect, Option } from "effect"
 import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
-import { Daemon } from "../../services/daemon"
+import { Service } from "../../services/service"
+import type { Transport } from "@opencode-ai/client/service"
 
 const methods = new Set(["delete", "get", "head", "options", "patch", "post", "put"])
 
@@ -17,8 +18,7 @@ type OpenApi = {
 export default Runtime.handler(
   Commands.commands.api,
   Effect.fn("cli.api")(function* (input) {
-    const daemon = yield* Daemon.Service
-    const transport = yield* daemon.transport()
+    const transport = yield* Service.connect()
     const params = Option.getOrElse(input.param, () => ({}))
     const request = yield* resolveRequest(transport, input.request, params)
     const headers = new Headers(transport.headers)
@@ -58,7 +58,7 @@ export function rawRequest(input: readonly string[]) {
 }
 
 function resolveRequest(
-  transport: { url: string; headers: RequestInit["headers"] },
+  transport: Transport,
   input: readonly string[],
   params: Record<string, string>,
 ) {

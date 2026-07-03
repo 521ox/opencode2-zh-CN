@@ -13,7 +13,7 @@ import { ServerAuth } from "@opencode-ai/server/auth"
 import { createOpencodeClient } from "@opencode-ai/sdk/v2/client"
 import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
-import { Daemon } from "../../services/daemon"
+import { Service } from "../../services/service"
 import { Updater } from "../../services/updater"
 import { randomBytes } from "crypto"
 
@@ -23,12 +23,11 @@ export default Runtime.handler(
     if (input.service) yield* Effect.sync(() => process.chdir(Global.Path.home))
     return yield* Effect.scoped(
       Effect.gen(function* () {
-        const daemon = yield* Daemon.Service
         const standalonePassword = process.env.OPENCODE_SERVER_PASSWORD
         if (input.stdio) delete process.env.OPENCODE_SERVER_PASSWORD
-        const config = input.service ? yield* daemon.config() : {}
+        const config = input.service ? yield* Service.config() : {}
         const password = input.service
-          ? yield* daemon.password()
+          ? yield* Service.password()
           : standalonePassword || randomBytes(32).toString("base64url")
         if (!password) return yield* Effect.fail(new Error("Missing server password"))
         const hostname = Option.getOrUndefined(input.hostname) ?? config.hostname ?? "127.0.0.1"
@@ -44,7 +43,7 @@ export default Runtime.handler(
             headers: ServerAuth.headers({ password }),
           }).v2.health.get({}),
         )
-        if (input.service) yield* daemon.register(address)
+        if (input.service) yield* Service.register(address)
         const url = HttpServer.formatAddress(address)
         console.log(input.stdio ? JSON.stringify({ url }) : `server listening on ${url}`)
         if (!input.service && !input.stdio && !standalonePassword) console.log(`server password ${password}`)

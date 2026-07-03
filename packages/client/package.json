@@ -6,7 +6,9 @@
   "license": "MIT",
   "exports": {
     ".": "./src/index.ts",
-    "./effect": "./src/effect.ts"
+    "./effect": "./src/effect.ts",
+    "./service": "./src/service/index.ts",
+    "./service/effect": "./src/service/effect.ts"
   },
   "scripts": {
     "generate": "bun run script/build.ts",

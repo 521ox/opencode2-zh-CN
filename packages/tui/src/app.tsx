@@ -138,7 +138,7 @@ const appBindingCommands = [
 export type TuiInput = {
   client: OpencodeClient
   api: OpenCodeClient
-  reload?: () => Promise<{ client: OpencodeClient; api: OpenCodeClient }>
+  discover?: () => Promise<{ client: OpencodeClient; api: OpenCodeClient }>
   args: Args
   config: TuiConfig.Resolved
   onSnapshot?: () => Promise<string[]>
@@ -301,7 +301,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                   >
                                     <TuiConfigProvider config={input.config}>
                                       <PluginRuntimeProvider value={pluginRuntime}>
-                                        <SDKProvider client={input.client} api={input.api} reload={input.reload}>
+                                        <SDKProvider client={input.client} api={input.api} discover={input.discover}>
                                           <PermissionProvider>
                                             <ProjectProvider>
                                               <SyncProvider>
@@ -374,7 +374,6 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
   const keymap = useOpencodeKeymap()
   const event = useEvent()
   const sdk = useSDK()
-  const reload = sdk.reload
   const toast = useToast()
   const themeState = useTheme()
   const { theme, mode, setMode, locked, lock, unlock } = themeState
@@ -801,33 +800,6 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         },
         category: "System",
       },
-      ...(reload
-        ? [
-            {
-              name: "server.reload",
-              title: "Reload server",
-              slashName: "reload",
-              slashAliases: ["restart"],
-              run: async () => {
-                dialog.clear()
-                toast.show({
-                  variant: "info",
-                  message: "Reloading server...",
-                  duration: 30000,
-                })
-                await reload()
-                  .then(() =>
-                    toast.show({
-                      variant: "success",
-                      message: "Server reloaded",
-                    }),
-                  )
-                  .catch(toast.error)
-              },
-              category: "System",
-            },
-          ]
-        : []),
       {
         name: "theme.switch",
         title: "Switch theme",
