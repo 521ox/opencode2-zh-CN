@@ -9,7 +9,12 @@ import type { Service } from "@opencode-ai/client/effect"
 import { createOpencodeClient } from "@opencode-ai/sdk/v2/client"
 import type { Args } from "@opencode-ai/tui/context/args"
 
-export function runTui(transport: Service.Transport, args: Args, discover?: () => Promise<Service.Transport>) {
+export function runTui(
+  transport: Service.Transport,
+  args: Args,
+  discover?: () => Promise<Service.Transport>,
+  reload?: () => Promise<void>,
+) {
   const config = TuiConfig.resolve({}, { terminalSuspend: false })
   let disposeSlots: (() => void) | undefined
   return Effect.gen(function* () {
@@ -33,6 +38,7 @@ export function runTui(transport: Service.Transport, args: Args, discover?: () =
             }
           }
         : undefined,
+      reload,
       args,
       config,
       pluginHost: {

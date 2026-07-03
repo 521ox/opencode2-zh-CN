@@ -16,6 +16,8 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
     client: OpencodeClient
     api: OpenCodeClient
     discover?: () => Promise<{ client: OpencodeClient; api: OpenCodeClient }>
+    // Stops and starts the managed service; present only in service mode.
+    reload?: () => Promise<void>
   }) => {
     const abort = new AbortController()
     let client = props.client
@@ -138,6 +140,7 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
           return connection.connectedOnce
         },
       },
+      reload: props.reload,
     }
   },
 })

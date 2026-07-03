@@ -63,6 +63,24 @@ export default Runtime.handler(Commands, (input) =>
             }).pipe(Effect.provide(NodeFileSystem.layer)),
           )
       : () => Promise.resolve(transport)
-    yield* runTui(transport, { continue: input.continue, sessionID: Option.getOrUndefined(input.session) }, discover)
+    // Restart the managed service in place; start() resolves once the
+    // replacement is healthy and the reconnect loop reattaches on its own.
+    // Only meaningful in service mode: --server is not ours to restart and a
+    // standalone child cannot be respawned.
+    const reload = serviceOptions
+      ? () =>
+          Effect.runPromise(
+            Effect.gen(function* () {
+              yield* Service.stop(serviceOptions)
+              yield* Service.start(serviceOptions)
+            }).pipe(Effect.provide(NodeFileSystem.layer)),
+          )
+      : undefined
+    yield* runTui(
+      transport,
+      { continue: input.continue, sessionID: Option.getOrUndefined(input.session) },
+      discover,
+      reload,
+    )
   }),
 )
