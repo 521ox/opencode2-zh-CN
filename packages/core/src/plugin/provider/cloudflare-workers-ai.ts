@@ -9,18 +9,16 @@ const providerID = ProviderV2.ID.make("cloudflare-workers-ai")
 export const CloudflareWorkersAIPlugin = define({
   id: "cloudflare-workers-ai",
   effect: Effect.fn(function* (ctx) {
-    yield* ctx.catalog.transform(
-      Effect.fn(function* (evt) {
-        const item = evt.provider.get(providerID)
-        if (!item) return
-        evt.provider.update(item.provider.id, (provider) => {
-          if (provider.api.type !== "aisdk") return
-          if (provider.api.url) return
-          const accountId = resolveAccountId(provider.request.body)
-          if (accountId) provider.api.url = workersEndpoint(accountId)
-        })
-      }),
-    )
+    yield* ctx.catalog.transform((evt) => {
+      const item = evt.provider.get(providerID)
+      if (!item) return
+      evt.provider.update(item.provider.id, (provider) => {
+        if (provider.api.type !== "aisdk") return
+        if (provider.api.url) return
+        const accountId = resolveAccountId(provider.request.body)
+        if (accountId) provider.api.url = workersEndpoint(accountId)
+      })
+    })
     yield* ctx.aisdk.sdk(
       Effect.fn(function* (evt) {
         if (evt.model.providerID !== providerID) return

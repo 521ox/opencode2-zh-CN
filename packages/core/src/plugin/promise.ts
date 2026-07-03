@@ -1,12 +1,11 @@
 export * as PluginPromise from "./promise"
 
 import { define } from "@opencode-ai/plugin/v2/effect"
-import type { Plugin, PluginContext, Registration } from "@opencode-ai/plugin/v2/promise"
+import type { Plugin, PluginContext } from "@opencode-ai/plugin/v2/promise"
 import { Effect, Scope } from "effect"
 
-// The Effect host hands back this registration shape; mirror it structurally so
-// we do not have to alias the Effect package's `Registration` against the Promise one.
 type HostRegistration = { readonly dispose: Effect.Effect<void> }
+type Registration = { readonly dispose: () => Promise<void> }
 
 /**
  * Adapts a Promise plugin into an Effect plugin so the existing Effect-only
@@ -31,20 +30,23 @@ export function fromPromise(plugin: Plugin) {
             dispose: () => Effect.runPromiseWith(context)(registration.dispose),
           }))
 
-        const run = (effect: Effect.Effect<void>) => Effect.runPromiseWith(context)(effect)
+        const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromiseWith(context)(effect)
 
         const transform =
           <Draft>(domain: {
-            transform: (
-              callback: (draft: Draft) => Effect.Effect<void> | void,
-            ) => Effect.Effect<HostRegistration, never, Scope.Scope>
+            transform: (callback: (draft: Draft) => void) => Effect.Effect<HostRegistration, never, Scope.Scope>
           }) =>
-          (callback: (draft: Draft) => Promise<void> | void) =>
-            register(domain.transform((draft) => Effect.promise(() => Promise.resolve(callback(draft)))))
+          (callback: (draft: Draft) => void) =>
+            register(
+              domain.transform((draft) => {
+                callback(draft)
+              }),
+            )
 
         const context2: PluginContext = {
           options: host.options,
           agent: {
+            list: (input) => run(host.agent.list(input)),
             transform: transform(host.agent),
             reload: () => run(host.agent.reload()),
           },
@@ -55,14 +57,30 @@ export function fromPromise(plugin: Plugin) {
               register(host.aisdk.language((event) => Effect.promise(() => Promise.resolve(callback(event))))),
           },
           catalog: {
+            provider: {
+              list: (input) => run(host.catalog.provider.list(input)),
+              get: (input) => run(host.catalog.provider.get(input)),
+            },
+            model: {
+              list: (input) => run(host.catalog.model.list(input)),
+              default: (input) => run(host.catalog.model.default(input)),
+            },
             transform: transform(host.catalog),
             reload: () => run(host.catalog.reload()),
           },
           command: {
+            list: (input) => run(host.command.list(input)),
             transform: transform(host.command),
             reload: () => run(host.command.reload()),
           },
           integration: {
+            list: (input) => run(host.integration.list(input)),
+            get: (input) => run(host.integration.get(input)),
+            connectKey: (input) => run(host.integration.connectKey(input)),
+            connectOauth: (input) => run(host.integration.connectOauth(input)),
+            attemptStatus: (input) => run(host.integration.attemptStatus(input)),
+            attemptComplete: (input) => run(host.integration.attemptComplete(input)),
+            attemptCancel: (input) => run(host.integration.attemptCancel(input)),
             transform: transform(host.integration),
             reload: () => run(host.integration.reload()),
             connection: {
@@ -71,6 +89,7 @@ export function fromPromise(plugin: Plugin) {
             },
           },
           plugin: {
+            list: (input) => run(host.plugin.list(input)),
             add: (input) => {
               const child = fromPromise(input)
               return run(host.plugin.add(child))
@@ -78,12 +97,21 @@ export function fromPromise(plugin: Plugin) {
             remove: (id) => run(host.plugin.remove(id)),
           },
           reference: {
+            list: (input) => run(host.reference.list(input)),
             transform: transform(host.reference),
             reload: () => run(host.reference.reload()),
           },
           skill: {
+            list: (input) => run(host.skill.list(input)),
             transform: transform(host.skill),
             reload: () => run(host.skill.reload()),
+          },
+          session: {
+            create: (input) => run(host.session.create(input)),
+            get: (input) => run(host.session.get(input)),
+            prompt: (input) => run(host.session.prompt(input)),
+            command: (input) => run(host.session.command(input)),
+            interrupt: (input) => run(host.session.interrupt(input)),
           },
         }
 

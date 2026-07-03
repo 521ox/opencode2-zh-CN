@@ -1,8 +1,10 @@
+import type { AgentApi } from "@opencode-ai/client/promise/api"
 import type { AgentDraft } from "../effect/agent.js"
-import type { Hooks } from "./registration.js"
+import type { TransformHook } from "./registration.js"
 
 export type { AgentDraft }
 
-export type AgentHooks = Hooks<{
-  transform: AgentDraft
-}>
+export interface AgentHooks extends AgentApi {
+  readonly transform: TransformHook<AgentDraft>
+  readonly reload: () => Promise<void>
+}

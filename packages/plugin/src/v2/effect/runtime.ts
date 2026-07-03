@@ -1,3 +1,4 @@
-import type { SessionApi } from "./generated/api.js"
+import type { SessionApi } from "@opencode-ai/client/effect/api"
 
-export type SessionDomain = Pick<SessionApi<unknown>, "create" | "get" | "prompt" | "command" | "interrupt">
+export interface SessionHooks
+  extends Pick<SessionApi<unknown>, "create" | "get" | "prompt" | "command" | "interrupt"> {}

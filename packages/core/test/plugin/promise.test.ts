@@ -11,6 +11,35 @@ import { PluginTestLayer } from "./fixture"
 const it = testEffect(PluginTestLayer)
 
 describe("fromPromise", () => {
+  it.effect("forwards standard client reads", () =>
+    Effect.gen(function* () {
+      const plugin = yield* PluginV2.Service
+      const host = yield* PluginHost.make(plugin)
+      const seen: string[] = []
+      const promisePlugin = define({
+        id: "promise-client-reads",
+        setup: async (ctx) => {
+          const results = await Promise.all([
+            ctx.agent.list(),
+            ctx.catalog.provider.list(),
+            ctx.catalog.model.list(),
+            ctx.command.list(),
+            ctx.integration.list(),
+            ctx.plugin.list(),
+            ctx.reference.list(),
+            ctx.skill.list(),
+          ])
+          seen.push(...results.map((result) => result.location.directory))
+        },
+      })
+
+      yield* PluginPromise.fromPromise(promisePlugin).effect(host)
+
+      expect(seen).toHaveLength(8)
+      expect(new Set(seen).size).toBe(1)
+    }),
+  )
+
   it.effect("loads a promise plugin and registers a transform hook", () =>
     Effect.gen(function* () {
       const agents = yield* AgentV2.Service

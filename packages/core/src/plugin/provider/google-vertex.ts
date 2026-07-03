@@ -57,33 +57,31 @@ function authFetch(fetchWithRuntimeOptions?: unknown) {
 export const GoogleVertexPlugin = define({
   id: "google-vertex",
   effect: Effect.fn(function* (ctx) {
-    yield* ctx.catalog.transform(
-      Effect.fn(function* (evt) {
-        for (const item of evt.provider.list()) {
-          if (item.provider.api.type !== "aisdk") continue
-          if (
-            item.provider.api.package !== "@ai-sdk/google-vertex" &&
-            !(
-              item.provider.id === ProviderV2.ID.googleVertex &&
-              item.provider.api.package.includes("@ai-sdk/openai-compatible")
-            )
+    yield* ctx.catalog.transform((evt) => {
+      for (const item of evt.provider.list()) {
+        if (item.provider.api.type !== "aisdk") continue
+        if (
+          item.provider.api.package !== "@ai-sdk/google-vertex" &&
+          !(
+            item.provider.id === ProviderV2.ID.googleVertex &&
+            item.provider.api.package.includes("@ai-sdk/openai-compatible")
           )
-            continue
-          const project = resolveProject(item.provider.request.body)
-          const location = String(resolveLocation(item.provider.request.body))
-          evt.provider.update(item.provider.id, (provider) => {
-            if (project) provider.request.body.project = project
-            provider.request.body.location = location
-            if (provider.api.type === "aisdk" && provider.api.url) {
-              provider.api.url = replaceVertexVars(provider.api.url, project, location)
-            }
-            if (provider.api.type === "aisdk" && provider.api.package.includes("@ai-sdk/openai-compatible")) {
-              provider.request.body.fetch = authFetch(provider.request.body.fetch)
-            }
-          })
-        }
-      }),
-    )
+        )
+          continue
+        const project = resolveProject(item.provider.request.body)
+        const location = String(resolveLocation(item.provider.request.body))
+        evt.provider.update(item.provider.id, (provider) => {
+          if (project) provider.request.body.project = project
+          provider.request.body.location = location
+          if (provider.api.type === "aisdk" && provider.api.url) {
+            provider.api.url = replaceVertexVars(provider.api.url, project, location)
+          }
+          if (provider.api.type === "aisdk" && provider.api.package.includes("@ai-sdk/openai-compatible")) {
+            provider.request.body.fetch = authFetch(provider.request.body.fetch)
+          }
+        })
+      }
+    })
     yield* ctx.aisdk.sdk(
       Effect.fn(function* (evt) {
         if (evt.model.providerID === ProviderV2.ID.googleVertex && evt.package.includes("@ai-sdk/openai-compatible")) {
@@ -115,28 +113,26 @@ export const GoogleVertexPlugin = define({
 export const GoogleVertexAnthropicPlugin = define({
   id: "google-vertex-anthropic",
   effect: Effect.fn(function* (ctx) {
-    yield* ctx.catalog.transform(
-      Effect.fn(function* (evt) {
-        for (const item of evt.provider.list()) {
-          if (item.provider.api.type !== "aisdk") continue
-          if (item.provider.api.package !== "@ai-sdk/google-vertex/anthropic") continue
-          const project =
-            item.provider.request.body.project ??
-            process.env.GOOGLE_CLOUD_PROJECT ??
-            process.env.GCP_PROJECT ??
-            process.env.GCLOUD_PROJECT
-          const location =
-            item.provider.request.body.location ??
-            process.env.GOOGLE_CLOUD_LOCATION ??
-            process.env.VERTEX_LOCATION ??
-            "global"
-          evt.provider.update(item.provider.id, (provider) => {
-            if (project) provider.request.body.project = project
-            provider.request.body.location = location
-          })
-        }
-      }),
-    )
+    yield* ctx.catalog.transform((evt) => {
+      for (const item of evt.provider.list()) {
+        if (item.provider.api.type !== "aisdk") continue
+        if (item.provider.api.package !== "@ai-sdk/google-vertex/anthropic") continue
+        const project =
+          item.provider.request.body.project ??
+          process.env.GOOGLE_CLOUD_PROJECT ??
+          process.env.GCP_PROJECT ??
+          process.env.GCLOUD_PROJECT
+        const location =
+          item.provider.request.body.location ??
+          process.env.GOOGLE_CLOUD_LOCATION ??
+          process.env.VERTEX_LOCATION ??
+          "global"
+        evt.provider.update(item.provider.id, (provider) => {
+          if (project) provider.request.body.project = project
+          provider.request.body.location = location
+        })
+      }
+    })
     yield* ctx.aisdk.sdk(
       Effect.fn(function* (evt) {
         if (evt.package !== "@ai-sdk/google-vertex/anthropic") return

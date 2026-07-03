@@ -19,7 +19,15 @@ describe("SkillPlugin.Plugin", () => {
   it.effect("registers built-in skills", () =>
     Effect.gen(function* () {
       const skill = yield* SkillV2.Service
-      yield* SkillPlugin.Plugin.effect(host({ skill: { ...skill, reload: skill.reload } })).pipe(
+      yield* SkillPlugin.Plugin.effect(
+        host({
+          skill: {
+            list: () => Effect.die("unused skill.list"),
+            transform: skill.transform,
+            reload: skill.reload,
+          },
+        }),
+      ).pipe(
         Effect.provideService(Config.Service, Config.Service.of({ entries: () => Effect.succeed([]) })),
         Effect.provideService(
           Location.Service,

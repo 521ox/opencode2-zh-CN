@@ -32,8 +32,8 @@ await Effect.runPromise(
         fileURLToPath(new URL("../src/effect/generated", import.meta.url)),
       ),
       write(
-        emitEffectShape(effectContract, { module: "@opencode-ai/protocol/client", api: "ClientApi" }),
-        fileURLToPath(new URL("../../plugin/src/v2/effect/generated", import.meta.url)),
+        emitEffectShape(effectContract, { module: "../../contract", api: "ClientApi" }),
+        fileURLToPath(new URL("../src/effect/api", import.meta.url)),
       ),
     ],
     { concurrency: 3, discard: true },

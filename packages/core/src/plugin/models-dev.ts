@@ -201,64 +201,65 @@ export const ModelsDevPlugin = define({
   effect: Effect.fn(function* (ctx) {
     const modelsDev = yield* ModelsDev.Service
     const events = yield* EventV2.Service
-    yield* ctx.integration.transform(
-      Effect.fn(function* (integrations) {
-        const data = yield* modelsDev.get()
-        for (const item of Object.values(data)) {
-          if (item.env.length === 0) continue
-          const integrationID = item.id
-          integrations.update(integrationID, (integration) => (integration.name = item.name))
-          integrations.method.update({
-            integrationID,
-            method: { type: "key" },
-          })
-          integrations.method.update({
-            integrationID,
-            method: { type: "env", names: [...item.env] },
-          })
-        }
-      }),
-    )
-    yield* ctx.catalog.transform(
-      Effect.fn(function* (catalog) {
-        const data = yield* modelsDev.get()
-        for (const item of Object.values(data)) {
-          const providerID = ProviderV2.ID.make(item.id)
-          catalog.provider.update(providerID, (provider) => {
-            provider.name = item.name
-            provider.api = item.npm
-              ? {
-                  type: "aisdk",
-                  package: item.npm,
-                  url: item.api,
-                }
-              : {
-                  type: "native",
-                  url: item.api,
-                  settings: {},
-                }
-          })
+    const loaded = { data: yield* modelsDev.get() }
+    yield* ctx.integration.transform((integrations) => {
+      for (const item of Object.values(loaded.data)) {
+        if (item.env.length === 0) continue
+        const integrationID = item.id
+        integrations.update(integrationID, (integration) => (integration.name = item.name))
+        integrations.method.update({
+          integrationID,
+          method: { type: "key" },
+        })
+        integrations.method.update({
+          integrationID,
+          method: { type: "env", names: [...item.env] },
+        })
+      }
+    })
+    yield* ctx.catalog.transform((catalog) => {
+      for (const item of Object.values(loaded.data)) {
+        const providerID = ProviderV2.ID.make(item.id)
+        catalog.provider.update(providerID, (provider) => {
+          provider.name = item.name
+          provider.api = item.npm
+            ? {
+                type: "aisdk",
+                package: item.npm,
+                url: item.api,
+              }
+            : {
+                type: "native",
+                url: item.api,
+                settings: {},
+              }
+        })
 
-          for (const model of Object.values(item.models)) {
-            const baseCost = cost(model.cost)
-            const variants = reasoningVariants(item, model)
-            catalog.model.update(providerID, model.id, (draft) => applyModel(draft, model, { cost: baseCost, variants }))
-            for (const [mode, options] of Object.entries(model.experimental?.modes ?? {})) {
-              catalog.model.update(providerID, `${model.id}-${mode}`, (draft) =>
-                applyModel(draft, model, {
-                  name: modeName(model, mode),
-                  cost: mergeCost(baseCost, options.cost),
-                  request: options.provider,
-                  variants,
-                }),
-              )
-            }
+        for (const model of Object.values(item.models)) {
+          const baseCost = cost(model.cost)
+          const variants = reasoningVariants(item, model)
+          catalog.model.update(providerID, model.id, (draft) => applyModel(draft, model, { cost: baseCost, variants }))
+          for (const [mode, options] of Object.entries(model.experimental?.modes ?? {})) {
+            catalog.model.update(providerID, `${model.id}-${mode}`, (draft) =>
+              applyModel(draft, model, {
+                name: modeName(model, mode),
+                cost: mergeCost(baseCost, options.cost),
+                request: options.provider,
+                variants,
+              }),
+            )
           }
         }
-      }),
-    )
+      }
+    })
     yield* events.subscribe(ModelsDev.Event.Refreshed).pipe(
-      Stream.runForEach(() => ctx.integration.reload().pipe(Effect.andThen(ctx.catalog.reload()))),
+      Stream.runForEach(() =>
+        modelsDev.get().pipe(
+          Effect.tap((data) => Effect.sync(() => (loaded.data = data))),
+          Effect.andThen(ctx.integration.reload()),
+          Effect.andThen(ctx.catalog.reload()),
+        ),
+      ),
       Effect.forkScoped({ startImmediately: true }),
     )
   }),

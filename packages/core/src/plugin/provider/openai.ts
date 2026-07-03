@@ -177,34 +177,32 @@ export const OpenAIPlugin = define({
       draft.method.update(browser)
       draft.method.update(headless)
     })
-    yield* ctx.catalog.transform(
-      Effect.fn(function* (evt) {
-        for (const item of evt.provider.list()) {
-          if (item.provider.api.type !== "aisdk") continue
-          if (item.provider.api.package !== "@ai-sdk/openai") continue
-          if (!item.models.has(ModelV2.ID.make("gpt-5-chat-latest"))) continue
-          evt.model.update(item.provider.id, ModelV2.ID.make("gpt-5-chat-latest"), (model) => {
-            // OpenAIPlugin sends OpenAI models through Responses; this alias is a
-            // chat-completions-only model, so hide it only from OpenAI's catalog.
-            model.enabled = false
-          })
-        }
-        if (!chatgpt) return
-        const item = evt.provider.get(ProviderV2.ID.openai)
-        if (!item) return
-        for (const model of item.models.values()) {
-          // ChatGPT-plan tokens only authorize codex-eligible models, and the
-          // subscription covers usage, so hide the rest and zero the cost.
-          evt.model.update(item.provider.id, model.id, (draft) => {
-            if (!OpenAICodex.eligible(draft.api.id)) {
-              draft.enabled = false
-              return
-            }
-            draft.cost = []
-          })
-        }
-      }),
-    )
+    yield* ctx.catalog.transform((evt) => {
+      for (const item of evt.provider.list()) {
+        if (item.provider.api.type !== "aisdk") continue
+        if (item.provider.api.package !== "@ai-sdk/openai") continue
+        if (!item.models.has(ModelV2.ID.make("gpt-5-chat-latest"))) continue
+        evt.model.update(item.provider.id, ModelV2.ID.make("gpt-5-chat-latest"), (model) => {
+          // OpenAIPlugin sends OpenAI models through Responses; this alias is a
+          // chat-completions-only model, so hide it only from OpenAI's catalog.
+          model.enabled = false
+        })
+      }
+      if (!chatgpt) return
+      const item = evt.provider.get(ProviderV2.ID.openai)
+      if (!item) return
+      for (const model of item.models.values()) {
+        // ChatGPT-plan tokens only authorize codex-eligible models, and the
+        // subscription covers usage, so hide the rest and zero the cost.
+        evt.model.update(item.provider.id, model.id, (draft) => {
+          if (!OpenAICodex.eligible(draft.api.id)) {
+            draft.enabled = false
+            return
+          }
+          draft.cost = []
+        })
+      }
+    })
 
     const refresh = () => loading.withPermit(load().pipe(Effect.andThen(ctx.catalog.reload())))
     yield* events.subscribe(Integration.Event.ConnectionUpdated).pipe(

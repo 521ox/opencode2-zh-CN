@@ -1,6 +1,21 @@
 // TODO: Keep additional network capabilities inside Schema and Protocol as the client grows; /effect must never import
 // Core or Server. Preserve these datatype exports so internal model reorganizations do not require caller migrations.
+import type { Effect } from "effect"
+
 export * from "./generated/index"
+export type {
+  AgentApi,
+  AppApi,
+  CatalogApi,
+  CommandApi,
+  IntegrationApi,
+  ModelApi,
+  PluginApi,
+  ProviderApi,
+  ReferenceApi,
+  SessionApi,
+  SkillApi,
+} from "./api.js"
 export { Service } from "./service.js"
 export { Agent } from "@opencode-ai/schema/agent"
 export { Command } from "@opencode-ai/schema/command"
@@ -27,3 +42,4 @@ export { SessionMessage } from "@opencode-ai/schema/session-message"
 export { Skill } from "@opencode-ai/schema/skill"
 export { Prompt } from "@opencode-ai/schema/prompt"
 export type { OpenCodeEvent } from "@opencode-ai/protocol/groups/event"
+export type OpenCodeClient = Effect.Success<ReturnType<typeof import("./generated/client").make>>

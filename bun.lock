@@ -122,6 +122,7 @@
     },
     "packages/client": {
       "name": "@opencode-ai/client",
+      "version": "1.17.13",
       "dependencies": {
         "@opencode-ai/protocol": "workspace:*",
         "@opencode-ai/schema": "workspace:*",
@@ -695,6 +696,7 @@
       "version": "1.17.13",
       "dependencies": {
         "@ai-sdk/provider": "3.0.8",
+        "@opencode-ai/client": "workspace:*",
         "@opencode-ai/llm": "workspace:*",
         "@opencode-ai/protocol": "workspace:*",
         "@opencode-ai/schema": "workspace:*",

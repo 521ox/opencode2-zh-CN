@@ -36,7 +36,7 @@ describe("ConfigSkillPlugin.Plugin", () => {
 
       yield* ConfigSkillPlugin.Plugin.effect(
         host({
-          skill: { transform, reload: () => Effect.void },
+          skill: { list: () => Effect.die("unused skill.list"), transform, reload: () => Effect.void },
         }),
       ).pipe(
         Effect.provideService(Global.Service, Global.Service.of({ ...Global.make(), home: "/home/test" })),

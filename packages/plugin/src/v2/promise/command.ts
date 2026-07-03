@@ -1,8 +1,10 @@
+import type { CommandApi } from "@opencode-ai/client/promise/api"
 import type { CommandDraft } from "../effect/command.js"
-import type { Hooks } from "./registration.js"
+import type { TransformHook } from "./registration.js"
 
 export type { CommandDraft }
 
-export type CommandHooks = Hooks<{
-  transform: CommandDraft
-}>
+export interface CommandHooks extends CommandApi {
+  readonly transform: TransformHook<CommandDraft>
+  readonly reload: () => Promise<void>
+}
