@@ -91,7 +91,8 @@ await createClient({
   ],
 })
 
-const generatedTypes = await Bun.file("./src/v2/gen/types.gen.ts").text()
+const generatedTypesPath = "./src/v2/gen/types.gen.ts"
+const generatedTypes = await Bun.file(generatedTypesPath).text()
 if (/export type SessionNext\w+1 =/.test(generatedTypes)) {
   throw new Error("Session history generated duplicate Session event variants")
 }
@@ -102,7 +103,28 @@ const logTypesPatched = generatedTypes.replace(
 if (logTypesPatched === generatedTypes) {
   throw new Error("Session log numeric query patch did not apply")
 }
-await Bun.write("./src/v2/gen/types.gen.ts", logTypesPatched)
+const sessionListTypesPatched = logTypesPatched.replace(
+  /(export type V2SessionListData = \{[\s\S]*?query\?: \{[\s\S]*?limit\?: )string( \| null)/,
+  "$1number$2",
+)
+if (sessionListTypesPatched === logTypesPatched) {
+  throw new Error("Session list numeric query patch did not apply")
+}
+const sessionMessagesTypesPatched = sessionListTypesPatched.replace(
+  /(export type V2SessionMessagesData = \{[\s\S]*?query\?: \{[\s\S]*?limit\?: )string( \| null)/,
+  "$1number$2",
+)
+if (sessionMessagesTypesPatched === sessionListTypesPatched) {
+  throw new Error("Session messages numeric query patch did not apply")
+}
+const eventSubscribeTypesPatched = sessionMessagesTypesPatched.replace(
+  /(export type V2EventSubscribeResponses = \{\s*\/\*\*[\s\S]*?\*\/\s*200: )\{\s*id: string \| null;?\s*event: string;?\s*data: V2EventStreamV2;?\s*\};?/,
+  "$1V2Event",
+)
+if (eventSubscribeTypesPatched === sessionMessagesTypesPatched) {
+  throw new Error("Event subscribe response patch did not apply")
+}
+await Bun.write(generatedTypesPath, eventSubscribeTypesPatched)
 
 const querySerializerPath = "./src/v2/gen/client/utils.gen.ts"
 const querySerializerSource = await Bun.file(querySerializerPath).text()
@@ -117,7 +139,8 @@ if (querySerializerPatched === querySerializerSource) {
 }
 await Bun.write(querySerializerPath, querySerializerPatched)
 
-const generatedSdk = await Bun.file("./src/v2/gen/sdk.gen.ts").text()
+const generatedSdkPath = "./src/v2/gen/sdk.gen.ts"
+const generatedSdk = await Bun.file(generatedSdkPath).text()
 const logSdkPatched = generatedSdk.replace(
   /(Read the session log[\s\S]*?parameters: \{[\s\S]*?after\?: )string(\s*\|\s*null)?/,
   "$1number$2",
@@ -125,7 +148,21 @@ const logSdkPatched = generatedSdk.replace(
 if (logSdkPatched === generatedSdk) {
   throw new Error("Session log numeric SDK patch did not apply")
 }
-await Bun.write("./src/v2/gen/sdk.gen.ts", logSdkPatched)
+const sessionListSdkPatched = logSdkPatched.replace(
+  /(List sessions[\s\S]*?parameters\?: \{[\s\S]*?limit\?: )string( \| null)/,
+  "$1number$2",
+)
+if (sessionListSdkPatched === logSdkPatched) {
+  throw new Error("Session list numeric SDK patch did not apply")
+}
+const sessionMessagesSdkPatched = sessionListSdkPatched.replace(
+  /(Get session messages[\s\S]*?parameters: \{[\s\S]*?limit\?: )string( \| null)/,
+  "$1number$2",
+)
+if (sessionMessagesSdkPatched === sessionListSdkPatched) {
+  throw new Error("Session messages numeric SDK patch did not apply")
+}
+await Bun.write(generatedSdkPath, sessionMessagesSdkPatched)
 
 // Patch a @hey-api/openapi-ts codegen bug: SseFn incorrectly passes the
 // endpoint's TError into the second generic of ServerSentEventsResult, which
