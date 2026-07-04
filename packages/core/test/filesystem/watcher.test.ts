@@ -2,7 +2,7 @@ import { $ } from "bun"
 import { describe, expect } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
-import { Deferred, Duration, Effect, Fiber, Layer, Option, Stream } from "effect"
+import { Deferred, Duration, Effect, Fiber, Layer, Option, Schedule, Stream } from "effect"
 import { Config } from "@opencode-ai/core/config"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
@@ -149,12 +149,14 @@ describeWatcher("LocationWatcher", () => {
         const update = yield* watcher
           .subscribe({ path: target, type: "file" })
           .pipe(Stream.take(1), Stream.runHead, Effect.forkScoped({ startImmediately: true }))
-        yield* Effect.yieldNow
-
         yield* fs.writeFileString(sibling, "sibling")
-        yield* fs.writeFileString(target, "target")
+        const writes = yield* Effect.suspend(() => fs.writeFileString(target, `target-${Math.random()}`)).pipe(
+          Effect.repeat(Schedule.spaced("10 millis")),
+          Effect.forkScoped,
+        )
+        const event = yield* Fiber.join(update).pipe(Effect.ensuring(Fiber.interrupt(writes)))
 
-        expect((yield* Fiber.join(update)).valueOrUndefined?.path).toBe(target)
+        expect(event.valueOrUndefined?.path).toBe(target)
       }).pipe(Effect.provide(AppNodeBuilder.build(Watcher.node))),
     ),
   )
@@ -193,6 +195,24 @@ describeWatcher("LocationWatcher", () => {
           file,
           event: "add",
         })
+      }),
+    ),
+  )
+
+  it.live("ignores dependency, VCS, and build directories at any depth", () =>
+    withTmp((directory) =>
+      Effect.gen(function* () {
+        const afs = yield* FSUtil.Service
+        yield* ready(directory)
+        const roots = ["node_modules", ".git", "dist"].map((name) => path.join(directory, "nested", name))
+        const files = roots.map((root) => path.join(root, "package", "index.js"))
+        yield* noUpdate(
+          (event) => roots.some((root) => event.file === root || event.file.startsWith(`${root}${path.sep}`)),
+          Effect.forEach(files, (file) => afs.writeWithDirs(file, "ignored"), {
+            concurrency: "unbounded",
+            discard: true,
+          }),
+        )
       }),
     ),
   )
