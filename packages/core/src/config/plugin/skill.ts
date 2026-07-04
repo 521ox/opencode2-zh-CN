@@ -2,7 +2,7 @@ export * as ConfigSkillPlugin from "./skill"
 
 import { define } from "../../plugin/internal"
 import path from "path"
-import { Effect } from "effect"
+import { Effect, Stream } from "effect"
 import { Config } from "../../config"
 import { AbsolutePath } from "../../schema"
 import { SkillV2 } from "../../skill"
@@ -15,10 +15,10 @@ export const Plugin = define({
     const config = yield* Config.Service
     const global = yield* Global.Service
     const location = yield* Location.Service
-    const entries = yield* config.entries()
-    const directories = entries.flatMap((entry) => (entry.type === "directory" ? [entry.path] : []))
-    const items = entries.flatMap((entry) => (entry.type === "document" ? (entry.info.skills ?? []) : []))
+    const loaded = { entries: yield* config.entries() }
     yield* ctx.skill.transform((draft) => {
+      const directories = loaded.entries.flatMap((entry) => (entry.type === "directory" ? [entry.path] : []))
+      const items = loaded.entries.flatMap((entry) => (entry.type === "document" ? (entry.info.skills ?? []) : []))
       for (const directory of directories) {
         draft.source(
           SkillV2.DirectorySource.make({ type: "directory", path: AbsolutePath.make(path.join(directory, "skill")) }),
@@ -44,5 +44,15 @@ export const Plugin = define({
         )
       }
     })
+    yield* ctx.event.subscribe().pipe(
+      Stream.filter((event) => event.type === "config.updated"),
+      Stream.runForEach(() =>
+        config.entries().pipe(
+          Effect.tap((entries) => Effect.sync(() => (loaded.entries = entries))),
+          Effect.andThen(ctx.skill.reload()),
+        ),
+      ),
+      Effect.forkScoped({ startImmediately: true }),
+    )
   }),
 })

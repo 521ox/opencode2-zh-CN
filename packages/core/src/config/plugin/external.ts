@@ -2,7 +2,7 @@ export * as ConfigExternalPlugin from "./external"
 
 import type { Plugin as EffectPlugin } from "@opencode-ai/plugin/v2/effect"
 import type { Plugin as PromisePlugin } from "@opencode-ai/plugin/v2/promise"
-import { Effect, Schema } from "effect"
+import { Effect, Schema, Stream } from "effect"
 import path from "path"
 import { fileURLToPath, pathToFileURL } from "url"
 import { Config } from "../../config"
@@ -42,8 +42,9 @@ export const Plugin = define({
     const fs = yield* FSUtil.Service
     const location = yield* Location.Service
     const npm = yield* Npm.Service
-    yield* Effect.gen(function* () {
-      const configured: { package: string; options?: Record<string, any> }[] = []
+    const active = new Set<string>()
+    const load = Effect.fn("ConfigExternalPlugin.load")(function* () {
+      const configured: { package: string; options?: Record<string, unknown> }[] = []
 
       for (const entry of yield* config.entries()) {
         if (entry.type === "document") {
@@ -98,8 +99,8 @@ export const Plugin = define({
         }
       }
 
-      for (const ref of configured) {
-        yield* Effect.gen(function* () {
+      return yield* Effect.forEach(configured, (ref) =>
+        Effect.gen(function* () {
           const entrypoint = path.isAbsolute(ref.package)
             ? pathToFileURL(ref.package).href
             : (yield* npm.add(ref.package)).entrypoint
@@ -108,13 +109,31 @@ export const Plugin = define({
           const mod = yield* Effect.promise(() => import(entrypoint))
           const value = (yield* Schema.decodeUnknownEffect(PluginModule)(mod)).default
           const plugin = "effect" in value ? value : PluginPromise.fromPromise(value)
-          yield* ctx.plugin.add({
+          return {
             id: plugin.id,
-            effect: (host) => plugin.effect({ ...host, options: ref.options ?? {} }),
-          })
-        }).pipe(Effect.ignoreCause)
-      }
+            effect: (host: Parameters<typeof plugin.effect>[0]) =>
+              plugin.effect({ ...host, options: ref.options ?? {} }),
+          }
+        }).pipe(Effect.catchCause(() => Effect.succeed(undefined))),
+      ).pipe(Effect.map((plugins) => plugins.filter((plugin) => plugin !== undefined)))
     })
+    const reconcile = Effect.fn("ConfigExternalPlugin.reconcile")(function* () {
+      const plugins = yield* load()
+      const next = new Set(plugins.map((plugin) => plugin.id))
+      for (const id of active) {
+        if (!next.has(id)) yield* ctx.plugin.remove(id)
+      }
+      for (const plugin of plugins) yield* ctx.plugin.add(plugin)
+      active.clear()
+      for (const id of next) active.add(id)
+    })
+
+    yield* reconcile()
+    yield* ctx.event.subscribe().pipe(
+      Stream.filter((event) => event.type === "config.updated"),
+      Stream.runForEach(() => reconcile()),
+      Effect.forkScoped({ startImmediately: true }),
+    )
   }),
 })
 

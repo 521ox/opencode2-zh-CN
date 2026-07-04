@@ -1,7 +1,7 @@
 export * as ConfigProviderPlugin from "./provider"
 
 import { define } from "../../plugin/internal"
-import { Effect } from "effect"
+import { Effect, Stream } from "effect"
 import { Config } from "../../config"
 import { ModelV2 } from "../../model"
 
@@ -9,14 +9,16 @@ export const Plugin = define({
   id: "config-provider",
   effect: Effect.fn(function* (ctx) {
     const config = yield* Config.Service
-    const entries = yield* config.entries()
-    const files = entries.filter((entry): entry is Config.Document => entry.type === "document")
-    const configuredIntegrations = new Set(
-      files.flatMap((file) =>
-        Object.entries(file.info.providers ?? {}).flatMap(([id, provider]) => (provider.env === undefined ? [] : [id])),
-      ),
-    )
+    const loaded = { entries: yield* config.entries() }
     yield* ctx.integration.transform((integrations) => {
+      const files = loaded.entries.filter((entry): entry is Config.Document => entry.type === "document")
+      const configuredIntegrations = new Set(
+        files.flatMap((file) =>
+          Object.entries(file.info.providers ?? {}).flatMap(([id, provider]) =>
+            provider.env === undefined ? [] : [id],
+          ),
+        ),
+      )
       for (const file of files) {
         for (const [id, item] of Object.entries(file.info.providers ?? {})) {
           const integrationID = id
@@ -34,8 +36,9 @@ export const Plugin = define({
       }
     })
 
-    const configuredDefault = Config.latest(entries, "model")
     yield* ctx.catalog.transform((catalog) => {
+      const files = loaded.entries.filter((entry): entry is Config.Document => entry.type === "document")
+      const configuredDefault = Config.latest(loaded.entries, "model")
       if (configuredDefault !== undefined) {
         const model = ModelV2.parse(configuredDefault)
         catalog.model.default.set(model.providerID, model.modelID)
@@ -105,5 +108,16 @@ export const Plugin = define({
         }
       }
     })
+    yield* ctx.event.subscribe().pipe(
+      Stream.filter((event) => event.type === "config.updated"),
+      Stream.runForEach(() =>
+        config.entries().pipe(
+          Effect.tap((entries) => Effect.sync(() => (loaded.entries = entries))),
+          Effect.andThen(ctx.integration.reload()),
+          Effect.andThen(ctx.catalog.reload()),
+        ),
+      ),
+      Effect.forkScoped({ startImmediately: true }),
+    )
   }),
 })

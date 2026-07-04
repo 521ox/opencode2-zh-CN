@@ -2,7 +2,7 @@ export * as ConfigAgentPlugin from "./agent"
 
 import { define } from "../../plugin/internal"
 import path from "path"
-import { Effect, Option, Schema } from "effect"
+import { Effect, Option, Schema, Stream } from "effect"
 import { AgentV2 } from "../../agent"
 import { Config } from "../../config"
 import { ConfigAgent } from "../agent"
@@ -38,31 +38,34 @@ export const Plugin = define({
   effect: Effect.fn(function* (ctx) {
     const config = yield* Config.Service
     const fs = yield* FSUtil.Service
-    const documents = yield* Effect.forEach(yield* config.entries(), (entry) => {
-      if (entry.type === "document") return Effect.succeed([entry])
-      return Effect.gen(function* () {
-        const files = yield* discover(fs, entry.path)
-        return yield* Effect.forEach(files, (file) =>
-          fs.readFileStringSafe(file.filepath).pipe(
-            Effect.map((content) => content && decode(file, content)),
-            Effect.catch(() => Effect.succeed(undefined)),
-          ),
-        ).pipe(
-          Effect.map((documents) =>
-            documents.filter((document): document is Config.Document => document !== undefined),
-          ),
-        )
-      })
-    }).pipe(Effect.map((documents) => documents.flat()))
-    const global = documents.flatMap((document) => document.info.permissions ?? [])
-    const configuredDefault = Config.latest(documents, "default_agent")
+    const load = Effect.fn("ConfigAgentPlugin.load")(function* () {
+      return yield* Effect.forEach(yield* config.entries(), (entry) => {
+        if (entry.type === "document") return Effect.succeed([entry])
+        return Effect.gen(function* () {
+          const files = yield* discover(fs, entry.path)
+          return yield* Effect.forEach(files, (file) =>
+            fs.readFileStringSafe(file.filepath).pipe(
+              Effect.map((content) => content && decode(file, content)),
+              Effect.catch(() => Effect.succeed(undefined)),
+            ),
+          ).pipe(
+            Effect.map((documents) =>
+              documents.filter((document): document is Config.Document => document !== undefined),
+            ),
+          )
+        })
+      }).pipe(Effect.map((documents) => documents.flat()))
+    })
+    const loaded = { documents: yield* load() }
     yield* ctx.agent.transform((draft) => {
+      const global = loaded.documents.flatMap((document) => document.info.permissions ?? [])
+      const configuredDefault = Config.latest(loaded.documents, "default_agent")
       if (configuredDefault !== undefined) draft.default(AgentV2.ID.make(configuredDefault))
       for (const current of draft.list()) {
         draft.update(current.id, (agent) => agent.permissions.push(...global))
       }
 
-      for (const document of documents) {
+      for (const document of loaded.documents) {
         for (const [id, item] of Object.entries(document.info.agents ?? {})) {
           const agentID = AgentV2.ID.make(id)
           if (item.disabled) {
@@ -95,6 +98,16 @@ export const Plugin = define({
         }
       }
     })
+    yield* ctx.event.subscribe().pipe(
+      Stream.filter((event) => event.type === "config.updated"),
+      Stream.runForEach(() =>
+        load().pipe(
+          Effect.tap((documents) => Effect.sync(() => (loaded.documents = documents))),
+          Effect.andThen(ctx.agent.reload()),
+        ),
+      ),
+      Effect.forkScoped({ startImmediately: true }),
+    )
   }),
 })
 
