@@ -23,7 +23,10 @@ export type ExecuteInput = {
 export interface Interface {
   readonly materialize: (input: MaterializeInput) => Effect.Effect<Materialization>
   /** Internal registration capability exposed publicly only through Tools.Service. */
-  readonly register: (tools: Readonly<Record<string, AnyTool>>) => Effect.Effect<void, RegistrationError, Scope.Scope>
+  readonly register: (
+    tools: Readonly<Record<string, AnyTool>>,
+    options?: Tools.RegisterOptions,
+  ) => Effect.Effect<void, RegistrationError, Scope.Scope>
 }
 
 export interface MaterializeInput {
@@ -49,7 +52,13 @@ const registryLayer = Layer.effect(
   Effect.gen(function* () {
     const resources = yield* ToolOutputStore.Service
     const toolHooks = yield* ToolHooks.Service
-    type Registration = { readonly identity: object; readonly tool: AnyTool }
+    type Registration = {
+      readonly identity: object
+      readonly tool: AnyTool
+      readonly name: string
+      readonly group?: string
+      readonly deferred: boolean
+    }
     const local = new Map<string, Array<{ readonly token: object; readonly registration: Registration }>>()
 
     const settleWith = Effect.fn("ToolRegistry.settle")(function* (input: ExecuteInput, advertised?: object) {
@@ -73,12 +82,16 @@ const registryLayer = Layer.effect(
         input: input.call.input,
       }
       yield* toolHooks.runBefore(beforeEvent)
-      const pending = yield* settle(registration.tool, { ...input.call, input: beforeEvent.input }, {
-        sessionID: input.sessionID,
-        agent: input.agent,
-        assistantMessageID: input.assistantMessageID,
-        toolCallID: input.call.id,
-      }).pipe(
+      const pending = yield* settle(
+        registration.tool,
+        { ...input.call, input: beforeEvent.input },
+        {
+          sessionID: input.sessionID,
+          agent: input.agent,
+          assistantMessageID: input.assistantMessageID,
+          toolCallID: input.call.id,
+        },
+      ).pipe(
         Effect.map((output) => ({ output })),
         Effect.catchTag("LLM.ToolFailure", (failure) =>
           Effect.succeed({ result: { type: "error" as const, value: failure.message } }),
@@ -88,7 +101,11 @@ const registryLayer = Layer.effect(
       if ("result" in pending) {
         settlement = pending
       } else {
-        const bounded = yield* resources.bound({ sessionID: input.sessionID, toolCallID: input.call.id, output: pending.output })
+        const bounded = yield* resources.bound({
+          sessionID: input.sessionID,
+          toolCallID: input.call.id,
+          output: pending.output,
+        })
         const result = ToolOutput.toResultValue(bounded.output)
         settlement =
           result.type === "error"
@@ -119,20 +136,33 @@ const registryLayer = Layer.effect(
     })
 
     return Service.of({
-      register: Effect.fn("ToolRegistry.register")(function* (tools) {
-        const entries = registrationEntries(tools)
+      register: Effect.fn("ToolRegistry.register")(function* (tools, options) {
+        const entries = registrationEntries(tools, options?.group)
         if (entries.length === 0) return
         yield* Effect.uninterruptible(
           Effect.gen(function* () {
             const token = {}
-            for (const [name, tool] of entries)
-              local.set(name, [...(local.get(name) ?? []), { token, registration: { identity: {}, tool } }])
+            for (const entry of entries)
+              local.set(entry.key, [
+                ...(local.get(entry.key) ?? []),
+                {
+                  token,
+                  registration: {
+                    identity: {},
+                    tool: entry.tool,
+                    name: entry.name,
+                    group: entry.group,
+                    deferred: options?.deferred ?? false,
+                  },
+                },
+              ])
             yield* Effect.addFinalizer(() =>
               Effect.sync(() => {
-                for (const [name] of entries) {
-                  const registrations = local.get(name)?.filter((registration) => registration.token !== token) ?? []
-                  if (registrations.length > 0) local.set(name, registrations)
-                  else local.delete(name)
+                for (const entry of entries) {
+                  const registrations =
+                    local.get(entry.key)?.filter((registration) => registration.token !== token) ?? []
+                  if (registrations.length > 0) local.set(entry.key, registrations)
+                  else local.delete(entry.key)
                 }
               }),
             )
@@ -149,7 +179,11 @@ const registryLayer = Layer.effect(
         const usePatch = input.model.provider.toLowerCase() === "openai" || input.model.id.toLowerCase().includes("gpt")
         for (const [name, registration] of registrations) {
           const wrongEditTool = name === "apply_patch" ? !usePatch : (name === "edit" || name === "write") && usePatch
-          if (wrongEditTool || whollyDisabled(permission(registration.tool, name), input.permissions ?? []))
+          if (
+            registration.deferred ||
+            wrongEditTool ||
+            whollyDisabled(permission(registration.tool, name), input.permissions ?? [])
+          )
             registrations.delete(name)
         }
         return {

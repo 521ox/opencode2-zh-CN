@@ -126,6 +126,38 @@ describe("PluginV2", () => {
     }),
   )
 
+  it.effect("groups tool names and defers registrations from direct exposure", () =>
+    Effect.gen(function* () {
+      const plugins = yield* PluginV2.Service
+      const registry = yield* ToolRegistry.Service
+      const tool = (description: string) =>
+        Tool.make({
+          description,
+          input: Schema.Struct({}),
+          output: Schema.Struct({ ok: Schema.Boolean }),
+          execute: () => Effect.succeed({ ok: true }),
+        })
+      const plugin = define({
+        id: "grouped-tools",
+        effect: (ctx) =>
+          Effect.gen(function* () {
+            yield* ctx.tool.register({ plain: tool("Plain") }).pipe(Effect.orDie)
+            yield* ctx.tool.register({ "look/up": tool("Lookup") }, { group: "context 7" }).pipe(Effect.orDie)
+            yield* ctx.tool
+              .register({ search: tool("Search") }, { group: "context 7", deferred: true })
+              .pipe(Effect.orDie)
+          }),
+      })
+
+      yield* plugins.add(PluginV2.ID.make(plugin.id), plugin.effect)
+
+      expect((yield* registry.materialize({ model: testModel })).definitions.map((tool) => tool.name)).toEqual([
+        "plain",
+        "context_7_look_up",
+      ])
+    }),
+  )
+
   it.effect("fires before/after tool hooks with mutable events around settlement", () =>
     Effect.gen(function* () {
       const plugins = yield* PluginV2.Service

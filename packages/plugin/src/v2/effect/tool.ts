@@ -186,8 +186,17 @@ export const validateName = (name: string) =>
     ? Effect.void
     : Effect.fail(new RegistrationError({ name, message: `Invalid tool name: ${name}` }))
 
-export const registrationEntries = (tools: Readonly<Record<string, AnyTool>>) =>
-  Object.entries(tools).map(([name, tool]) => [name.replace(/[^a-zA-Z0-9_-]/g, "_"), tool] as const)
+export const registrationEntries = (tools: Readonly<Record<string, AnyTool>>, group?: string) =>
+  Object.entries(tools).map(([name, tool]) => {
+    const normalized = name.replace(/[^a-zA-Z0-9_-]/g, "_")
+    const parent = group?.replace(/[^a-zA-Z0-9_-]/g, "_")
+    return {
+      key: parent === undefined ? normalized : `${parent}_${normalized}`,
+      name: normalized,
+      group: parent,
+      tool,
+    }
+  })
 
 export const withPermission = <Input extends SchemaType<any>, Output extends SchemaType<any>>(
   tool: Definition<Input, Output>,
@@ -235,7 +244,15 @@ export interface ToolExecuteAfterEvent {
   outputPaths?: ReadonlyArray<string>
 }
 
+export interface RegisterOptions {
+  readonly group?: string
+  readonly deferred?: boolean
+}
+
 export interface ToolDomain {
-  readonly register: (tools: Readonly<Record<string, AnyTool>>) => Effect.Effect<void, RegistrationError, Scope.Scope>
+  readonly register: (
+    tools: Readonly<Record<string, AnyTool>>,
+    options?: RegisterOptions,
+  ) => Effect.Effect<void, RegistrationError, Scope.Scope>
   readonly execute: Hooks<{ before: ToolExecuteBeforeEvent; after: ToolExecuteAfterEvent }>
 }
