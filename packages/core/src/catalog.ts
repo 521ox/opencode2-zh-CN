@@ -1,12 +1,11 @@
 export * as Catalog from "./catalog"
 
 import { makeLocationNode } from "./effect/app-node"
-import { Array, Context, Effect, Layer, Option, Order, pipe, Schema } from "effect"
+import { Array, Context, Effect, Layer, Option, Order, pipe } from "effect"
 import { Catalog } from "@opencode-ai/schema/catalog"
 import { ModelV2 } from "./model"
 import { ProviderV2 } from "./provider"
 import { EventV2 } from "./event"
-import { Policy } from "./policy"
 import { State } from "./state"
 import { Integration } from "./integration"
 
@@ -16,8 +15,6 @@ export type ProviderRecord = {
 }
 
 export type DefaultModel = { providerID: ProviderV2.ID; modelID: ModelV2.ID }
-
-export const PolicyActions = Schema.Literals(["provider.use"])
 
 export const Event = Catalog.Event
 
@@ -65,7 +62,6 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const events = yield* EventV2.Service
-    const policy = yield* Policy.Service
     const integrations = yield* Integration.Service
 
     const available = (provider: ProviderV2.Info, integration: Integration.Info | undefined) => {
@@ -159,13 +155,6 @@ const layer = Layer.effect(
         return result
       },
       finalize: Effect.fn("CatalogV2.finalize")(function* (catalog) {
-        if (policy.hasStatements()) {
-          for (const record of [...catalog.provider.list()]) {
-            if ((yield* policy.evaluate("provider.use", record.provider.id, "allow")) === "deny") {
-              catalog.provider.remove(record.provider.id)
-            }
-          }
-        }
         yield* events.publish(Event.Updated, {})
       }),
     })
@@ -294,4 +283,4 @@ const layer = Layer.effect(
 
 const SMALL_MODEL_RE = /\b(nano|flash|lite|mini|haiku|small|fast)\b/
 
-export const node = makeLocationNode({ service: Service, layer, deps: [EventV2.node, Policy.node, Integration.node] })
+export const node = makeLocationNode({ service: Service, layer, deps: [EventV2.node, Integration.node] })

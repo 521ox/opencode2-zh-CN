@@ -8,7 +8,9 @@ import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { EventV2 } from "@opencode-ai/core/event"
 import { FSUtil } from "@opencode-ai/core/fs-util"
+import { LocationWatcher } from "@opencode-ai/core/filesystem/location-watcher"
 import { Watcher } from "@opencode-ai/core/filesystem/watcher"
+import { FileSystem } from "@opencode-ai/schema/filesystem"
 import { Location } from "@opencode-ai/core/location"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { location } from "../fixture/location"
@@ -34,7 +36,7 @@ function provide(directory: string, vcs?: Location.Interface["vcs"]) {
     Location.Service.of(location({ directory: AbsolutePath.make(directory) }, { vcs })),
   )
   return Effect.provide(
-    AppNodeBuilder.build(Watcher.node, [
+    AppNodeBuilder.build(LocationWatcher.node, [
       [Config.node, configLayer],
       [Location.node, locationLayer],
     ]),
@@ -66,7 +68,7 @@ function wait(check: (event: WatcherEvent) => boolean) {
   return Effect.gen(function* () {
     const events = yield* EventV2.Service
     const deferred = yield* Deferred.make<WatcherEvent>()
-    const fiber = yield* events.subscribe(Watcher.Event.Updated).pipe(
+    const fiber = yield* events.subscribe(FileSystem.Event.Changed).pipe(
       Stream.runForEach((event) => {
         if (!check(event.data)) return Effect.void
         return Deferred.succeed(deferred, event.data).pipe(Effect.asVoid)
@@ -136,7 +138,27 @@ function ready(directory: string) {
   })
 }
 
-describeWatcher("Watcher", () => {
+describeWatcher("LocationWatcher", () => {
+  it.live("limits file watches to the exact target", () =>
+    withTmp((directory) =>
+      Effect.gen(function* () {
+        const fs = yield* FSUtil.Service
+        const watcher = yield* Watcher.Service
+        const target = path.join(directory, "opencode.json")
+        const sibling = path.join(directory, "other.json")
+        const update = yield* watcher
+          .subscribe({ path: target, type: "file" })
+          .pipe(Stream.take(1), Stream.runHead, Effect.forkScoped({ startImmediately: true }))
+        yield* Effect.yieldNow
+
+        yield* fs.writeFileString(sibling, "sibling")
+        yield* fs.writeFileString(target, "target")
+
+        expect((yield* Fiber.join(update)).valueOrUndefined?.path).toBe(target)
+      }).pipe(Effect.provide(AppNodeBuilder.build(Watcher.node))),
+    ),
+  )
+
   it.live("publishes root create, update, and delete events", () =>
     withTmp(
       (directory) =>

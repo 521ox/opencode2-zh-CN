@@ -1,6 +1,7 @@
 import type {
   AgentApi as EffectAgentApi,
   CommandApi as EffectCommandApi,
+  EventApi as EffectEventApi,
   IntegrationApi as EffectIntegrationApi,
   ModelApi as EffectModelApi,
   PluginApi as EffectPluginApi,
@@ -25,6 +26,7 @@ type PromisifyApi<Api> = {
 
 export type AgentApi = PromisifyApi<EffectAgentApi<unknown>>
 export type CommandApi = PromisifyApi<EffectCommandApi<unknown>>
+export type EventApi = PromisifyApi<EffectEventApi<unknown>>
 export type IntegrationApi = PromisifyApi<EffectIntegrationApi<unknown>>
 export type ModelApi = PromisifyApi<EffectModelApi<unknown>>
 export type PluginApi = PromisifyApi<EffectPluginApi<unknown>>

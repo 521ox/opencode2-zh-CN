@@ -51,27 +51,18 @@ describe("LocationServiceMap", () => {
     ),
   )
 
-  it.live("isolates location state while sharing location policy with catalog", () =>
+  it.live("isolates catalog state by location", () =>
     Effect.acquireRelease(
       Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
       (dirs) => Effect.promise(() => Promise.all(dirs.map((dir) => dir[Symbol.asyncDispose]())).then(() => undefined)),
     ).pipe(
       Effect.flatMap(([blocked, allowed]) =>
         Effect.gen(function* () {
-          yield* Effect.promise(() =>
-            fs.writeFile(
-              path.join(blocked.path, "opencode.json"),
-              JSON.stringify({
-                experimental: { policies: [{ effect: "deny", action: "provider.use", resource: "test" }] },
-              }),
-            ),
-          )
-
-          const update = (directory: string) =>
+          const update = (directory: string, providerID: ProviderV2.ID) =>
             Effect.gen(function* () {
               yield* Reference.Service
               const catalog = yield* Catalog.Service
-              yield* catalog.transform((editor) => editor.provider.update(ProviderV2.ID.make("test"), () => {}))
+              yield* catalog.transform((editor) => editor.provider.update(providerID, () => {}))
               const registry = yield* ToolRegistry.Service
               // Tool plugins register during the forked PluginInternal boot; wait for
               // every expected tool rather than relying on batch ordering.
@@ -103,8 +94,11 @@ describe("LocationServiceMap", () => {
               ),
             )
 
-          const blockedState = yield* update(blocked.path)
-          expect(blockedState.providers.some((provider) => provider.id === ProviderV2.ID.make("test"))).toBe(false)
+          const blockedID = ProviderV2.ID.make("blocked-location")
+          const allowedID = ProviderV2.ID.make("allowed-location")
+          const blockedState = yield* update(blocked.path, blockedID)
+          expect(blockedState.providers.some((provider) => provider.id === blockedID)).toBe(true)
+          expect(blockedState.providers.some((provider) => provider.id === allowedID)).toBe(false)
           expect(blockedState.tools.map((tool) => tool.name).sort()).toEqual([
             "edit",
             "glob",
@@ -119,8 +113,9 @@ describe("LocationServiceMap", () => {
             "websearch",
             "write",
           ])
-          const allowedState = yield* update(allowed.path)
-          expect(allowedState.providers.some((provider) => provider.id === ProviderV2.ID.make("test"))).toBe(true)
+          const allowedState = yield* update(allowed.path, allowedID)
+          expect(allowedState.providers.some((provider) => provider.id === allowedID)).toBe(true)
+          expect(allowedState.providers.some((provider) => provider.id === blockedID)).toBe(false)
           expect(allowedState.tools.map((tool) => tool.name).sort()).toEqual([
             "edit",
             "glob",

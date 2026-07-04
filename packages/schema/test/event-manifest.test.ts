@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
   Agent,
+  Config,
   FileSystem,
   Form,
   Integration,
@@ -11,6 +12,7 @@ import {
   Workspace,
 } from "../src/index.js"
 import { EventManifest } from "../src/event-manifest.js"
+import { FileSystemV1 } from "../src/filesystem-v1.js"
 import { IdeEvent } from "../src/ide-event.js"
 import { McpEvent } from "../src/mcp-event.js"
 import { SessionEvent } from "../src/session-event.js"
@@ -59,7 +61,9 @@ describe("public event manifest", () => {
     expect(EventManifest.Latest.get("project.updated")).toBe(Project.Event.Updated)
     expect(Agent.Event.Definitions).toEqual([Agent.Event.Updated])
     expect(Project.Event.Definitions).toEqual([Project.Event.Updated])
-    expect(FileSystem.Event.Definitions).toEqual([FileSystem.Event.Edited])
+    expect(Config.Event.Definitions).toEqual([Config.Event.Updated])
+    expect(FileSystem.Event.Definitions).toEqual([FileSystem.Event.Changed])
+    expect(FileSystemV1.Event.Definitions).toEqual([FileSystemV1.Event.Edited])
     expect(Integration.Event.Definitions).toEqual([Integration.Event.Updated, Integration.Event.ConnectionUpdated])
     expect(Permission.Event.Definitions).toEqual([Permission.Event.Asked, Permission.Event.Replied])
     expect(Form.Event.Definitions).toEqual([Form.Event.Created, Form.Event.Replied, Form.Event.Cancelled])

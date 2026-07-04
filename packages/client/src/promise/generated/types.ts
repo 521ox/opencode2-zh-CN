@@ -4923,9 +4923,9 @@ export type EventSubscribeOutput =
       readonly id: string
       readonly created: number
       readonly metadata?: { readonly [x: string]: unknown }
-      readonly type: "file.edited"
+      readonly type: "filesystem.changed"
       readonly location?: { readonly directory: string; readonly workspaceID?: string }
-      readonly data: { readonly file: string }
+      readonly data: { readonly file: string; readonly event: "add" | "change" | "unlink" }
     }
   | {
       readonly id: string
@@ -4991,7 +4991,7 @@ export type EventSubscribeOutput =
       readonly id: string
       readonly created: number
       readonly metadata?: { readonly [x: string]: unknown }
-      readonly type: "skill.updated"
+      readonly type: "config.updated"
       readonly location?: { readonly directory: string; readonly workspaceID?: string }
       readonly data: {}
     }
@@ -4999,9 +4999,9 @@ export type EventSubscribeOutput =
       readonly id: string
       readonly created: number
       readonly metadata?: { readonly [x: string]: unknown }
-      readonly type: "file.watcher.updated"
+      readonly type: "skill.updated"
       readonly location?: { readonly directory: string; readonly workspaceID?: string }
-      readonly data: { readonly file: string; readonly event: "add" | "change" | "unlink" }
+      readonly data: {}
     }
   | {
       readonly id: string

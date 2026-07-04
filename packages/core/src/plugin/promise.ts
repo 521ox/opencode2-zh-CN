@@ -2,7 +2,7 @@ export * as PluginPromise from "./promise"
 
 import { define } from "@opencode-ai/plugin/v2/effect"
 import type { Plugin, PluginContext } from "@opencode-ai/plugin/v2/promise"
-import { Effect, Scope } from "effect"
+import { Effect, Scope, Stream } from "effect"
 
 type HostRegistration = { readonly dispose: Effect.Effect<void> }
 type Registration = { readonly dispose: () => Promise<void> }
@@ -72,6 +72,9 @@ export function fromPromise(plugin: Plugin) {
             list: (input) => run(host.command.list(input)),
             transform: transform(host.command),
             reload: () => run(host.command.reload()),
+          },
+          event: {
+            subscribe: () => Stream.toAsyncIterable(host.event.subscribe()),
           },
           integration: {
             list: (input) => run(host.integration.list(input)),

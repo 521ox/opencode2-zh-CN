@@ -8,7 +8,6 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { EventV2 } from "@opencode-ai/core/event"
 import { Location } from "@opencode-ai/core/location"
 import { ModelV2 } from "@opencode-ai/core/model"
-import { Policy } from "@opencode-ai/core/policy"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { location } from "./fixture/location"
@@ -24,7 +23,7 @@ const locationLayer = Layer.succeed(
   Location.Service.of(location({ directory: AbsolutePath.make("test") })),
 )
 const catalogLayer = AppNodeBuilder.build(
-  LayerNode.group([Catalog.node, EventV2.node, Credential.node, Integration.node, Policy.node]),
+  LayerNode.group([Catalog.node, EventV2.node, Credential.node, Integration.node]),
   [[Location.node, locationLayer]],
 )
 const it = testEffect(catalogLayer)
@@ -331,23 +330,6 @@ describe("CatalogV2", () => {
       })
 
       expect((yield* catalog.model.small(providerID))?.id).toMatch("expensive-mini")
-    }),
-  )
-
-  it.effect("removes providers denied by policy after loading", () =>
-    Effect.gen(function* () {
-      const catalog = yield* Catalog.Service
-      const policy = yield* Policy.Service
-      const providerID = ProviderV2.ID.make("blocked")
-      yield* policy.load([new Policy.Info({ effect: "deny", action: "provider.use", resource: "blocked" })])
-      yield* catalog.transform((catalog) => {
-        catalog.provider.update(providerID, () => {})
-        catalog.model.update(providerID, ModelV2.ID.make("model"), () => {})
-      })
-
-      expect(yield* catalog.provider.all()).toEqual([])
-      expect(yield* catalog.model.all()).toEqual([])
-      expect(yield* catalog.provider.get(providerID)).toBeUndefined()
     }),
   )
 })

@@ -58,15 +58,15 @@ export type Event =
   | EventSessionError
   | EventInstallationUpdated
   | EventInstallationUpdateAvailable
-  | EventFileEdited
+  | EventFilesystemChanged
   | EventReferenceUpdated
   | EventPermissionV2Asked
   | EventPermissionV2Replied
   | EventPluginAdded
   | EventProjectDirectoriesUpdated
   | EventCommandUpdated
+  | EventConfigUpdated
   | EventSkillUpdated
-  | EventFileWatcherUpdated
   | EventPtyCreated
   | EventPtyUpdated
   | EventPtyExited
@@ -91,6 +91,7 @@ export type Event =
   | EventMcpToolsChanged
   | EventMcpStatusChanged
   | EventCommandExecuted
+  | EventFileEdited
   | EventProjectUpdated
   | EventSessionStatus
   | EventSessionIdle
@@ -1280,9 +1281,10 @@ export type GlobalEvent = {
       }
     | {
         id: string
-        type: "file.edited"
+        type: "filesystem.changed"
         properties: {
           file: string
+          event: "add" | "change" | "unlink"
         }
       }
     | {
@@ -1339,17 +1341,16 @@ export type GlobalEvent = {
       }
     | {
         id: string
-        type: "skill.updated"
+        type: "config.updated"
         properties: {
           [key: string]: unknown
         }
       }
     | {
         id: string
-        type: "file.watcher.updated"
+        type: "skill.updated"
         properties: {
-          file: string
-          event: "add" | "change" | "unlink"
+          [key: string]: unknown
         }
       }
     | {
@@ -1574,6 +1575,13 @@ export type GlobalEvent = {
           sessionID: string
           arguments: string
           messageID: string
+        }
+      }
+    | {
+        id: string
+        type: "file.edited"
+        properties: {
+          file: string
         }
       }
     | {
@@ -2123,7 +2131,6 @@ export type Config = {
     primary_tools?: Array<string>
     continue_loop_on_deny?: boolean
     mcp_timeout?: number
-    policies?: Array<ConfigV2ExperimentalPolicy>
   }
 }
 
@@ -3059,15 +3066,15 @@ export type V2Event =
   | SessionError
   | InstallationUpdated
   | InstallationUpdateAvailable
-  | FileEdited
+  | FilesystemChanged
   | ReferenceUpdated
   | PermissionV2Asked
   | PermissionV2Replied
   | PluginAdded
   | ProjectDirectoriesUpdated
   | CommandUpdated
+  | ConfigUpdated
   | SkillUpdated
-  | FileWatcherUpdated
   | PtyCreated
   | PtyUpdated
   | PtyExited
@@ -3092,6 +3099,7 @@ export type V2Event =
   | McpToolsChanged
   | McpStatusChanged
   | CommandExecuted
+  | FileEdited
   | ProjectUpdated
   | SessionStatus2
   | SessionIdle
@@ -4165,14 +4173,6 @@ export type ConfigV2ReferenceLocal = {
   path: string
   description?: string
   hidden?: boolean
-}
-
-export type PolicyEffect = "allow" | "deny"
-
-export type ConfigV2ExperimentalPolicy = {
-  action: "provider.use"
-  effect: PolicyEffect
-  resource: string
 }
 
 export type ProjectDirectory = {
@@ -5880,16 +5880,17 @@ export type InstallationUpdateAvailable = {
   }
 }
 
-export type FileEdited = {
+export type FilesystemChanged = {
   id: string
   created: number
   metadata?: {
     [key: string]: unknown
   }
-  type: "file.edited"
+  type: "filesystem.changed"
   location?: LocationRef
   data: {
     file: string
+    event: "add" | "change" | "unlink"
   }
 }
 
@@ -5981,6 +5982,19 @@ export type CommandUpdated = {
   }
 }
 
+export type ConfigUpdated = {
+  id: string
+  created: number
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "config.updated"
+  location?: LocationRef
+  data: {
+    [key: string]: unknown
+  }
+}
+
 export type SkillUpdated = {
   id: string
   created: number
@@ -5991,20 +6005,6 @@ export type SkillUpdated = {
   location?: LocationRef
   data: {
     [key: string]: unknown
-  }
-}
-
-export type FileWatcherUpdated = {
-  id: string
-  created: number
-  metadata?: {
-    [key: string]: unknown
-  }
-  type: "file.watcher.updated"
-  location?: LocationRef
-  data: {
-    file: string
-    event: "add" | "change" | "unlink"
   }
 }
 
@@ -6405,6 +6405,19 @@ export type CommandExecuted = {
     sessionID: string
     arguments: string
     messageID: string
+  }
+}
+
+export type FileEdited = {
+  id: string
+  created: number
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "file.edited"
+  location?: LocationRef
+  data: {
+    file: string
   }
 }
 
@@ -7209,11 +7222,12 @@ export type EventInstallationUpdateAvailable = {
   }
 }
 
-export type EventFileEdited = {
+export type EventFilesystemChanged = {
   id: string
-  type: "file.edited"
+  type: "filesystem.changed"
   properties: {
     file: string
+    event: "add" | "change" | "unlink"
   }
 }
 
@@ -7275,20 +7289,19 @@ export type EventCommandUpdated = {
   }
 }
 
-export type EventSkillUpdated = {
+export type EventConfigUpdated = {
   id: string
-  type: "skill.updated"
+  type: "config.updated"
   properties: {
     [key: string]: unknown
   }
 }
 
-export type EventFileWatcherUpdated = {
+export type EventSkillUpdated = {
   id: string
-  type: "file.watcher.updated"
+  type: "skill.updated"
   properties: {
-    file: string
-    event: "add" | "change" | "unlink"
+    [key: string]: unknown
   }
 }
 
@@ -7505,6 +7518,14 @@ export type EventCommandExecuted = {
     sessionID: string
     arguments: string
     messageID: string
+  }
+}
+
+export type EventFileEdited = {
+  id: string
+  type: "file.edited"
+  properties: {
+    file: string
   }
 }
 
@@ -10279,16 +10300,17 @@ export type SessionCompactionDelta2 = {
   }
 }
 
-export type FileEdited2 = {
+export type FilesystemChanged2 = {
   id: string
   created: number
   metadata?: {
     [key: string]: unknown
   }
-  type: "file.edited"
+  type: "filesystem.changed"
   location?: LocationRef2
   data: {
     file: string
+    event: "add" | "change" | "unlink"
   }
 }
 
@@ -10384,6 +10406,21 @@ export type CommandUpdated2 = {
     | Array<unknown>
 }
 
+export type ConfigUpdated2 = {
+  id: string
+  created: number
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "config.updated"
+  location?: LocationRef2
+  data:
+    | {
+        [key: string]: unknown
+      }
+    | Array<unknown>
+}
+
 export type SkillUpdated2 = {
   id: string
   created: number
@@ -10397,20 +10434,6 @@ export type SkillUpdated2 = {
         [key: string]: unknown
       }
     | Array<unknown>
-}
-
-export type FileWatcherUpdated2 = {
-  id: string
-  created: number
-  metadata?: {
-    [key: string]: unknown
-  }
-  type: "file.watcher.updated"
-  location?: LocationRef2
-  data: {
-    file: string
-    event: "add" | "change" | "unlink"
-  }
 }
 
 export type PtyV2 = {
@@ -11162,15 +11185,15 @@ export type V2EventV2 =
   | SessionRevertStaged2
   | SessionRevertCleared2
   | SessionRevertCommitted2
-  | FileEdited2
+  | FilesystemChanged2
   | ReferenceUpdated2
   | PermissionV2Asked2
   | PermissionV2Replied2
   | PluginAdded2
   | ProjectDirectoriesUpdated2
   | CommandUpdated2
+  | ConfigUpdated2
   | SkillUpdated2
-  | FileWatcherUpdated2
   | PtyCreated2
   | PtyUpdated2
   | PtyExited2

@@ -1,8 +1,11 @@
 import { describe, expect } from "bun:test"
-import { Effect, Exit, Fiber, Schema } from "effect"
+import { Effect, Exit, Fiber, Schema, Stream } from "effect"
 import { define } from "@opencode-ai/plugin/v2/effect"
+import { Config as ConfigSchema } from "@opencode-ai/schema/config"
 import { AgentV2 } from "@opencode-ai/core/agent"
+import { EventV2 } from "@opencode-ai/core/event"
 import { PluginV2 } from "@opencode-ai/core/plugin"
+import { PluginHost } from "@opencode-ai/core/plugin/host"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { Tool } from "@opencode-ai/core/tool/tool"
@@ -14,6 +17,24 @@ import { PluginTestLayer } from "./plugin/fixture"
 const it = testEffect(PluginTestLayer)
 
 describe("PluginV2", () => {
+  it.live("exposes public events through the plugin context", () =>
+    Effect.gen(function* () {
+      const plugins = yield* PluginV2.Service
+      const events = yield* EventV2.Service
+      const host = yield* PluginHost.make(plugins)
+      const received = yield* host.event.subscribe().pipe(
+        Stream.filter((event) => event.type === "config.updated"),
+        Stream.runHead,
+        Effect.forkScoped({ startImmediately: true }),
+      )
+      yield* Effect.sleep("10 millis")
+
+      yield* events.publish(ConfigSchema.Event.Updated, {})
+
+      expect((yield* Fiber.join(received)).valueOrUndefined?.type).toBe("config.updated")
+    }),
+  )
+
   it.effect("waits for a plugin and returns immediately once active", () =>
     Effect.gen(function* () {
       const plugins = yield* PluginV2.Service

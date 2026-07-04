@@ -10,7 +10,7 @@ import { FSUtil } from "@opencode-ai/core/fs-util"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { SkillV2 } from "@opencode-ai/core/skill"
 import { SkillDiscovery } from "@opencode-ai/core/skill/discovery"
-import { FileSystemWatcher } from "@opencode-ai/schema/filesystem-watcher"
+import { FileSystem } from "@opencode-ai/schema/filesystem"
 import { tmpdir } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 
@@ -206,7 +206,7 @@ metadata:
             waitForSkillUpdate(),
             ({ deferred }) =>
               events
-                .publish(FileSystemWatcher.Event.Updated, { file, event: "change" })
+                .publish(FileSystem.Event.Changed, { file, event: "change" })
                 .pipe(Effect.andThen(Deferred.await(deferred)), Effect.timeout("1 second")),
             ({ fiber }) => Fiber.interrupt(fiber),
           )

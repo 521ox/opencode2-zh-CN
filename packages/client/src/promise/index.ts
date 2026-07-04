@@ -3,6 +3,7 @@ export type {
   AgentApi,
   CatalogApi,
   CommandApi,
+  EventApi,
   IntegrationApi,
   ModelApi,
   PluginApi,

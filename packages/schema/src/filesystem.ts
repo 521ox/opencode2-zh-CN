@@ -5,11 +5,14 @@ import { optional } from "./schema.js"
 import { ephemeral, inventory } from "./event.js"
 import { NonNegativeInt, PositiveInt, RelativePath } from "./schema.js"
 
-const Edited = ephemeral({
-  type: "file.edited",
-  schema: { file: Schema.String },
+const Changed = ephemeral({
+  type: "filesystem.changed",
+  schema: {
+    file: Schema.String,
+    event: Schema.Literals(["add", "change", "unlink"]),
+  },
 })
-export const Event = { Edited, Definitions: inventory(Edited) }
+export const Event = { Changed, Definitions: inventory(Changed) }
 
 export interface Entry extends Schema.Schema.Type<typeof Entry> {}
 export const Entry = Schema.Struct({

@@ -8,6 +8,7 @@ export type {
   AppApi,
   CatalogApi,
   CommandApi,
+  EventApi,
   IntegrationApi,
   ModelApi,
   PluginApi,

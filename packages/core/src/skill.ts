@@ -3,7 +3,7 @@ export * as SkillV2 from "./skill"
 import { makeLocationNode } from "./effect/app-node"
 import path from "path"
 import { Context, Effect, Layer, Schema, Stream, Types } from "effect"
-import { FileSystemWatcher } from "@opencode-ai/schema/filesystem-watcher"
+import { FileSystem } from "@opencode-ai/schema/filesystem"
 import { Skill } from "@opencode-ai/schema/skill"
 import { AgentV2 } from "./agent"
 import { ConfigMarkdown } from "./config/markdown"
@@ -153,7 +153,7 @@ const layer = Layer.effect(
       yield* events.publish(Event.Updated, {}).pipe(Effect.asVoid)
     })
 
-    yield* events.subscribe(FileSystemWatcher.Event.Updated).pipe(
+    yield* events.subscribe(FileSystem.Event.Changed).pipe(
       Stream.runForEach((event) => invalidate(event.data.file)),
       Effect.forkScoped({ startImmediately: true }),
     )

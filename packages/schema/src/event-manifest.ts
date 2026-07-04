@@ -3,10 +3,11 @@ export * as EventManifest from "./event-manifest.js"
 import { Agent } from "./agent.js"
 import { Catalog } from "./catalog.js"
 import { Command } from "./command.js"
+import { Config } from "./config.js"
 import { Durable } from "./durable-event-manifest.js"
 import { Event } from "./event.js"
 import { FileSystem } from "./filesystem.js"
-import { FileSystemWatcher } from "./filesystem-watcher.js"
+import { FileSystemV1 } from "./filesystem-v1.js"
 import { Form } from "./form.js"
 import { InstallationEvent } from "./installation-event.js"
 import { Integration } from "./integration.js"
@@ -60,8 +61,8 @@ const featureDefinitions = Event.inventory(
   ...Plugin.Event.Definitions,
   ...ProjectDirectories.Event.Definitions,
   ...Command.Event.Definitions,
+  ...Config.Event.Definitions,
   ...Skill.Event.Definitions,
-  ...FileSystemWatcher.Event.Definitions,
   ...Pty.Event.Definitions,
   ...Shell.Event.Definitions,
   ...Question.Event.Definitions,
@@ -97,6 +98,7 @@ export const Definitions = Event.inventory(
   ...TuiEvent.Definitions,
   ...McpEvent.Definitions,
   ...LegacyEvent.Definitions,
+  ...FileSystemV1.Event.Definitions,
   ...Project.Event.Definitions,
   ...SessionStatusEvent.Definitions,
   ...QuestionV1.Event.Definitions,

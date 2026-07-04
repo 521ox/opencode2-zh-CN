@@ -1,12 +1,14 @@
 export * as PluginHost from "./host"
 
 import type { PluginContext } from "@opencode-ai/plugin/v2/effect"
-import { Effect, Schema } from "effect"
+import { EventManifest } from "@opencode-ai/schema/event-manifest"
+import { Effect, Schema, Stream } from "effect"
 import { AgentV2 } from "../agent"
 import { AISDK } from "../aisdk"
 import { Catalog } from "../catalog"
 import { CommandV2 } from "../command"
 import { Credential } from "../credential"
+import { EventV2 } from "../event"
 import { Integration } from "../integration"
 import { Location } from "../location"
 import { ModelV2 } from "../model"
@@ -21,12 +23,14 @@ import { ToolHooks } from "../tool/hooks"
 import { WorkspaceV2 } from "../workspace"
 
 const mutable = <T>(value: T) => value as DeepMutable<T>
+const isEvent = Schema.is(Schema.Union(EventManifest.ServerDefinitions))
 
 export const make = Effect.fn("PluginHost.make")(function* (plugin: PluginV2.Interface) {
   const agents = yield* AgentV2.Service
   const aisdk = yield* AISDK.Service
   const catalog = yield* Catalog.Service
   const commands = yield* CommandV2.Service
+  const events = yield* EventV2.Service
   const integration = yield* Integration.Service
   const location = yield* Location.Service
   const reference = yield* Reference.Service
@@ -154,6 +158,9 @@ export const make = Effect.fn("PluginHost.make")(function* (plugin: PluginV2.Int
         commands.transform((draft) => {
           callback(draft)
         }),
+    },
+    event: {
+      subscribe: () => events.live().pipe(Stream.filter(isEvent)),
     },
     integration: {
       list: () => response(integration.list()),

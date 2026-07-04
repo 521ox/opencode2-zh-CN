@@ -2,7 +2,7 @@ export * as ConfigCommandPlugin from "./command"
 
 import { define } from "../../plugin/internal"
 import path from "path"
-import { Effect, Option, Schema } from "effect"
+import { Effect, Option, Schema, Stream } from "effect"
 import { CommandV2 } from "../../command"
 import { Config } from "../../config"
 import { FSUtil } from "../../fs-util"
@@ -17,16 +17,19 @@ export const Plugin = define({
   effect: Effect.fn(function* (ctx) {
     const config = yield* Config.Service
     const fs = yield* FSUtil.Service
-    const documents = yield* Effect.forEach(yield* config.entries(), (entry) => {
-      if (entry.type === "document") return Effect.succeed([{ commands: entry.info.commands }])
-      return loadDirectory(fs, entry.path).pipe(
-        Effect.map((commands) => [
-          { commands: Object.fromEntries(commands.map((command) => [command.name, command.info])) },
-        ]),
-      )
-    }).pipe(Effect.map((documents) => documents.flat()))
+    const load = Effect.fn("ConfigCommandPlugin.load")(function* () {
+      return yield* Effect.forEach(yield* config.entries(), (entry) => {
+        if (entry.type === "document") return Effect.succeed([{ commands: entry.info.commands }])
+        return loadDirectory(fs, entry.path).pipe(
+          Effect.map((commands) => [
+            { commands: Object.fromEntries(commands.map((command) => [command.name, command.info])) },
+          ]),
+        )
+      }).pipe(Effect.map((documents) => documents.flat()))
+    })
+    const loaded = { documents: yield* load() }
     yield* ctx.command.transform((draft) => {
-      for (const document of documents) {
+      for (const document of loaded.documents) {
         for (const [name, command] of Object.entries(document.commands ?? {})) {
           draft.update(name, (item) => {
             item.template = command.template
@@ -44,6 +47,16 @@ export const Plugin = define({
         }
       }
     })
+    yield* ctx.event.subscribe().pipe(
+      Stream.filter((event) => event.type === "config.updated"),
+      Stream.runForEach(() =>
+        load().pipe(
+          Effect.tap((documents) => Effect.sync(() => (loaded.documents = documents))),
+          Effect.andThen(ctx.command.reload()),
+        ),
+      ),
+      Effect.forkScoped({ startImmediately: true }),
+    )
   }),
 })
 

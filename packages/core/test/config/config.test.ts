@@ -1,18 +1,20 @@
 import path from "path"
 import fs from "fs/promises"
 import { describe, expect } from "bun:test"
-import { Effect, Layer, Schema } from "effect"
+import { Effect, Fiber, Layer, PubSub, Schema, Stream } from "effect"
 import { FastCheck } from "effect/testing"
 import { Config } from "@opencode-ai/core/config"
+import { Config as ConfigSchema } from "@opencode-ai/schema/config"
 import { ConfigProvider } from "@opencode-ai/core/config/provider"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { ConfigMigrateV1 } from "@opencode-ai/core/v1/config/migrate"
 import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
 import { FSUtil } from "@opencode-ai/core/fs-util"
+import { Watcher } from "@opencode-ai/core/filesystem/watcher"
+import { EventV2 } from "@opencode-ai/core/event"
 import { Global } from "@opencode-ai/core/global"
 import { Location } from "@opencode-ai/core/location"
-import { Policy } from "@opencode-ai/core/policy"
 import { Project } from "@opencode-ai/core/project"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { location } from "../fixture/location"
@@ -26,6 +28,7 @@ function testLayer(
   globalDirectory = path.join(directory, "global"),
   projectDirectory = directory,
   vcs?: Project.Vcs,
+  watcher?: Layer.Layer<Watcher.Service>,
 ) {
   const locationLayer = Layer.succeed(
     Location.Service,
@@ -36,9 +39,10 @@ function testLayer(
       ),
     ),
   )
-  return AppNodeBuilder.build(LayerNode.group([Config.node, Policy.node]), [
+  return AppNodeBuilder.build(LayerNode.group([Config.node, EventV2.node]), [
     [Location.node, locationLayer],
     [Global.node, Global.layerWith({ config: globalDirectory })],
+    ...(watcher ? ([[Watcher.node, watcher]] as const) : []),
   ])
 }
 
@@ -52,6 +56,52 @@ const provider = {
 }
 
 describe("Config", () => {
+  it.live("reloads external config and publishes directory updates", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const global = path.join(tmp.path, "global")
+          const project = path.join(tmp.path, "project")
+          const file = path.join(global, "opencode.json")
+          yield* Effect.promise(async () => {
+            await fs.mkdir(global, { recursive: true })
+            await fs.mkdir(project, { recursive: true })
+            await fs.writeFile(file, JSON.stringify({ shell: "first" }))
+          })
+          const updates = yield* PubSub.unbounded<Watcher.Update>()
+          const watcher = Layer.succeed(
+            Watcher.Service,
+            Watcher.Service.of({
+              subscribe: () => Stream.fromPubSub(updates),
+            }),
+          )
+
+          return yield* Effect.gen(function* () {
+            const config = yield* Config.Service
+            const events = yield* EventV2.Service
+            const changed = yield* events
+              .subscribe(ConfigSchema.Event.Updated)
+              .pipe(Stream.take(1), Stream.runCollect, Effect.forkScoped)
+            yield* Effect.sleep("10 millis")
+
+            yield* PubSub.publish(updates, {
+              type: "update",
+              path: path.join(global, "commands", "review.md"),
+            } satisfies Watcher.Update)
+            yield* Effect.promise(() => fs.writeFile(file, JSON.stringify({ shell: "second" })))
+            yield* PubSub.publish(updates, { type: "update", path: file } satisfies Watcher.Update)
+
+            expect(yield* Fiber.join(changed)).toHaveLength(1)
+            expect(Config.latest(yield* config.entries(), "shell")).toBe("second")
+          }).pipe(Effect.provide(testLayer(project, global, project, undefined, watcher)))
+        }),
+      ),
+    ),
+  )
+
   it.effect("returns the latest defined scalar from priority-ordered documents", () =>
     Effect.sync(() => {
       const entries = [
@@ -274,7 +324,6 @@ describe("Config", () => {
           const file = path.join(tmp.path, "opencode.json")
           const contents = JSON.stringify({
             shell: "/bin/zsh",
-            experimental: { policies: [{ effect: "deny", action: "provider.use", resource: "openai" }] },
             providers: { local: provider },
           })
           yield* Effect.promise(() => fs.writeFile(file, contents))
@@ -285,11 +334,6 @@ describe("Config", () => {
 
             expect(documents[0]?.info.$schema).toBeUndefined()
             expect(documents[0]?.info.shell).toBe("/bin/zsh")
-            expect(documents[0]?.info.experimental?.policies?.[0]).toEqual({
-              effect: "deny",
-              action: "provider.use",
-              resource: "openai",
-            })
             expect(yield* Effect.promise(() => fs.readFile(file, "utf8"))).toBe(contents)
           }).pipe(Effect.provide(testLayer(tmp.path)))
         }),
@@ -720,40 +764,6 @@ describe("Config", () => {
           }).pipe(Effect.provide(testLayer(tmp.path)))
         }),
       ),
-    ),
-  )
-
-  it.live("loads policy statements in reverse config order", () =>
-    Effect.acquireRelease(
-      Effect.promise(() => tmpdir()),
-      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
-    ).pipe(
-      Effect.flatMap((tmp) => {
-        const global = path.join(tmp.path, "global")
-        return Effect.gen(function* () {
-          yield* Effect.promise(async () => {
-            await fs.mkdir(global, { recursive: true })
-            await fs.writeFile(
-              path.join(global, "opencode.json"),
-              JSON.stringify({
-                experimental: { policies: [{ effect: "deny", action: "provider.use", resource: "openai" }] },
-              }),
-            )
-            await fs.writeFile(
-              path.join(tmp.path, "opencode.json"),
-              JSON.stringify({
-                experimental: { policies: [{ effect: "allow", action: "provider.use", resource: "openai" }] },
-              }),
-            )
-          })
-
-          return yield* Effect.gen(function* () {
-            const policy = yield* Policy.Service
-
-            expect(yield* policy.evaluate("provider.use", "openai", "allow")).toBe("deny")
-          }).pipe(Effect.provide(testLayer(tmp.path, global)))
-        })
-      }),
     ),
   )
 

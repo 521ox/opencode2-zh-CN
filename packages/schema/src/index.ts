@@ -1,5 +1,6 @@
 export { Agent } from "./agent.js"
 export { Command } from "./command.js"
+export { Config } from "./config.js"
 export { Connection } from "./connection.js"
 export { Credential } from "./credential.js"
 export { Event } from "./event.js"
