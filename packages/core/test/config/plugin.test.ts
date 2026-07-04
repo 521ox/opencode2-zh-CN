@@ -1,15 +1,19 @@
+import fs from "fs/promises"
 import path from "path"
 import { describe, expect } from "bun:test"
+import { Config as ConfigSchema } from "@opencode-ai/schema/config"
 import { Effect, Schema } from "effect"
 import { AgentV2 } from "@opencode-ai/core/agent"
 import { Config } from "@opencode-ai/core/config"
 import { ConfigExternalPlugin } from "@opencode-ai/core/config/plugin/external"
+import { EventV2 } from "@opencode-ai/core/event"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Location } from "@opencode-ai/core/location"
 import { Npm } from "@opencode-ai/core/npm"
 import { PluginV2 } from "@opencode-ai/core/plugin"
 import { PluginHost } from "@opencode-ai/core/plugin/host"
 import { AbsolutePath } from "@opencode-ai/core/schema"
+import { tmpdir } from "../fixture/tmpdir"
 import { testEffect } from "../lib/effect"
 import { PluginTestLayer } from "../plugin/fixture"
 
@@ -240,6 +244,49 @@ describe("ConfigExternalPlugin", () => {
       })
     }),
   )
+
+  it.live("reloads changed plugin source from the same entrypoint", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const plugins = yield* PluginV2.Service
+          const agents = yield* AgentV2.Service
+          const events = yield* EventV2.Service
+          const fsUtil = yield* FSUtil.Service
+          const location = yield* Location.Service
+          const npm = yield* Npm.Service
+          const host = yield* PluginHost.make(plugins)
+          const plugin = path.join(tmp.path, "plugin.ts")
+          const config = Config.Service.of({
+            entries: () =>
+              Effect.succeed([
+                new Config.Document({
+                  type: "document",
+                  info: decode({ plugins: [plugin] }),
+                }),
+              ]),
+          })
+
+          yield* Effect.promise(() => fs.writeFile(plugin, pluginSource("First source")))
+          yield* ConfigExternalPlugin.Plugin.effect(host).pipe(
+            Effect.provideService(PluginV2.Service, plugins),
+            Effect.provideService(FSUtil.Service, fsUtil),
+            Effect.provideService(Location.Service, location),
+            Effect.provideService(Npm.Service, npm),
+            Effect.provideService(Config.Service, config),
+          )
+          expect((yield* waitForAgent(agents, "hot-reload"))?.description).toBe("First source")
+
+          yield* Effect.promise(() => fs.writeFile(plugin, pluginSource("Second source")))
+          yield* events.publish(ConfigSchema.Event.Updated, {})
+          expect(yield* waitForAgentDescription(agents, "hot-reload", "Second source")).toBe(true)
+        }),
+      ),
+    ),
+  )
 })
 
 const waitForAgent = Effect.fnUntraced(function* (agents: AgentV2.Interface, id: string) {
@@ -250,3 +297,29 @@ const waitForAgent = Effect.fnUntraced(function* (agents: AgentV2.Interface, id:
   }
   return yield* Effect.die(`Timed out waiting for agent ${id}`)
 })
+
+const waitForAgentDescription = Effect.fnUntraced(function* (
+  agents: AgentV2.Interface,
+  id: string,
+  description: string,
+) {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if ((yield* agents.get(AgentV2.ID.make(id)))?.description === description) return true
+    yield* Effect.sleep("10 millis")
+  }
+  return false
+})
+
+function pluginSource(description: string) {
+  return `export default {
+  id: "source-hot-reload",
+  setup: async (ctx) => {
+    await ctx.agent.transform((agents) => {
+      agents.update("hot-reload", (agent) => {
+        agent.description = ${JSON.stringify(description)}
+        agent.mode = "subagent"
+      })
+    })
+  },
+}`
+}
