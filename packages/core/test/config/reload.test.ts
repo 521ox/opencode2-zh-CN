@@ -27,7 +27,7 @@ const decode = Schema.decodeUnknownSync(Config.Info)
 const document = path.join(import.meta.dir, "opencode.json")
 
 describe("config plugin reloads", () => {
-  it.live("reloads every config-backed domain", () =>
+  it.live("reloads config-backed domains without reloading external plugins", () =>
     Effect.gen(function* () {
       const agents = yield* AgentV2.Service
       const catalog = yield* Catalog.Service
@@ -69,8 +69,7 @@ describe("config plugin reloads", () => {
             (yield* commands.get("second"))?.description === "Second command" &&
             (yield* references.list()).some((reference) => reference.name === "second") &&
             (yield* catalog.provider.get(ProviderV2.ID.make("first"))) === undefined &&
-            (yield* catalog.provider.get(ProviderV2.ID.make("second"))) !== undefined &&
-            (yield* agents.get(AgentV2.ID.make("configured")))?.description === "Second plugin"
+            (yield* catalog.provider.get(ProviderV2.ID.make("second"))) !== undefined
           )
         }),
       )
@@ -81,10 +80,7 @@ describe("config plugin reloads", () => {
       expect(
         (yield* skills.sources()).some((source) => source.type === "directory" && source.path === "/skills/second"),
       ).toBe(true)
-
-      entries = [config("second")]
-      yield* events.publish(ConfigSchema.Event.Updated, {})
-      yield* waitUntil(agents.get(AgentV2.ID.make("configured")).pipe(Effect.map((agent) => agent === undefined)))
+      expect((yield* agents.get(AgentV2.ID.make("configured")))?.description).toBe("First plugin")
     }).pipe(Effect.provideService(Global.Service, Global.Service.of(Global.make()))),
   )
 })
