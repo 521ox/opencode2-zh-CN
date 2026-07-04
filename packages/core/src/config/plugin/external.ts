@@ -3,7 +3,6 @@ export * as ConfigExternalPlugin from "./external"
 import type { Plugin as EffectPlugin } from "@opencode-ai/plugin/v2/effect"
 import type { Plugin as PromisePlugin } from "@opencode-ai/plugin/v2/promise"
 import { Effect, Schema, Stream } from "effect"
-import { createRequire } from "node:module"
 import path from "path"
 import { fileURLToPath, pathToFileURL } from "url"
 import { Config } from "../../config"
@@ -35,9 +34,6 @@ const PluginPackage = Schema.Struct({
   main: Schema.optional(Schema.String),
   module: Schema.optional(Schema.String),
 })
-
-let importGeneration = 0
-const moduleCache = createRequire(import.meta.url).cache
 
 export const Plugin = define({
   id: "config-plugin",
@@ -110,7 +106,7 @@ export const Plugin = define({
             : (yield* npm.add(ref.package)).entrypoint
           if (!entrypoint) return
           yield* Effect.log({ msg: "loading plugin", id: ref.package, entrypoint })
-          const mod = yield* Effect.promise(() => import(cacheBust(entrypoint)))
+          const mod = yield* Effect.promise(() => import(entrypoint))
           const value = (yield* Schema.decodeUnknownEffect(PluginModule)(mod)).default
           const plugin = "effect" in value ? value : PluginPromise.fromPromise(value)
           return {
@@ -118,11 +114,7 @@ export const Plugin = define({
             effect: (host: Parameters<typeof plugin.effect>[0]) =>
               plugin.effect({ ...host, options: ref.options ?? {} }),
           }
-        }).pipe(
-          Effect.catchCause((cause) =>
-            Effect.logError("failed to load plugin", { package: ref.package, cause }).pipe(Effect.as(undefined)),
-          ),
-        ),
+        }).pipe(Effect.catchCause(() => Effect.succeed(undefined))),
       ).pipe(Effect.map((plugins) => plugins.filter((plugin) => plugin !== undefined)))
     })
     const reconcile = Effect.fn("ConfigExternalPlugin.reconcile")(function* () {
@@ -144,13 +136,6 @@ export const Plugin = define({
     )
   }),
 })
-
-function cacheBust(entrypoint: string) {
-  const url = path.isAbsolute(entrypoint) ? pathToFileURL(entrypoint) : new URL(entrypoint)
-  if (url.protocol === "file:") delete moduleCache[fileURLToPath(url)]
-  url.searchParams.set("opencode-reload", String(++importGeneration))
-  return url.href
-}
 
 const resolvePackageEntrypoint = Effect.fnUntraced(function* (fs: FSUtil.Interface, directory: string) {
   const pkg = yield* fs.readJson(path.join(directory, "package.json")).pipe(
