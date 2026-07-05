@@ -43,7 +43,7 @@ export const toModelOutput = (
 }
 
 export const Plugin = {
-  id: "core-question-tool",
+  id: "opencode.tool.question",
   effect: Effect.fn("QuestionTool.Plugin")(function* (ctx: PluginContext) {
     const question = yield* QuestionV2.Service
     const permission = yield* PermissionV2.Service
