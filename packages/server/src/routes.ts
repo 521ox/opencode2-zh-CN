@@ -3,6 +3,7 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { httpClient } from "@opencode-ai/core/effect/app-node-platform"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { EventV2 } from "@opencode-ai/core/event"
+import { EventLogger } from "@opencode-ai/core/event-logger"
 import { Credential } from "@opencode-ai/core/credential"
 import { PermissionSaved } from "@opencode-ai/core/permission/saved"
 import { PtyTicket } from "@opencode-ai/core/pty/ticket"
@@ -31,6 +32,7 @@ import { sessionLocationLayer } from "./middleware/session-location"
 const applicationServices = LayerNode.group([
   Database.node,
   EventV2.node,
+  EventLogger.node,
   httpClient,
   ToolOutputStore.cleanupNode,
   Job.node,
