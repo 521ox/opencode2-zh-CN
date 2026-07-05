@@ -530,6 +530,7 @@
     },
     "packages/httpapi-codegen": {
       "name": "@opencode-ai/httpapi-codegen",
+      "version": "0.0.0",
       "dependencies": {
         "effect": "catalog:",
         "prettier": "3.6.2",
