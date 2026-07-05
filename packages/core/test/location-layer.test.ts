@@ -2,6 +2,7 @@ import fs from "fs/promises"
 import path from "path"
 import { describe, expect } from "bun:test"
 import { Config } from "@opencode-ai/schema/config"
+import { Plugin } from "@opencode-ai/schema/plugin"
 import { Context, DateTime, Effect, Equal, Hash, Schema, Stream } from "effect"
 import { define } from "@opencode-ai/plugin/v2/effect"
 import { AgentV2 } from "@opencode-ai/core/agent"
@@ -50,7 +51,7 @@ describe("LocationServiceMap", () => {
             ),
           )
 
-          expect(plugins.map((plugin) => plugin.id)).toEqual([PluginV2.ID.make("opencode.agent")])
+          expect(plugins.map((plugin) => plugin.id)).toEqual([Plugin.ID.make("opencode.agent")])
         }),
       ),
     ),
@@ -377,7 +378,7 @@ describe("LocationServiceMap", () => {
                 })
                 .pipe(Effect.asVoid),
           })
-          yield* plugins.activate([{ id: PluginV2.ID.make(reviewer.id), effect: reviewer.effect }])
+          yield* plugins.activate([{ plugin: reviewer }])
 
           expect(yield* (yield* AgentV2.Service).get(AgentV2.ID.make("reviewer"))).toMatchObject({
             description: "Reviews code",

@@ -1,8 +1,9 @@
 export * as PluginV2 from "./plugin"
 
+import type { Plugin } from "@opencode-ai/plugin/v2/effect"
+import { Event, ID, type Info } from "@opencode-ai/schema/plugin"
 import { makeLocationNode } from "./effect/app-node"
 import { Context, Effect, Exit, Layer, Scope, Semaphore } from "effect"
-import { Plugin } from "@opencode-ai/schema/plugin"
 import { AgentV2 } from "./agent"
 import { AISDK } from "./aisdk"
 import { Catalog } from "./catalog"
@@ -18,14 +19,8 @@ import { State } from "./state"
 import { ToolRegistry } from "./tool/registry"
 import { ToolHooks } from "./tool/hooks"
 
-export const ID = Plugin.ID
-export type ID = typeof ID.Type
-export const Info = Plugin.Info
-export type Info = Plugin.Info
-export const Event = Plugin.Event
-
 export interface Interface {
-  readonly activate: (plugins: readonly import("@opencode-ai/plugin/v2/effect").Plugin[]) => Effect.Effect<void>
+  readonly activate: (plugins: readonly { readonly plugin: Plugin; readonly version?: string }[]) => Effect.Effect<void>
   readonly list: () => Effect.Effect<Info[]>
 }
 
@@ -36,16 +31,20 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const events = yield* EventV2.Service
     const scope = yield* Scope.make()
-    const active = new Map<ID, Scope.Closeable>()
+    const active = new Map<typeof ID.Type, Scope.Closeable>()
     const lock = Semaphore.makeUnsafe(1)
-    let generation: readonly ID[] | undefined = []
-    let host: Parameters<import("@opencode-ai/plugin/v2/effect").Plugin["effect"]>[0]
+    let generation: readonly { readonly id: typeof ID.Type; readonly version?: string }[] | undefined = []
+    let host: Parameters<Plugin["effect"]>[0]
 
     const activate = Effect.fn("Plugin.activate")(function* (
-      plugins: readonly import("@opencode-ai/plugin/v2/effect").Plugin[],
+      plugins: readonly { readonly plugin: Plugin; readonly version?: string }[],
     ) {
-      const definitions = plugins.map((plugin) => ({ ...plugin, id: ID.make(plugin.id) }))
-      const ids = new Set<ID>()
+      const definitions = plugins.map((entry) => ({
+        ...entry.plugin,
+        id: ID.make(entry.plugin.id),
+        ...(entry.version === undefined ? {} : { version: entry.version }),
+      }))
+      const ids = new Set<typeof ID.Type>()
       for (const definition of definitions) {
         if (ids.has(definition.id)) return yield* Effect.die(new Error(`Duplicate plugin ID: ${definition.id}`))
         ids.add(definition.id)
@@ -56,7 +55,9 @@ const layer = Layer.effect(
           if (
             generation !== undefined &&
             generation.length === definitions.length &&
-            generation.every((id, index) => id === definitions[index]?.id)
+            generation.every(
+              (plugin, index) => plugin.id === definitions[index]?.id && plugin.version === definitions[index]?.version,
+            )
           ) {
             return
           }
@@ -87,7 +88,10 @@ const layer = Layer.effect(
             }),
           )
           if (Exit.isFailure(exit)) return yield* exit
-          generation = definitions.map((definition) => definition.id)
+          generation = definitions.map((definition) => ({
+            id: definition.id,
+            ...(definition.version === undefined ? {} : { version: definition.version }),
+          }))
         }),
       )
     })

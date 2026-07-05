@@ -2,7 +2,7 @@ export * as PluginSupervisor from "./supervisor"
 
 import type { Plugin } from "@opencode-ai/plugin/v2/effect"
 import { Event } from "@opencode-ai/schema/config"
-import { Context, Effect, Fiber, Layer, Schema, Semaphore, Stream } from "effect"
+import { Context, Effect, Fiber, Layer, Option, Schema, Semaphore, Stream } from "effect"
 import path from "path"
 import { fileURLToPath, pathToFileURL } from "url"
 import { Config } from "../config"
@@ -42,6 +42,7 @@ type Operation =
       readonly type: "add"
       readonly target: string
       readonly options: Record<string, unknown>
+      readonly mtime?: number
     }
   | {
       readonly type: "remove"
@@ -57,6 +58,7 @@ type Candidate =
       readonly type: "package"
       readonly specifier: string
       readonly options: Record<string, unknown>
+      readonly mtime?: number
     }
 
 type ConfiguredPackage = {
@@ -94,7 +96,16 @@ const scan = Effect.fn("PluginSupervisor.scan")(function* (entries: readonly Con
       }),
     )
   // Explicit config is applied last so it can remove auto-discovered packages.
-  return [...discovered, ...configured]
+  return yield* Effect.forEach([...discovered, ...configured], (operation) => {
+    if (operation.type === "remove" || !path.isAbsolute(operation.target)) return Effect.succeed(operation)
+    return fs.stat(operation.target).pipe(
+      Effect.map((info) => ({
+        ...operation,
+        mtime: Option.getOrElse(info.mtime, () => new Date(0)).getTime(),
+      })),
+      Effect.catch(() => Effect.succeed(operation)),
+    )
+  })
 })
 
 const resolve = Effect.fn("PluginSupervisor.resolve")(function* (
@@ -143,7 +154,16 @@ function apply(pre: readonly Plugin[], post: readonly Plugin[], operations: read
     enabled.has(definition.id) ? [{ type: "definition", definition }] : [],
   )
   const configured: Candidate[] = Array.from(packages.values()).flatMap((item) =>
-    item.enabled ? [{ type: "package", specifier: item.operation.target, options: item.operation.options }] : [],
+    item.enabled
+      ? [
+          {
+            type: "package",
+            specifier: item.operation.target,
+            options: item.operation.options,
+            ...(item.operation.mtime === undefined ? {} : { mtime: item.operation.mtime }),
+          },
+        ]
+      : [],
   )
   const posts: Candidate[] = post.flatMap((definition) =>
     enabled.has(definition.id) ? [{ type: "definition", definition }] : [],
@@ -153,21 +173,29 @@ function apply(pre: readonly Plugin[], post: readonly Plugin[], operations: read
 
 const load = Effect.fn("PluginSupervisor.load")(function* (plan: readonly Candidate[]) {
   return yield* Effect.forEach(plan, (candidate) => {
-    if (candidate.type === "definition") return Effect.succeed(candidate.definition)
+    if (candidate.type === "definition") return Effect.succeed({ plugin: candidate.definition })
     return Effect.gen(function* () {
       const npm = yield* Npm.Service
       const entrypoint = path.isAbsolute(candidate.specifier)
         ? pathToFileURL(candidate.specifier).href
         : (yield* npm.add(candidate.specifier)).entrypoint
       if (!entrypoint) return
-      yield* Effect.log({ msg: "loading plugin", id: candidate.specifier, entrypoint })
-      const mod = yield* Effect.promise(() => import(entrypoint))
+      // Bun currently ignores query parameters when caching file:// imports.
+      const source =
+        candidate.mtime === undefined
+          ? entrypoint
+          : `${candidate.specifier.replaceAll("\\", "/")}?mtime=${candidate.mtime}`
+      yield* Effect.log({ msg: "loading plugin", id: candidate.specifier, entrypoint: source })
+      const mod = yield* Effect.promise(() => import(source))
       const value = (yield* Schema.decodeUnknownEffect(PluginModule)(mod)).default
       const plugin = "effect" in value ? value : PluginPromise.fromPromise(value)
       return {
-        id: plugin.id,
-        effect: (host) => plugin.effect({ ...host, options: candidate.options }),
-      } satisfies Plugin
+        plugin: {
+          id: plugin.id,
+          effect: (host) => plugin.effect({ ...host, options: candidate.options }),
+        } satisfies Plugin,
+        ...(candidate.mtime === undefined ? {} : { version: String(candidate.mtime) }),
+      }
     }).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
   }).pipe(Effect.map((plugins) => plugins.filter((plugin) => plugin !== undefined)))
 })
@@ -231,7 +259,6 @@ const layer = Layer.effect(
     const config = yield* Config.Service
     const events = yield* EventV2.Service
     const lock = Semaphore.makeUnsafe(1)
-    let applied: string | undefined
     const reload = Effect.fn("PluginSupervisor.reload")(() =>
       lock.withPermit(
         Effect.gen(function* () {
@@ -241,15 +268,11 @@ const layer = Layer.effect(
           const pre = [...internal.pre, ...sdk.all()]
           // Read the current layered config before resolving plugin directives and packages.
           const entries = yield* config.entries()
-          // Skip duplicate watcher notifications and config edits unrelated to plugins.
           const operations = yield* scan(entries)
-          const version = JSON.stringify(operations)
-          if (version === applied) return
           // Apply config operations and load enabled package plugins into one ordered generation.
           const plugins = yield* resolve(pre, internal.post, operations)
           // Replace the active generation in one scoped, batched activation.
           yield* registry.activate(plugins)
-          applied = version
         }),
       ),
     )

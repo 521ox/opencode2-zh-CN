@@ -1,7 +1,10 @@
 import fs from "fs/promises"
 import path from "path"
+import { pathToFileURL } from "url"
 import { describe, expect } from "bun:test"
 import { define } from "@opencode-ai/plugin/v2/effect"
+import { Config as ConfigSchema } from "@opencode-ai/schema/config"
+import { Plugin } from "@opencode-ai/schema/plugin"
 import { AgentV2 } from "@opencode-ai/core/agent"
 import { Catalog } from "@opencode-ai/core/catalog"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
@@ -33,7 +36,7 @@ describe("PluginSupervisor config", () => {
         yield* ready()
         expect(
           (yield* plugins.list()).map((plugin) => plugin.id).filter((id) => id.startsWith("opencode.provider.")),
-        ).toEqual([PluginV2.ID.make("opencode.provider.openai")])
+        ).toEqual([Plugin.ID.make("opencode.provider.openai")])
       }),
     ),
   )
@@ -122,6 +125,43 @@ describe("PluginSupervisor config", () => {
     ),
   )
 
+  it.live("reloads an auto-discovered plugin when its file changes", () =>
+    withLocation(
+      undefined,
+      Effect.gen(function* () {
+        yield* ready()
+        const agents = yield* AgentV2.Service
+        const events = yield* EventV2.Service
+        const location = yield* Location.Service
+        const plugins = yield* PluginV2.Service
+        const file = path.join(location.directory, ".opencode", "plugin", "mutable.ts")
+        const first = (yield* plugins.list()).find((plugin) => plugin.id === "mutable-plugin")?.id
+
+        expect(first).toBeDefined()
+        expect((yield* agents.get(AgentV2.ID.make("mutable")))?.description).toBe("first")
+
+        yield* Effect.promise(async () => {
+          await fs.writeFile(file, mutablePlugin("second"))
+          const modified = new Date(Date.now() + 5_000)
+          await fs.utimes(file, modified, modified)
+        })
+        yield* events.publish(ConfigSchema.Event.Updated, {})
+        yield* waitUntil(
+          Effect.gen(function* () {
+            const current = (yield* plugins.list()).find((plugin) => plugin.id === "mutable-plugin")?.id
+            return current === first && (yield* agents.get(AgentV2.ID.make("mutable")))?.description === "second"
+          }),
+        )
+      }),
+      false,
+      async (directory) => {
+        const plugin = path.join(directory, ".opencode", "plugin")
+        await fs.mkdir(plugin, { recursive: true })
+        await fs.writeFile(path.join(plugin, "mutable.ts"), mutablePlugin("first"))
+      },
+    ),
+  )
+
   it.live("applies explicit removals after auto-discovery", () =>
     withLocation(
       { plugins: ["-*"] },
@@ -192,13 +232,19 @@ const ready = Effect.fnUntraced(function* () {
   yield* supervisor.ready
 })
 
-function withLocation<A, E, R>(config: unknown, effect: Effect.Effect<A, E, R>, fixtures = false) {
+function withLocation<A, E, R>(
+  config: unknown,
+  effect: Effect.Effect<A, E, R>,
+  fixtures = false,
+  prepare?: (directory: string) => Promise<void>,
+) {
   return Effect.acquireRelease(
     Effect.promise(() => tmpdir()),
     (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
   ).pipe(
     Effect.tap((tmp) =>
       Effect.promise(async () => {
+        await prepare?.(tmp.path)
         if (fixtures) {
           const directory = path.join(tmp.path, ".opencode")
           await fs.mkdir(directory, { recursive: true })
@@ -223,3 +269,30 @@ function withLocation<A, E, R>(config: unknown, effect: Effect.Effect<A, E, R>, 
     ),
   )
 }
+
+function mutablePlugin(description: string) {
+  const plugin = pathToFileURL(path.join(import.meta.dir, "../../../plugin/src/v2/promise/index.ts")).href
+  return `
+import { define } from ${JSON.stringify(plugin)}
+
+export default define({
+  id: "mutable-plugin",
+  setup: async (ctx) => {
+    await ctx.agent.transform((agents) => {
+      agents.update("mutable", (agent) => {
+        agent.description = ${JSON.stringify(description)}
+        agent.mode = "subagent"
+      })
+    })
+  },
+})
+`
+}
+
+const waitUntil = Effect.fnUntraced(function* (condition: Effect.Effect<boolean>) {
+  for (let attempt = 0; attempt < 200; attempt++) {
+    if (yield* condition) return
+    yield* Effect.sleep("10 millis")
+  }
+  return yield* Effect.die("Timed out waiting for plugin reload")
+})
