@@ -173,6 +173,7 @@ import type {
   VcsStatusOutput,
   VcsDiffInput,
   VcsDiffOutput,
+  DebugLocationOutput,
 } from "./types"
 import { ClientError } from "./client-error"
 
@@ -1441,6 +1442,19 @@ export function make(options: ClientOptions) {
             method: "GET",
             path: `/api/vcs/diff`,
             query: { location: input["location"], mode: input["mode"], context: input["context"] },
+            successStatus: 200,
+            declaredStatuses: [401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ),
+    },
+    debug: {
+      location: (requestOptions?: RequestOptions) =>
+        request<DebugLocationOutput>(
+          {
+            method: "GET",
+            path: `/api/debug/location`,
             successStatus: 200,
             declaredStatuses: [401, 400],
             empty: false,

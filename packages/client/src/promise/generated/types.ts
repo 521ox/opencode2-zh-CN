@@ -6003,3 +6003,5 @@ export type VcsDiffOutput = {
     readonly status?: "added" | "deleted" | "modified"
   }>
 }
+
+export type DebugLocationOutput = ReadonlyArray<{ readonly directory: string; readonly workspaceID?: string }>

@@ -83,7 +83,7 @@ function makeRoutes<AuthError, AuthServices>(
     : AppNodeBuilder.build(applicationServices, replacements)
 
   return HttpApiBuilder.layer(Api, { openapiPath: "/openapi.json" }).pipe(
-    Layer.provide(handlers),
+    Layer.provide(handlers.pipe(Layer.provide(serviceLayer))),
     Layer.provide(formLocationLayer),
     Layer.provide(sessionLocationLayer),
     Layer.provide(layer),

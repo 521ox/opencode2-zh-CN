@@ -862,6 +862,13 @@ export interface VcsApi<E = never> {
   readonly diff: VcsDiffOperation<E>
 }
 
+export type Endpoint25_0Output = EffectValue<ReturnType<RawClient["server.debug"]["debug.location"]>>
+export type DebugLocationOperation<E = never> = () => Effect.Effect<Endpoint25_0Output, E>
+
+export interface DebugApi<E = never> {
+  readonly location: DebugLocationOperation<E>
+}
+
 export interface AppApi<E = never> {
   readonly health: HealthApi<E>
   readonly location: LocationApi<E>
@@ -888,4 +895,5 @@ export interface AppApi<E = never> {
   readonly reference: ReferenceApi<E>
   readonly projectCopy: ProjectCopyApi<E>
   readonly vcs: VcsApi<E>
+  readonly debug: DebugApi<E>
 }

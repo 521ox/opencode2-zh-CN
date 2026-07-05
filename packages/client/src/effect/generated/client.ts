@@ -1043,6 +1043,11 @@ const Endpoint24_1 = (raw: RawClient["server.vcs"]) => (input: Endpoint24_1Input
 
 const adaptGroup24 = (raw: RawClient["server.vcs"]) => ({ status: Endpoint24_0(raw), diff: Endpoint24_1(raw) })
 
+const Endpoint25_0 = (raw: RawClient["server.debug"]) => () =>
+  raw["debug.location"]({}).pipe(Effect.mapError(mapClientError))
+
+const adaptGroup25 = (raw: RawClient["server.debug"]) => ({ location: Endpoint25_0(raw) })
+
 const adaptClient = (raw: RawClient) => ({
   health: adaptGroup0(raw["server.health"]),
   location: adaptGroup1(raw["server.location"]),
@@ -1069,6 +1074,7 @@ const adaptClient = (raw: RawClient) => ({
   reference: adaptGroup22(raw["server.reference"]),
   projectCopy: adaptGroup23(raw["server.projectCopy"]),
   vcs: adaptGroup24(raw["server.vcs"]),
+  debug: adaptGroup25(raw["server.debug"]),
 })
 
 export const make = (options?: { readonly baseUrl?: URL | string }) =>

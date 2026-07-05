@@ -19054,6 +19054,35 @@ export type V2VcsDiffResponses = {
 
 export type V2VcsDiffResponse = V2VcsDiffResponses[keyof V2VcsDiffResponses]
 
+export type V2DebugLocationData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/api/debug/location"
+}
+
+export type V2DebugLocationErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestErrorV2
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedErrorV2
+}
+
+export type V2DebugLocationError = V2DebugLocationErrors[keyof V2DebugLocationErrors]
+
+export type V2DebugLocationResponses = {
+  /**
+   * Success
+   */
+  200: Array<LocationRef2>
+}
+
+export type V2DebugLocationResponse = V2DebugLocationResponses[keyof V2DebugLocationResponses]
+
 export type PtyConnectData = {
   body?: never
   path: {
