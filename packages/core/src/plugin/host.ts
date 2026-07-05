@@ -23,8 +23,6 @@ import { ToolHooks } from "../tool/hooks"
 import { WorkspaceV2 } from "../workspace"
 
 const mutable = <T>(value: T) => value as DeepMutable<T>
-const isEvent = Schema.is(Schema.Union(EventManifest.ServerDefinitions))
-
 export const make = Effect.fn("PluginHost.make")(function* (plugin: PluginV2.Interface) {
   const agents = yield* AgentV2.Service
   const aisdk = yield* AISDK.Service
@@ -160,7 +158,7 @@ export const make = Effect.fn("PluginHost.make")(function* (plugin: PluginV2.Int
         }),
     },
     event: {
-      subscribe: () => events.live().pipe(Stream.filter(isEvent)),
+      subscribe: () => events.live().pipe(Stream.filter(EventManifest.isServer)),
     },
     integration: {
       list: () => response(integration.list()),

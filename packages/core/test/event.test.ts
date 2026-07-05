@@ -2,6 +2,8 @@ import { describe, expect } from "bun:test"
 import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Schema, Stream } from "effect"
 import { EventV2 } from "@opencode-ai/core/event"
 import { Event } from "@opencode-ai/schema/event"
+import { EventManifest } from "@opencode-ai/schema/event-manifest"
+import { McpEvent } from "@opencode-ai/schema/mcp-event"
 import { Session } from "@opencode-ai/schema/session"
 import { SessionEvent } from "@opencode-ai/schema/session-event"
 import { SessionV1 } from "@opencode-ai/schema/session-v1"
@@ -329,8 +331,8 @@ describe("EventV2", () => {
       const events = yield* EventV2.Service
       const consuming = yield* Deferred.make<void>()
       const release = yield* Deferred.make<void>()
-      const slowStream = yield* EventV2.liveBounded(events, 1)
-      const fastStream = yield* EventV2.liveBounded(events, 8)
+      const slowStream = yield* EventV2.liveBounded(events, { capacity: 1 })
+      const fastStream = yield* EventV2.liveBounded(events, { capacity: 8 })
       const slow = yield* slowStream.pipe(
         Stream.runForEach(() => Deferred.succeed(consuming, undefined).pipe(Effect.andThen(Deferred.await(release)))),
         Effect.forkScoped,
@@ -352,6 +354,20 @@ describe("EventV2", () => {
         expect.objectContaining({ data: { text: "overflow" } }),
         last,
       ])
+    }),
+  )
+
+  it.effect("filters internal events before they enter a bounded server stream", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const stream = yield* EventV2.liveBounded(events, { capacity: 1, accept: EventManifest.isServer })
+      const received = yield* stream.pipe(Stream.take(1), Stream.runCollect, Effect.forkScoped)
+
+      yield* events.publish(McpEvent.ToolsChanged, { server: "one" })
+      yield* events.publish(McpEvent.ToolsChanged, { server: "two" })
+      const published = yield* events.publish(McpEvent.StatusChanged, { server: "example" })
+
+      expect(Array.from(yield* Fiber.join(received))).toEqual([published])
     }),
   )
 

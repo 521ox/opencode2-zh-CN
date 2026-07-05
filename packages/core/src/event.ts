@@ -160,15 +160,22 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Event") {}
 
-export const liveBounded = (events: Interface, capacity: number) =>
+export const liveBounded = (
+  events: Interface,
+  options: { readonly capacity: number; readonly accept?: (event: Payload) => boolean },
+) =>
   Effect.gen(function* () {
-    const queue = yield* Queue.dropping<Payload, SubscriberOverflowError>(capacity)
+    const queue = yield* Queue.dropping<Payload, SubscriberOverflowError>(options.capacity)
     const unsubscribe = yield* events.listen((event) =>
-      Queue.offer(queue, event).pipe(
-        Effect.flatMap((accepted) =>
-          accepted ? Effect.void : Queue.fail(queue, new SubscriberOverflowError({ capacity })).pipe(Effect.asVoid),
-        ),
-      ),
+      options.accept && !options.accept(event)
+        ? Effect.void
+        : Queue.offer(queue, event).pipe(
+            Effect.flatMap((accepted) =>
+              accepted
+                ? Effect.void
+                : Queue.fail(queue, new SubscriberOverflowError({ capacity: options.capacity })).pipe(Effect.asVoid),
+            ),
+          ),
     )
     yield* Effect.addFinalizer(() => unsubscribe.pipe(Effect.andThen(Queue.shutdown(queue)), Effect.asVoid))
     return Stream.fromQueue(queue)
