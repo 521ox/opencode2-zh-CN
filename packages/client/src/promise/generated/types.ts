@@ -4978,6 +4978,14 @@ export type EventSubscribeOutput =
       readonly id: string
       readonly created: number
       readonly metadata?: { readonly [x: string]: unknown }
+      readonly type: "plugin.updated"
+      readonly location?: { readonly directory: string; readonly workspaceID?: string }
+      readonly data: {}
+    }
+  | {
+      readonly id: string
+      readonly created: number
+      readonly metadata?: { readonly [x: string]: unknown }
       readonly type: "project.directories.updated"
       readonly location?: { readonly directory: string; readonly workspaceID?: string }
       readonly data: { readonly projectID: string }

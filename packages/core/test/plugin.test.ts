@@ -42,7 +42,11 @@ describe("PluginV2", () => {
     Effect.gen(function* () {
       const plugins = yield* PluginV2.Service
       const agents = yield* AgentV2.Service
+      const events = yield* EventV2.Service
       let description = "first"
+      const updated = yield* events
+        .subscribe(Plugin.Event.Updated)
+        .pipe(Stream.take(2), Stream.runCollect, Effect.forkScoped({ startImmediately: true }))
 
       const managed = () =>
         define({
@@ -67,6 +71,7 @@ describe("PluginV2", () => {
 
       yield* plugins.activate([{ plugin: managed(), version: "next" }])
       expect((yield* agents.get(AgentV2.ID.make("configured")))?.description).toBe("second")
+      expect(yield* Fiber.join(updated)).toHaveLength(2)
 
       yield* plugins.activate([])
       expect(yield* agents.get(AgentV2.ID.make("configured"))).toBeUndefined()

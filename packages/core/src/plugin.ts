@@ -92,6 +92,7 @@ const layer = Layer.effect(
             id: definition.id,
             ...(definition.version === undefined ? {} : { version: definition.version }),
           }))
+          yield* events.publish(Event.Updated, {})
         }),
       )
     })
