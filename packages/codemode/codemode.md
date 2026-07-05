@@ -220,9 +220,9 @@ wave; both packages typecheck clean.
   (render-only - no validation, values pass through; rendering handles `$defs`/`definitions`
   - `$ref`). `output` is **optional** -> signature renders `Promise<unknown>` and the host
     result is exposed as-is. Discrimination via `Schema.isSchema`. New helpers exported from
-    `tool.ts`: `inputTypeScript`/`outputTypeScript`/`decodeInput`/`decodeOutput`/
+    `tool-schema.ts`: `inputTypeScript`/`outputTypeScript`/`decodeInput`/`decodeOutput`/
     `jsonSchemaToTypeScript`; `tool-runtime.ts` consumes them (no direct `Schema.*` use there
-    anymore). Types `JsonSchema`/`ToolSchema` exported from the index. Note: an empty
+    anymore). Types `Tool.JsonSchema`/`Tool.SchemaType` exported from the index. Note: an empty
     `Schema.Struct({})` renders as `{  } | Array<unknown>` (effect's JSON Schema emission) -
     cosmetic, fixed in Wave 4.
 - **`output.*` API deleted**: `OutputItem`(+Schema), result `output` fields, the `output`
@@ -237,7 +237,7 @@ wave; both packages typecheck clean.
   so failures are typed and observable). `message` is the model-safe failure message
   (`ToolError`/`ToolRuntimeError` message, else "Tool execution failed"). Interrupted calls
   fire no end event (timeout kills the whole execution anyway).
-- **Limits collapse**: public `ExecutionLimits` = `{ timeoutMs?, maxToolCalls?,
+- **Limits collapse**: public `CodeMode.ExecutionLimits` = `{ timeoutMs?, maxToolCalls?,
 maxOutputBytes? }` (defaults 10_000 / 100 / 32_000). This wave kept the other knobs as
   internal defaults reachable through an `@internal` `InternalExecutionLimits` type; Fix 5
   later deleted that type and the internal limit system entirely.
@@ -313,7 +313,7 @@ real MCP config. Package still 101 tests / 0 fail; opencode adapter suites still
 packages typecheck clean.
 
 - **Budgeted catalog** (`discoveryPlan` in `tool-runtime.ts`): the all-or-nothing
-  inline/search modes are gone - `DiscoveryMode` deleted, `DiscoveryOptions` is just
+  inline/search modes are gone - `DiscoveryMode` deleted, `CodeMode.DiscoveryOptions` is just
   `{ maxInlineCatalogBytes? }` (default 16,000 UTF-8 bytes; later converted to
   `maxInlineCatalogTokens`, default 4,000 estimated tokens - see Post-wave fixes). Port of
   the old opencode
@@ -340,7 +340,7 @@ packages typecheck clean.
   read-the-description-before-calling guidance. (The flat prose layout this wave produced
   was later replaced wholesale by the markdown-section restructure - see Post-wave fixes -
   which also deleted this wave's worked example.)
-- **Cosmetic renderer fixes** (`renderSchema` in `tool.ts`): an object schema with no
+- **Cosmetic renderer fixes** (`renderSchema` in `tool-schema.ts`): an object schema with no
   properties renders `{}` (was `{  }`), and the empty `Schema.Struct({})` emission
   (`anyOf: [{ type: "object" }, { type: "array" }]`, no properties/items) collapses to `{}`
   (was `{  } | Array<unknown>`).
@@ -469,7 +469,7 @@ adapter needed **no changes**.
     `rankTools` algorithm in `packages/opencode/src/session/code-mode.ts` at git HEAD),
     replacing the word-set ranker in `tool-runtime.ts`. Searchable text per tool = path +
     description + input-schema property names + their `description` strings - extracted by
-    the new `inputProperties` helper in `tool.ts` (Effect Schemas via
+    the new `inputProperties` helper in `tool-schema.ts` (Effect Schemas via
     `Schema.toJsonSchemaDocument`, the same emission signature rendering uses; JSON Schemas
     read `properties` directly, resolving a trivial top-level `$ref`; try/catch falls back to
     path + description). Queries tokenize on camelCase boundaries + non-alphanumeric
@@ -542,7 +542,7 @@ budget; namespaces must always be present):
 
 - `src/token.ts` added: copy of `@opencode-ai/core/util/token` (`round(chars / 4)`), so
   the package stays dependency-free; keep in sync if the core heuristic changes.
-- `DiscoveryOptions.maxInlineCatalogBytes` -> `maxInlineCatalogTokens` (default 4,000
+- `CodeMode.DiscoveryOptions.maxInlineCatalogBytes` -> `maxInlineCatalogTokens` (default 4,000
   estimated tokens ~ the old 16,000 bytes at 4 chars/token - behavior parity, not a size
   reduction). `discoveryPlan` charges `estimate(catalogLine(tool))` per line; cheapest-first
   - stop-on-first-miss unchanged at the time (stop-on-first-miss replaced by round-robin in
@@ -558,7 +558,7 @@ budget; namespaces must always be present):
 **Fix 5 - internal limits removed** (user direction: only the three PUBLIC limits survive as
 configurable knobs; the internal limit system dies):
 
-- `ExecutionLimits` (`timeoutMs` 10_000 / `maxToolCalls` 100 / `maxOutputBytes` 32_000 at
+- `CodeMode.ExecutionLimits` (`timeoutMs` 10_000 / `maxToolCalls` 100 / `maxOutputBytes` 32_000 at
   the time; Fix 6 later removed the first two defaults. Same validation: safe integers,
   timeoutMs >= 1, others >= 0, RangeError otherwise) is now
   the ENTIRE limit surface - exactly the shape section 2's original locked spec named.
@@ -602,7 +602,7 @@ configurable knobs; the internal limit system dies):
   enumeration operation-budget, codemode maxDataBytes/maxSourceBytes/maxOperations/
   maxConcurrency-RangeError assertions, and the adapter's runaway-loop-via-operation-limit
   test - superseded by the package timeout regression test); rewrote the helpers that used
-  `InternalExecutionLimits` as a convenience to plain `ExecutionLimits`
+  `InternalExecutionLimits` as a convenience to plain `CodeMode.ExecutionLimits`
   (promise/enumeration/stdlib run helpers). Package suite: 154 pass / 0 fail; adapter
   suites: 34 + 16.
 
@@ -633,7 +633,7 @@ Semantics: each described input/output field carries its schema `description` as
 express surface as JSDoc tags - `@deprecated`, `@default <json>` (unserializable defaults
 skipped), `@format`, `@minItems`/`@maxItems`; `*/` inside text is neutralized to `* /`;
 multiline descriptions become `*`-prefixed blocks with blank edges trimmed; undescribed,
-untagged fields get no comment. Implementation: `renderSchema` in `tool.ts` grew a
+untagged fields get no comment. Implementation: `renderSchema` in `tool-schema.ts` grew a
 `RenderContext` (`{ definitions, pretty }`), a `MAX_RENDER_DEPTH = 8` recursion ceiling plus
 a `$ref` `seen` guard (the renderer previously had neither - a cyclic `$defs` would have
 looped; it now degrades to the ref name/`unknown`), and try/catch totality on the public
@@ -849,7 +849,7 @@ section 4 outer-truncation item the OPPOSITE way from "kill the outer one"):
   that relied on the old default now asserts the oversized result reaches the shared
   wrapper un-truncated. Suites: 210 + 50, tsgo clean both.
 
-**Docs polish** (post-API-review): stale `DiscoveryOptions` JSDoc fixed (claimed default
+**Docs polish** (post-API-review): stale `CodeMode.DiscoveryOptions` JSDoc fixed (claimed default
 4,000 and alphabetical cheapest-first - now 2,000 and round-robin, matching Fix 8/9 reality)
 and the README's incorrect "`effect` as a peer dependency" line corrected (`effect` is a
 regular dependency; hosts depend on it themselves because the API surface is Effect-typed).
@@ -949,16 +949,16 @@ child calls" gap):
 **Signature rendering + compound-assignment parity fixes** (externally reported, both
 verified real with failing tests before fixing):
 
-- **Non-identifier property names in rendered signatures** (`src/tool.ts`): `renderSchema`
+- **Non-identifier property names in rendered signatures** (`src/tool-schema.ts`): `renderSchema`
   emitted raw property names, so schema properties like `foo-bar`/`@type`/`x.y`/`123`
   rendered invalid TypeScript (`{ foo-bar?: string }`). Fixed with a `renderKey` helper -
   bare identifiers stay bare, everything else is `JSON.stringify`-quoted - applied in the
   single `field` closure both the compact and pretty renderings share. The
-  `identifierSegment` regex now lives in `tool.ts` (exported) and `tool-runtime.ts`'s
+  `identifierSegment` regex now lives in `tool-schema.ts` (internal) and `tool-runtime.ts`'s
   bracket-notation `toolExpression` imports it: one source of truth for "is this a bare
   identifier" across object keys and tool paths. Tests: `signature.test.ts` +4 (compact,
   pretty with JSDoc on a quoted key, JSON Schema input+output, Effect Schema struct).
-- **Numeric schema unions keep their real alternatives** (`src/tool.ts`): the old
+- **Numeric schema unions keep their real alternatives** (`src/tool-schema.ts`): the old
   `anyOf`/`oneOf` renderer collapsed any union containing `{ type: "number" }` to just
   `number`, dropping real JSON Schema alternatives (`string | number`, `number | null`,
   etc.). The collapse is now restricted to Effect's number-schema artifact
@@ -1209,7 +1209,8 @@ Post-MVP (logged, not blocking an experimental flag):
   the workspace is the implementation source of truth for v4 behavior questions.
 - File map (this package): `src/codemode.ts` - types/limits/parser/Interpreter/execute/make;
   `src/tool-runtime.ts` - tool tree, `copyIn`/`copyOut`, search/discovery, invoke path;
-  `src/tool.ts` - `Tool.make` + JSON-Schema->TS rendering; `src/values.ts` - sandbox value
+  `src/tool.ts` - public `Tool` definitions; `src/tool-schema.ts` - schema rendering and decoding;
+  `src/values.ts` - sandbox value
   types; `src/tool-error.ts` - `ToolError`; tests in `test/{codemode,parity,stdlib}.test.ts`.
 - OpenCode file map (integration points): `src/tool/code-mode.ts` (the adapter, now a
   registry tool service - `CodeModeTool` + `catalogInstructions`; formerly
