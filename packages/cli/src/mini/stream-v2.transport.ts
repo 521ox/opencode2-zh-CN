@@ -183,7 +183,7 @@ function wait(delay: number, signal: AbortSignal) {
 }
 
 async function prepareFile(file: RunFilePart) {
-  if (file.mime !== "text/plain") return { attachment: { uri: file.url, mime: file.mime, name: file.filename } }
+  if (file.mime !== "text/plain") return { attachment: { uri: file.url, name: file.filename } }
   const content = file.url.startsWith("data:")
     ? Buffer.from(file.url.slice(file.url.indexOf(",") + 1), "base64").toString("utf8")
     : await Bun.file(new URL(file.url)).text()

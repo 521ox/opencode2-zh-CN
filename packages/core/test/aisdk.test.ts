@@ -9,7 +9,6 @@ import { Effect } from "effect"
 import { testEffect } from "./lib/effect"
 
 const it = testEffect(AISDK.locationLayer)
-type Fetch = (input: Parameters<typeof fetch>[0], init?: RequestInit) => Promise<Response>
 
 const model = (packageName: string, settings: Record<string, unknown> = {}) =>
   ModelV2.Info.make({
@@ -31,9 +30,7 @@ it.effect("keys language models by package and flattened overlays", () =>
 
     const first = yield* aisdk.language(model("first", { region: "us-east-1" }))
     const second = yield* aisdk.language(model("second", { region: "us-east-1" }))
-    const third = yield* aisdk.language(
-      model("second", { region: "us-east-1", fetch: async () => new Response("ok") }),
-    )
+    const third = yield* aisdk.language(model("second", { region: "us-west-2" }))
 
     expect(first).not.toBe(second)
     expect(second).not.toBe(third)
@@ -41,30 +38,25 @@ it.effect("keys language models by package and flattened overlays", () =>
   }),
 )
 
-it.effect("projects request settings, headers, and raw body overlays", () =>
+it.effect("projects request settings, headers, and body overlays", () =>
   Effect.gen(function* () {
     const aisdk = yield* AISDK.Service
-    let wrappedFetch: Fetch | undefined
     let body: unknown
-    const customFetch: Fetch = async (_input, init) => {
-      body = init?.body
-      return new Response("ok")
-    }
     yield* aisdk.hook.sdk((event) => {
-      wrappedFetch = event.options.fetch
+      body = event.options.body
       event.sdk = { languageModel: () => ({ provider: event.model.providerID }) }
     })
 
+    const input = model("@ai-sdk/google", {
+      apiKey: "secret",
+      thinkingConfig: { thinkingBudget: 1024 },
+    })
     const resolved = yield* aisdk.model(
-      ModelV2.Info.make({
-        ...model("@ai-sdk/google", {
-          apiKey: "secret",
-          fetch: customFetch,
-          thinkingConfig: { thinkingBudget: 1024 },
-        }),
+      {
+        ...input,
         headers: { "x-test": "header" },
         body: { safety_setting: "strict" },
-      }),
+      },
     )
     const prepared = yield* LLMClient.prepare<LanguageModelV3CallOptions>(
       LLM.request({ model: resolved, prompt: "Hello" }),
@@ -74,12 +66,6 @@ it.effect("projects request settings, headers, and raw body overlays", () =>
       google: { thinkingConfig: { thinkingBudget: 1024 } },
     })
     expect(prepared.body.headers).toEqual({ "x-test": "header" })
-    expect(wrappedFetch).toBeFunction()
-    if (wrappedFetch === undefined) return yield* Effect.die("Expected wrapped fetch")
-    const fetchRequest = wrappedFetch
-    yield* Effect.promise(() =>
-      fetchRequest("https://provider.example", { method: "POST", body: JSON.stringify({ model: "api-model" }) }),
-    )
-    expect(JSON.parse(String(body))).toEqual({ model: "api-model", safety_setting: "strict" })
+    expect(body).toEqual({ safety_setting: "strict" })
   }),
 )

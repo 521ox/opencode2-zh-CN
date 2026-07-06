@@ -37,6 +37,14 @@ export const GithubCopilotPlugin = define({
           evt.language = evt.sdk.languageModel(evt.model.modelID ?? evt.model.id)
           return
         }
+        if (evt.options.endpoint === "responses" && evt.sdk.responses) {
+          evt.language = evt.sdk.responses(evt.model.modelID ?? evt.model.id)
+          return
+        }
+        if (evt.options.endpoint === "chat" && evt.sdk.chat) {
+          evt.language = evt.sdk.chat(evt.model.modelID ?? evt.model.id)
+          return
+        }
         const id = evt.model.modelID ?? evt.model.id
         evt.language = shouldUseResponses(id) ? evt.sdk.responses(id) : evt.sdk.chat(id)
       }),
