@@ -1,5 +1,5 @@
 import { castDraft, produce, type WritableDraft } from "immer"
-import { Effect } from "effect"
+import { DateTime, Effect } from "effect"
 import { SessionEvent } from "./event"
 import { SessionMessage } from "./message"
 
@@ -99,17 +99,28 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
       (item): item is DraftTool => item.type === "tool" && (callID === undefined || item.id === callID),
     )
 
-  const latestText = (assistant: DraftAssistant | undefined, textID: string) =>
-    assistant?.content.findLast((item): item is DraftText => item.type === "text" && item.id === textID)
+  const latestText = (assistant: DraftAssistant | undefined) =>
+    assistant?.content.findLast((item): item is DraftText => item.type === "text")
 
-  const latestReasoning = (assistant: DraftAssistant | undefined, reasoningID: string) =>
-    assistant?.content.findLast((item): item is DraftReasoning => item.type === "reasoning" && item.id === reasoningID)
+  const latestReasoning = (assistant: DraftAssistant | undefined) =>
+    assistant?.content.findLast((item): item is DraftReasoning => item.type === "reasoning" && !item.time?.completed)
 
   const updateOwnedAssistant = (messageID: SessionMessage.ID, recipe: (draft: DraftAssistant) => void) =>
     Effect.gen(function* () {
       const assistant = yield* adapter.getAssistant(messageID)
       if (assistant) yield* adapter.updateAssistant(produce(assistant, recipe))
     })
+
+  const clearCurrentRetry = Effect.gen(function* () {
+    const assistant = yield* adapter.getCurrentAssistant()
+    if (assistant?.retry) {
+      yield* adapter.updateAssistant(
+        produce(assistant, (draft) => {
+          draft.retry = undefined
+        }),
+      )
+    }
+  })
 
   return Effect.gen(function* () {
     yield* SessionEvent.All.match(event, {
@@ -144,7 +155,10 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
       "session.forked": () => Effect.void,
       "session.prompt.promoted": () => Effect.void,
       "session.prompt.admitted": () => Effect.void,
-      "session.execution.settled": () => Effect.void,
+      "session.execution.started": () => Effect.void,
+      "session.execution.succeeded": () => clearCurrentRetry,
+      "session.execution.failed": () => clearCurrentRetry,
+      "session.execution.interrupted": () => clearCurrentRetry,
       "session.instructions.updated": (event) =>
         adapter.appendMessage(
           SessionMessage.System.make({
@@ -206,10 +220,26 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
       },
       "session.step.started": (event) => {
         return Effect.gen(function* () {
+          const existing = yield* adapter.getAssistant(event.data.assistantMessageID)
+          if (existing) {
+            yield* adapter.updateAssistant(
+              produce(existing, (draft) => {
+                draft.agent = event.data.agent
+                draft.model = castDraft(event.data.model)
+                draft.retry = undefined
+                draft.error = undefined
+                draft.finish = undefined
+                draft.time.completed = undefined
+                if (event.data.snapshot) draft.snapshot = { ...draft.snapshot, start: event.data.snapshot }
+              }),
+            )
+            return
+          }
           const currentAssistant = yield* adapter.getCurrentAssistant()
           if (currentAssistant) {
             yield* adapter.updateAssistant(
               produce(currentAssistant, (draft) => {
+                draft.retry = undefined
                 draft.time.completed = event.created
               }),
             )
@@ -245,25 +275,24 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
         return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
           draft.time.completed = event.created
           draft.finish = "error"
-          draft.error = event.data.error
+          draft.error = castDraft(event.data.error)
+          draft.retry = undefined
         })
       },
       "session.text.started": (event) => {
         return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
-          draft.content.push(
-            castDraft(SessionMessage.AssistantText.make({ type: "text", id: event.data.textID, text: "" })),
-          )
+          draft.content.push(castDraft(SessionMessage.AssistantText.make({ type: "text", text: "" })))
         })
       },
       "session.text.delta": (event) => {
         return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
-          const match = latestText(draft, event.data.textID)
+          const match = latestText(draft)
           if (match) match.text += event.data.delta
         })
       },
       "session.text.ended": (event) => {
         return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
-          const match = latestText(draft, event.data.textID)
+          const match = latestText(draft)
           if (match) match.text = event.data.text
         })
       },
@@ -293,7 +322,8 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
         return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
           const match = latestTool(draft, event.data.callID)
           if (match) {
-            match.provider = event.data.provider
+            match.executed = event.data.executed
+            match.providerState = event.data.state
             match.time.ran = event.created
             match.state = castDraft(
               SessionMessage.ToolStateRunning.make({
@@ -319,11 +349,8 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
         return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
           const match = latestTool(draft, event.data.callID)
           if (match && match.state.status === "running") {
-            match.provider = {
-              executed: event.data.provider.executed || match.provider?.executed === true,
-              metadata: match.provider?.metadata,
-              resultMetadata: event.data.provider.metadata,
-            }
+            match.executed = event.data.executed || match.executed === true
+            match.providerResultState = event.data.resultState
             match.time.completed = event.created
             match.state = castDraft(
               SessionMessage.ToolStateCompleted.make({
@@ -342,11 +369,8 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
         return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
           const match = latestTool(draft, event.data.callID)
           if (match && (match.state.status === "pending" || match.state.status === "running")) {
-            match.provider = {
-              executed: event.data.provider.executed || match.provider?.executed === true,
-              metadata: match.provider?.metadata,
-              resultMetadata: event.data.provider.metadata,
-            }
+            match.executed = event.data.executed || match.executed === true
+            match.providerResultState = event.data.resultState
             match.time.completed = event.created
             match.state = castDraft(
               SessionMessage.ToolStateError.make({
@@ -367,9 +391,8 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
             castDraft(
               SessionMessage.AssistantReasoning.make({
                 type: "reasoning",
-                id: event.data.reasoningID,
                 text: "",
-                providerMetadata: event.data.providerMetadata,
+                state: event.data.state,
                 time: { created: event.created },
               }),
             ),
@@ -378,21 +401,29 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
       },
       "session.reasoning.delta": (event) => {
         return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
-          const match = latestReasoning(draft, event.data.reasoningID)
+          const match = latestReasoning(draft)
           if (match) match.text += event.data.delta
         })
       },
       "session.reasoning.ended": (event) => {
         return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
-          const match = latestReasoning(draft, event.data.reasoningID)
+          const match = latestReasoning(draft)
           if (match) {
             match.text = event.data.text
             match.time = { created: match.time?.created ?? event.created, completed: event.created }
-            if (event.data.providerMetadata !== undefined) match.providerMetadata = event.data.providerMetadata
+            if (event.data.state !== undefined) match.state = event.data.state
           }
         })
       },
-      "session.retried": () => Effect.void,
+      "session.retry.scheduled": (event) => {
+        return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
+          draft.retry = {
+            attempt: event.data.attempt,
+            at: DateTime.makeUnsafe(event.data.at),
+            error: castDraft(event.data.error),
+          }
+        })
+      },
       "session.compaction.started": () => Effect.void,
       "session.compaction.delta": () => Effect.void,
       "session.compaction.ended": (event) => {

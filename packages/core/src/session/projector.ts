@@ -634,6 +634,9 @@ const layer = Layer.effectDiscard(
         })
       }),
     )
+    yield* events.project(SessionEvent.Execution.Succeeded, (event) => run(db, event))
+    yield* events.project(SessionEvent.Execution.Failed, (event) => run(db, event))
+    yield* events.project(SessionEvent.Execution.Interrupted, (event) => run(db, event))
     yield* events.project(SessionEvent.InstructionsUpdated, (event) => run(db, event))
     yield* events.project(SessionEvent.Synthetic, (event) => run(db, event))
     yield* events.project(SessionEvent.Skill.Activated, (event) =>
@@ -660,7 +663,7 @@ const layer = Layer.effectDiscard(
     yield* events.project(SessionEvent.Tool.Failed, (event) => run(db, event))
     yield* events.project(SessionEvent.Reasoning.Started, (event) => run(db, event))
     yield* events.project(SessionEvent.Reasoning.Ended, (event) => run(db, event))
-    // yield* events.project(SessionEvent.Retried, (event) => run(db, event))
+    yield* events.project(SessionEvent.RetryScheduled, (event) => run(db, event))
     yield* events.project(SessionEvent.Compaction.Ended, (event) => run(db, event))
     yield* events.project(SessionEvent.RevertEvent.Staged, (event) =>
       db
@@ -687,14 +690,11 @@ const layer = Layer.effectDiscard(
           .select({ seq: SessionMessageTable.seq })
           .from(SessionMessageTable)
           .where(
-            and(
-              eq(SessionMessageTable.session_id, event.data.sessionID),
-              eq(SessionMessageTable.id, event.data.messageID),
-            ),
+            and(eq(SessionMessageTable.session_id, event.data.sessionID), eq(SessionMessageTable.id, event.data.to)),
           )
           .get()
           .pipe(Effect.orDie)
-        if (!boundary) return yield* Effect.die(new Error(`Revert boundary message not found: ${event.data.messageID}`))
+        if (!boundary) return yield* Effect.die(new Error(`Revert boundary message not found: ${event.data.to}`))
         yield* db
           .delete(SessionMessageTable)
           .where(

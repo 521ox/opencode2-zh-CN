@@ -1006,23 +1006,20 @@ export type SessionContextOutput = {
         readonly agent: string
         readonly model: { readonly id: string; readonly providerID: string; readonly variant?: string }
         readonly content: ReadonlyArray<
-          | { readonly type: "text"; readonly id: string; readonly text: string }
+          | { readonly type: "text"; readonly text: string }
           | {
               readonly type: "reasoning"
-              readonly id: string
               readonly text: string
-              readonly providerMetadata?: { readonly [x: string]: { readonly [x: string]: JsonValue } }
+              readonly state?: { readonly [x: string]: JsonValue }
               readonly time?: { readonly created: number; readonly completed?: number }
             }
           | {
               readonly type: "tool"
               readonly id: string
               readonly name: string
-              readonly provider?: {
-                readonly executed: boolean
-                readonly metadata?: { readonly [x: string]: { readonly [x: string]: JsonValue } }
-                readonly resultMetadata?: { readonly [x: string]: { readonly [x: string]: JsonValue } }
-              }
+              readonly executed?: boolean
+              readonly providerState?: { readonly [x: string]: JsonValue }
+              readonly providerResultState?: { readonly [x: string]: JsonValue }
               readonly state:
                 | { readonly status: "pending"; readonly input: string }
                 | {
@@ -1061,7 +1058,7 @@ export type SessionContextOutput = {
                       | { readonly type: "file"; readonly uri: string; readonly mime: string; readonly name?: string }
                     >
                     readonly structured: { readonly [x: string]: JsonValue }
-                    readonly error: { readonly type: "unknown"; readonly message: string }
+                    readonly error: { readonly type: string; readonly message: string }
                     readonly result?: JsonValue
                   }
               readonly time: {
@@ -1073,7 +1070,7 @@ export type SessionContextOutput = {
             }
         >
         readonly snapshot?: { readonly start?: string; readonly end?: string; readonly files?: ReadonlyArray<string> }
-        readonly finish?: string
+        readonly finish?: "stop" | "length" | "tool-calls" | "content-filter" | "error" | "unknown"
         readonly cost?: number
         readonly tokens?: {
           readonly input: number
@@ -1081,7 +1078,12 @@ export type SessionContextOutput = {
           readonly reasoning: number
           readonly cache: { readonly read: number; readonly write: number }
         }
-        readonly error?: { readonly type: "unknown"; readonly message: string }
+        readonly error?: { readonly type: string; readonly message: string }
+        readonly retry?: {
+          readonly attempt: number
+          readonly at: number
+          readonly error: { readonly type: string; readonly message: string }
+        }
       }
     | {
         readonly type: "compaction"
@@ -1217,6 +1219,45 @@ export type SessionLogOutput =
           readonly id: string
           readonly created: number
           readonly metadata?: { readonly [x: string]: unknown }
+          readonly type: "session.execution.started"
+          readonly durable: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+          readonly location?: { readonly directory: string; readonly workspaceID?: string }
+          readonly data: { readonly sessionID: string }
+        }
+      | {
+          readonly id: string
+          readonly created: number
+          readonly metadata?: { readonly [x: string]: unknown }
+          readonly type: "session.execution.succeeded"
+          readonly durable: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+          readonly location?: { readonly directory: string; readonly workspaceID?: string }
+          readonly data: { readonly sessionID: string }
+        }
+      | {
+          readonly id: string
+          readonly created: number
+          readonly metadata?: { readonly [x: string]: unknown }
+          readonly type: "session.execution.failed"
+          readonly durable: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+          readonly location?: { readonly directory: string; readonly workspaceID?: string }
+          readonly data: {
+            readonly sessionID: string
+            readonly error: { readonly type: string; readonly message: string }
+          }
+        }
+      | {
+          readonly id: string
+          readonly created: number
+          readonly metadata?: { readonly [x: string]: unknown }
+          readonly type: "session.execution.interrupted"
+          readonly durable: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+          readonly location?: { readonly directory: string; readonly workspaceID?: string }
+          readonly data: { readonly sessionID: string; readonly reason: "user" | "shutdown" | "superseded" }
+        }
+      | {
+          readonly id: string
+          readonly created: number
+          readonly metadata?: { readonly [x: string]: unknown }
           readonly type: "session.instructions.updated"
           readonly durable: { readonly aggregateID: string; readonly seq: number; readonly version: number }
           readonly location?: { readonly directory: string; readonly workspaceID?: string }
@@ -1322,7 +1363,7 @@ export type SessionLogOutput =
           readonly data: {
             readonly sessionID: string
             readonly assistantMessageID: string
-            readonly finish: string
+            readonly finish: "stop" | "length" | "tool-calls" | "content-filter" | "error" | "unknown"
             readonly cost: number
             readonly tokens: {
               readonly input: number
@@ -1344,7 +1385,7 @@ export type SessionLogOutput =
           readonly data: {
             readonly sessionID: string
             readonly assistantMessageID: string
-            readonly error: { readonly type: "unknown"; readonly message: string }
+            readonly error: { readonly type: string; readonly message: string }
           }
         }
       | {
@@ -1354,7 +1395,7 @@ export type SessionLogOutput =
           readonly type: "session.text.started"
           readonly durable: { readonly aggregateID: string; readonly seq: number; readonly version: number }
           readonly location?: { readonly directory: string; readonly workspaceID?: string }
-          readonly data: { readonly sessionID: string; readonly assistantMessageID: string; readonly textID: string }
+          readonly data: { readonly sessionID: string; readonly assistantMessageID: string; readonly ordinal: number }
         }
       | {
           readonly id: string
@@ -1366,7 +1407,7 @@ export type SessionLogOutput =
           readonly data: {
             readonly sessionID: string
             readonly assistantMessageID: string
-            readonly textID: string
+            readonly ordinal: number
             readonly text: string
           }
         }
@@ -1380,8 +1421,8 @@ export type SessionLogOutput =
           readonly data: {
             readonly sessionID: string
             readonly assistantMessageID: string
-            readonly reasoningID: string
-            readonly providerMetadata?: { readonly [x: string]: { readonly [x: string]: unknown } }
+            readonly ordinal: number
+            readonly state?: { readonly [x: string]: unknown }
           }
         }
       | {
@@ -1394,9 +1435,9 @@ export type SessionLogOutput =
           readonly data: {
             readonly sessionID: string
             readonly assistantMessageID: string
-            readonly reasoningID: string
+            readonly ordinal: number
             readonly text: string
-            readonly providerMetadata?: { readonly [x: string]: { readonly [x: string]: unknown } }
+            readonly state?: { readonly [x: string]: unknown }
           }
         }
       | {
@@ -1438,12 +1479,9 @@ export type SessionLogOutput =
             readonly sessionID: string
             readonly assistantMessageID: string
             readonly callID: string
-            readonly tool: string
             readonly input: { readonly [x: string]: unknown }
-            readonly provider: {
-              readonly executed: boolean
-              readonly metadata?: { readonly [x: string]: { readonly [x: string]: unknown } }
-            }
+            readonly executed: boolean
+            readonly state?: { readonly [x: string]: unknown }
           }
         }
       | {
@@ -1482,10 +1520,8 @@ export type SessionLogOutput =
             >
             readonly outputPaths?: ReadonlyArray<string>
             readonly result?: unknown
-            readonly provider: {
-              readonly executed: boolean
-              readonly metadata?: { readonly [x: string]: { readonly [x: string]: unknown } }
-            }
+            readonly executed: boolean
+            readonly resultState?: { readonly [x: string]: unknown }
           }
         }
       | {
@@ -1499,32 +1535,25 @@ export type SessionLogOutput =
             readonly sessionID: string
             readonly assistantMessageID: string
             readonly callID: string
-            readonly error: { readonly type: "unknown"; readonly message: string }
+            readonly error: { readonly type: string; readonly message: string }
             readonly result?: unknown
-            readonly provider: {
-              readonly executed: boolean
-              readonly metadata?: { readonly [x: string]: { readonly [x: string]: unknown } }
-            }
+            readonly executed: boolean
+            readonly resultState?: { readonly [x: string]: unknown }
           }
         }
       | {
           readonly id: string
           readonly created: number
           readonly metadata?: { readonly [x: string]: unknown }
-          readonly type: "session.retried"
+          readonly type: "session.retry.scheduled"
           readonly durable: { readonly aggregateID: string; readonly seq: number; readonly version: number }
           readonly location?: { readonly directory: string; readonly workspaceID?: string }
           readonly data: {
             readonly sessionID: string
+            readonly assistantMessageID: string
             readonly attempt: number
-            readonly error: {
-              readonly message: string
-              readonly statusCode?: number
-              readonly isRetryable: boolean
-              readonly responseHeaders?: { readonly [x: string]: string }
-              readonly responseBody?: string
-              readonly metadata?: { readonly [x: string]: string }
-            }
+            readonly at: number
+            readonly error: { readonly type: string; readonly message: string }
           }
         }
       | {
@@ -1590,7 +1619,7 @@ export type SessionLogOutput =
           readonly type: "session.revert.committed"
           readonly durable: { readonly aggregateID: string; readonly seq: number; readonly version: number }
           readonly location?: { readonly directory: string; readonly workspaceID?: string }
-          readonly data: { readonly sessionID: string; readonly messageID: string }
+          readonly data: { readonly sessionID: string; readonly to: string }
         }
     )
   | { readonly type: "log.synced"; readonly aggregateID: string; readonly seq?: number }
@@ -1703,23 +1732,20 @@ export type SessionMessageOutput = {
         readonly agent: string
         readonly model: { readonly id: string; readonly providerID: string; readonly variant?: string }
         readonly content: ReadonlyArray<
-          | { readonly type: "text"; readonly id: string; readonly text: string }
+          | { readonly type: "text"; readonly text: string }
           | {
               readonly type: "reasoning"
-              readonly id: string
               readonly text: string
-              readonly providerMetadata?: { readonly [x: string]: { readonly [x: string]: JsonValue } }
+              readonly state?: { readonly [x: string]: JsonValue }
               readonly time?: { readonly created: number; readonly completed?: number }
             }
           | {
               readonly type: "tool"
               readonly id: string
               readonly name: string
-              readonly provider?: {
-                readonly executed: boolean
-                readonly metadata?: { readonly [x: string]: { readonly [x: string]: JsonValue } }
-                readonly resultMetadata?: { readonly [x: string]: { readonly [x: string]: JsonValue } }
-              }
+              readonly executed?: boolean
+              readonly providerState?: { readonly [x: string]: JsonValue }
+              readonly providerResultState?: { readonly [x: string]: JsonValue }
               readonly state:
                 | { readonly status: "pending"; readonly input: string }
                 | {
@@ -1758,7 +1784,7 @@ export type SessionMessageOutput = {
                       | { readonly type: "file"; readonly uri: string; readonly mime: string; readonly name?: string }
                     >
                     readonly structured: { readonly [x: string]: JsonValue }
-                    readonly error: { readonly type: "unknown"; readonly message: string }
+                    readonly error: { readonly type: string; readonly message: string }
                     readonly result?: JsonValue
                   }
               readonly time: {
@@ -1770,7 +1796,7 @@ export type SessionMessageOutput = {
             }
         >
         readonly snapshot?: { readonly start?: string; readonly end?: string; readonly files?: ReadonlyArray<string> }
-        readonly finish?: string
+        readonly finish?: "stop" | "length" | "tool-calls" | "content-filter" | "error" | "unknown"
         readonly cost?: number
         readonly tokens?: {
           readonly input: number
@@ -1778,7 +1804,12 @@ export type SessionMessageOutput = {
           readonly reasoning: number
           readonly cache: { readonly read: number; readonly write: number }
         }
-        readonly error?: { readonly type: "unknown"; readonly message: string }
+        readonly error?: { readonly type: string; readonly message: string }
+        readonly retry?: {
+          readonly attempt: number
+          readonly at: number
+          readonly error: { readonly type: string; readonly message: string }
+        }
       }
     | {
         readonly type: "compaction"
@@ -1905,23 +1936,20 @@ export type MessageListOutput = {
         readonly agent: string
         readonly model: { readonly id: string; readonly providerID: string; readonly variant?: string }
         readonly content: ReadonlyArray<
-          | { readonly type: "text"; readonly id: string; readonly text: string }
+          | { readonly type: "text"; readonly text: string }
           | {
               readonly type: "reasoning"
-              readonly id: string
               readonly text: string
-              readonly providerMetadata?: { readonly [x: string]: { readonly [x: string]: JsonValue } }
+              readonly state?: { readonly [x: string]: JsonValue }
               readonly time?: { readonly created: number; readonly completed?: number }
             }
           | {
               readonly type: "tool"
               readonly id: string
               readonly name: string
-              readonly provider?: {
-                readonly executed: boolean
-                readonly metadata?: { readonly [x: string]: { readonly [x: string]: JsonValue } }
-                readonly resultMetadata?: { readonly [x: string]: { readonly [x: string]: JsonValue } }
-              }
+              readonly executed?: boolean
+              readonly providerState?: { readonly [x: string]: JsonValue }
+              readonly providerResultState?: { readonly [x: string]: JsonValue }
               readonly state:
                 | { readonly status: "pending"; readonly input: string }
                 | {
@@ -1960,7 +1988,7 @@ export type MessageListOutput = {
                       | { readonly type: "file"; readonly uri: string; readonly mime: string; readonly name?: string }
                     >
                     readonly structured: { readonly [x: string]: JsonValue }
-                    readonly error: { readonly type: "unknown"; readonly message: string }
+                    readonly error: { readonly type: string; readonly message: string }
                     readonly result?: JsonValue
                   }
               readonly time: {
@@ -1972,7 +2000,7 @@ export type MessageListOutput = {
             }
         >
         readonly snapshot?: { readonly start?: string; readonly end?: string; readonly files?: ReadonlyArray<string> }
-        readonly finish?: string
+        readonly finish?: "stop" | "length" | "tool-calls" | "content-filter" | "error" | "unknown"
         readonly cost?: number
         readonly tokens?: {
           readonly input: number
@@ -1980,7 +2008,12 @@ export type MessageListOutput = {
           readonly reasoning: number
           readonly cache: { readonly read: number; readonly write: number }
         }
-        readonly error?: { readonly type: "unknown"; readonly message: string }
+        readonly error?: { readonly type: string; readonly message: string }
+        readonly retry?: {
+          readonly attempt: number
+          readonly at: number
+          readonly error: { readonly type: string; readonly message: string }
+        }
       }
     | {
         readonly type: "compaction"
@@ -4456,13 +4489,37 @@ export type EventSubscribeOutput =
       readonly id: string
       readonly created: number
       readonly metadata?: { readonly [x: string]: unknown }
-      readonly type: "session.execution.settled"
+      readonly type: "session.execution.started"
+      readonly durable: { readonly aggregateID: string; readonly seq: number; readonly version: number }
       readonly location?: { readonly directory: string; readonly workspaceID?: string }
-      readonly data: {
-        readonly sessionID: string
-        readonly outcome: "success" | "failure" | "interrupted"
-        readonly error?: { readonly type: "unknown"; readonly message: string }
-      }
+      readonly data: { readonly sessionID: string }
+    }
+  | {
+      readonly id: string
+      readonly created: number
+      readonly metadata?: { readonly [x: string]: unknown }
+      readonly type: "session.execution.succeeded"
+      readonly durable: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+      readonly location?: { readonly directory: string; readonly workspaceID?: string }
+      readonly data: { readonly sessionID: string }
+    }
+  | {
+      readonly id: string
+      readonly created: number
+      readonly metadata?: { readonly [x: string]: unknown }
+      readonly type: "session.execution.failed"
+      readonly durable: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+      readonly location?: { readonly directory: string; readonly workspaceID?: string }
+      readonly data: { readonly sessionID: string; readonly error: { readonly type: string; readonly message: string } }
+    }
+  | {
+      readonly id: string
+      readonly created: number
+      readonly metadata?: { readonly [x: string]: unknown }
+      readonly type: "session.execution.interrupted"
+      readonly durable: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+      readonly location?: { readonly directory: string; readonly workspaceID?: string }
+      readonly data: { readonly sessionID: string; readonly reason: "user" | "shutdown" | "superseded" }
     }
   | {
       readonly id: string
@@ -4573,7 +4630,7 @@ export type EventSubscribeOutput =
       readonly data: {
         readonly sessionID: string
         readonly assistantMessageID: string
-        readonly finish: string
+        readonly finish: "stop" | "length" | "tool-calls" | "content-filter" | "error" | "unknown"
         readonly cost: number
         readonly tokens: {
           readonly input: number
@@ -4595,7 +4652,7 @@ export type EventSubscribeOutput =
       readonly data: {
         readonly sessionID: string
         readonly assistantMessageID: string
-        readonly error: { readonly type: "unknown"; readonly message: string }
+        readonly error: { readonly type: string; readonly message: string }
       }
     }
   | {
@@ -4605,7 +4662,7 @@ export type EventSubscribeOutput =
       readonly type: "session.text.started"
       readonly durable: { readonly aggregateID: string; readonly seq: number; readonly version: number }
       readonly location?: { readonly directory: string; readonly workspaceID?: string }
-      readonly data: { readonly sessionID: string; readonly assistantMessageID: string; readonly textID: string }
+      readonly data: { readonly sessionID: string; readonly assistantMessageID: string; readonly ordinal: number }
     }
   | {
       readonly id: string
@@ -4616,7 +4673,7 @@ export type EventSubscribeOutput =
       readonly data: {
         readonly sessionID: string
         readonly assistantMessageID: string
-        readonly textID: string
+        readonly ordinal: number
         readonly delta: string
       }
     }
@@ -4630,7 +4687,7 @@ export type EventSubscribeOutput =
       readonly data: {
         readonly sessionID: string
         readonly assistantMessageID: string
-        readonly textID: string
+        readonly ordinal: number
         readonly text: string
       }
     }
@@ -4644,8 +4701,8 @@ export type EventSubscribeOutput =
       readonly data: {
         readonly sessionID: string
         readonly assistantMessageID: string
-        readonly reasoningID: string
-        readonly providerMetadata?: { readonly [x: string]: { readonly [x: string]: unknown } }
+        readonly ordinal: number
+        readonly state?: { readonly [x: string]: unknown }
       }
     }
   | {
@@ -4657,7 +4714,7 @@ export type EventSubscribeOutput =
       readonly data: {
         readonly sessionID: string
         readonly assistantMessageID: string
-        readonly reasoningID: string
+        readonly ordinal: number
         readonly delta: string
       }
     }
@@ -4671,9 +4728,9 @@ export type EventSubscribeOutput =
       readonly data: {
         readonly sessionID: string
         readonly assistantMessageID: string
-        readonly reasoningID: string
+        readonly ordinal: number
         readonly text: string
-        readonly providerMetadata?: { readonly [x: string]: { readonly [x: string]: unknown } }
+        readonly state?: { readonly [x: string]: unknown }
       }
     }
   | {
@@ -4728,12 +4785,9 @@ export type EventSubscribeOutput =
         readonly sessionID: string
         readonly assistantMessageID: string
         readonly callID: string
-        readonly tool: string
         readonly input: { readonly [x: string]: unknown }
-        readonly provider: {
-          readonly executed: boolean
-          readonly metadata?: { readonly [x: string]: { readonly [x: string]: unknown } }
-        }
+        readonly executed: boolean
+        readonly state?: { readonly [x: string]: unknown }
       }
     }
   | {
@@ -4772,10 +4826,8 @@ export type EventSubscribeOutput =
         >
         readonly outputPaths?: ReadonlyArray<string>
         readonly result?: unknown
-        readonly provider: {
-          readonly executed: boolean
-          readonly metadata?: { readonly [x: string]: { readonly [x: string]: unknown } }
-        }
+        readonly executed: boolean
+        readonly resultState?: { readonly [x: string]: unknown }
       }
     }
   | {
@@ -4789,32 +4841,25 @@ export type EventSubscribeOutput =
         readonly sessionID: string
         readonly assistantMessageID: string
         readonly callID: string
-        readonly error: { readonly type: "unknown"; readonly message: string }
+        readonly error: { readonly type: string; readonly message: string }
         readonly result?: unknown
-        readonly provider: {
-          readonly executed: boolean
-          readonly metadata?: { readonly [x: string]: { readonly [x: string]: unknown } }
-        }
+        readonly executed: boolean
+        readonly resultState?: { readonly [x: string]: unknown }
       }
     }
   | {
       readonly id: string
       readonly created: number
       readonly metadata?: { readonly [x: string]: unknown }
-      readonly type: "session.retried"
+      readonly type: "session.retry.scheduled"
       readonly durable: { readonly aggregateID: string; readonly seq: number; readonly version: number }
       readonly location?: { readonly directory: string; readonly workspaceID?: string }
       readonly data: {
         readonly sessionID: string
+        readonly assistantMessageID: string
         readonly attempt: number
-        readonly error: {
-          readonly message: string
-          readonly statusCode?: number
-          readonly isRetryable: boolean
-          readonly responseHeaders?: { readonly [x: string]: string }
-          readonly responseBody?: string
-          readonly metadata?: { readonly [x: string]: string }
-        }
+        readonly at: number
+        readonly error: { readonly type: string; readonly message: string }
       }
     }
   | {
@@ -4888,7 +4933,7 @@ export type EventSubscribeOutput =
       readonly type: "session.revert.committed"
       readonly durable: { readonly aggregateID: string; readonly seq: number; readonly version: number }
       readonly location?: { readonly directory: string; readonly workspaceID?: string }
-      readonly data: { readonly sessionID: string; readonly messageID: string }
+      readonly data: { readonly sessionID: string; readonly to: string }
     }
   | {
       readonly id: string

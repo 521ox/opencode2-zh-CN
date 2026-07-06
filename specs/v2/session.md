@@ -21,7 +21,7 @@ sessions.prompt({ id?, sessionID, prompt, delivery?, resume? })
 
 sessions.interrupt(sessionID)
   -> interrupts active execution on this process
-  -> waits for runner cleanup and settlement
+  -> waits for runner cleanup and a terminal lifecycle observation
   -> clears a coalesced follow-up wake already registered with this coordinator
   -> preserves durable inbox rows for a later wake or resume
   -> idle or missing Session is a no-op
@@ -47,7 +47,15 @@ SessionExecution.resume(sessionID)
 
 `SessionExecution` and the read-side `SessionStore` are process-global. `SessionRunner`, catalog, model resolver, tool registry, permission state, and filesystem are cached per Location. No layer takes a Session ID. An omitted `Location.workspaceID` means implicit-local placement; explicit workspace identity remains reserved for future placement semantics.
 
-The local runner issues one explicit `llm.stream(request)` per step, projects each complete local tool call durably before eagerly starting its structured child execution, awaits every started tool fiber after provider-stream closure, and reloads projected history once before continuation. Promoting any new user input resets the selected agent's configured step allowance; multiple steers promoted at one boundary reset it once. Tool settlement events carry the owning assistant message ID because provider-local call IDs may repeat across steps. Before assembling a provider request, the runner durably fails any local tool still projected as `running` from a previous process with `Tool execution interrupted`; abandoned side effects are never silently replayed.
+The local runner issues one explicit `llm.stream(request)` per step, projects each complete local tool call durably before eagerly starting its structured child execution, awaits every owned tool fiber after provider-stream closure, and reloads projected history once before continuation. For every in-process step, `session.step.started` precedes its tool calls, every local and hosted call settles as `session.tool.success` or `session.tool.failed`, and only then may the runner publish the single terminal `session.step.ended` or `session.step.failed`. Streamed provider-error evidence is retained until this closeout; thrown provider failures and interruption use the same settlement-first ordering. Promoting any new user input resets the selected agent's configured step allowance; multiple steers promoted at one boundary reset it once.
+
+`callID` is unique only within its owning step, not across the Session. Tool events therefore carry `assistantMessageID`, and consumers correlate a call through the step that owns that assistant message rather than inventing a synthetic composite key. Before assembling a provider request, the runner's cross-drain `failInterruptedTools` recovery durably fails any tool still projected as pending or running from a previous process with `Tool execution interrupted`. This orphan-recovery sweep is the explicit nesting exception: it occurs in a later drain, but attributes every settlement to the original `assistantMessageID`; abandoned side effects are never silently replayed.
+
+`session.execution.started.1` and exactly one of `session.execution.succeeded.1`, `session.execution.failed.1`, or `session.execution.interrupted.1` observe one process-local coordinator busy period, including coalesced drains and joined resumes. These durable rows are history, not a durable execution identity: replay must never infer current liveness, recovery, grouping, or resumability from an unmatched start. A drain has no durable identity or transcript boundary. `/api/session/active` is the authority for current process-local liveness, and is empty after restart. User interruption records `reason: "user"`; owner-scope interruption defaults to `"shutdown"`; `"superseded"` is reserved for explicit replacement.
+
+Core retries only typed rate-limit, provider-internal, and transport failures before durable assistant text, reasoning, tool-call, tool-output, or tool-execution evidence. The initial call plus at most four retries use two-second exponential backoff, raised when a provider's `retryAfterMs` is larger. Every retry attempt remains a distinct step and consumes the selected agent's step allowance, while all pre-output attempts reuse one assistant message ID so retry state never creates empty transcript messages. Repeated `session.step.started.1` facts reopen that assistant projection idempotently. `session.retry.scheduled.1` is committed before each delay with the upcoming one-based attempt and absolute epoch-millisecond time, then projects onto `Assistant.retry`. The next `session.step.started.1` or terminal failure/interruption clears it. A scheduled retry surviving a crash is historical UI state only and never triggers recovery.
+
+A normalized `step-finish` with `content-filter` publishes `session.step.failed.1` with `provider.content-filter`, never `session.step.ended.1`. Any partial streamed content remains visible; a contentless filtered response still has a failed assistant projection.
 
 Projected hosted tools preserve call-side and settlement-side provider metadata separately so settlement and interruption recovery cannot erase continuation identifiers. Provider-native reasoning and provider metadata replay only while the historical assistant model matches the selected continuation model; after a model switch, visible reasoning text remains ordinary assistant text and provider-native metadata is omitted.
 
@@ -124,7 +132,13 @@ Before each step, the runner estimates the complete model-visible request and co
 
 Compaction keeps the full transcript durable while replacing its active model representation with one hidden checkpoint containing a structured rolling summary and token-bounded serialized recent context. Provider-native assistant, reasoning, and tool messages never survive across the boundary, avoiding signature and encrypted-reasoning failures when the earlier prefix changes.
 
+The rolling summary is a continuation checkpoint with this complete heading order: `Objective`, `Important Details`, `Work State`, and `Next Move`. `Work State` records completed, active, and blocked work, while `Next Move` records the immediate and following actions. Every heading remains present even when its value is `(none)`.
+
 `session.compaction.started.1` durably identifies the attempt. Compaction deltas are live-only progress. `session.compaction.ended.1` durably stores the final summary and serialized recent context; only this completed event projects a model-visible compaction message. On the next physical attempt, the runner observes that completed compaction and directly renders a fresh instruction baseline through `InstructionCheckpoint`. A failed or interrupted attempt therefore leaves the previous history boundary active.
+
+Assistant text and reasoning follow a strict `started` / live-only `delta` / durable full-value `ended` lifecycle. A publisher permits at most one open fragment of each kind in a step and fails on a second start before the matching end. Provider block IDs remain internal to LLM adapters; each fragment event carries a Session-assigned kind-specific ordinal, matching the ordinal derived from projected content. UI identity is therefore the assistant message ID plus content kind and ordinal. Tool calls retain step-scoped `callID` because settlements and provider replay correlate through it.
+
+Provider continuation state is opaque and un-nested at the Session boundary. The publisher selects only the active model provider's entry from LLM provider metadata. Same-model replay re-nests that state under the current provider; model switches and failed assistant steps continue to suppress provider-native continuation state.
 
 Repeated compactions update the previous structured summary with newly compacted messages. The runner then reloads projected history and executes the original pending step.
 
@@ -160,7 +174,7 @@ Status: `complete` is usable in the native V2 path, `partial` covers only part o
 | Prompt/reference expansion | Configured-reference expansion                                           | missing  | Resolve aliases and emit durable model-visible reference context or failures.                                                          |
 | Prompt/reference expansion | Native synthetic expansion replay                                        | partial  | V2 replays synthetic messages but only the V1 compatibility path creates them.                                                         |
 
-Provider timeout, retry, and watchdog policy is intentionally deferred. The runner does not impose a universal provider-stream inactivity or absolute timeout. A future slice should design configurable policy around provider behavior, durable failure reporting, and local drain-chain release rather than hardcoding one default for every provider.
+Provider timeout and watchdog policy is intentionally deferred. Retry tuning beyond the narrow safe policy above remains separate work; the runner does not impose a universal provider-stream inactivity or absolute timeout.
 
 Inbox delivery is explicit:
 
@@ -174,7 +188,7 @@ Execution has two entry points:
 
 Post-crash continuation recovery is intentionally deferred. A wake does not infer that ambiguous provider work is safe to retry after an input has already been promoted. Explicit `run` may deliberately continue from durable projected history. A future recovery slice should model provider-dispatch ambiguity, required continuation, queued-input promotion, retry policy, and visible recovery status together. It must not assume an enclosing durable execution identity that the Session model does not otherwise need.
 
-A process-global `SessionRunCoordinator` serializes execution for each local Session while allowing different Sessions to run concurrently. Resumes join active execution, overlapping wakes coalesce into one follow-up, and interruption stops current process-local execution without deleting durable inbox work. The runner enters the Session's current Location when execution starts and fences each new step against that Location.
+A process-global `SessionRunCoordinator` serializes execution for each local Session while allowing different Sessions to run concurrently. Resumes join active execution, overlapping wakes coalesce into one follow-up, and interruption stops current process-local execution without deleting durable inbox work. The runner enters the Session's current Location when execution starts and fences each new step against that Location. Its durable lifecycle events are historical observations only; they do not replace the coordinator's process-local active registry.
 
 The coordinator's active registry is also the source for `sessions.active()`. It represents only foreground Session drains owned by the current process; background subagents and tasks do not add parent Sessions to this registry. The snapshot is runtime state and is empty after a process restart.
 

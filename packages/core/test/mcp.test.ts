@@ -71,9 +71,9 @@ const it = testEffect(
 describe("MCP errors", () => {
   test("expose useful messages", () => {
     expect(new MCP.NotFoundError({ server: MCP.ServerName.make("demo") }).message).toBe("MCP server not found: demo")
-    expect(new MCP.ToolCallError({ server: MCP.ServerName.make("demo"), tool: "search", message: "failed" }).message).toBe(
-      "failed",
-    )
+    expect(
+      new MCP.ToolCallError({ server: MCP.ServerName.make("demo"), tool: "search", message: "failed" }).message,
+    ).toBe("failed")
     expect(new MCPClient.NeedsAuthError({ server: "demo" }).message).toBe("MCP server requires authentication: demo")
     expect(new MCPClient.ConnectError({ server: "demo", message: "offline" }).message).toBe("offline")
   })
@@ -231,7 +231,7 @@ it.effect("does not call MCP when permission is blocked", () =>
   Effect.gen(function* () {
     calls = 0
     assertion = yield* Deferred.make<PermissionV2.AssertInput>()
-    decision = Effect.fail(new PermissionV2.BlockedError({ rules: [] }))
+    decision = Effect.fail(new PermissionV2.BlockedError({ rules: [], permission: "demo_search", resources: ["*"] }))
     const registry = yield* ToolRegistry.Service
     yield* waitForTool(registry, "execute")
 

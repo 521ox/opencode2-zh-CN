@@ -85,7 +85,9 @@ export const Plugin = {
                     source,
                   })
                   return yield* files.writeTextPreservingBom({ target, content: input.content })
-                }).pipe(Effect.mapError(() => new ToolFailure({ message: `Unable to write ${input.path}` }))),
+                }).pipe(
+                  Effect.mapError((error) => new ToolFailure({ message: `Unable to write ${input.path}`, error })),
+                ),
             }),
             "edit",
           ),

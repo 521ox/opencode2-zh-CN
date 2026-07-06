@@ -74,19 +74,17 @@ export function createSessionRows(sessionID: Accessor<string>) {
   createEffect(
     on(
       () =>
-        data.session.message
-          .list(sessionID())
-          .flatMap((message) =>
-            message.type === "user"
-              ? [
-                  {
-                    id: message.id,
-                    created: message.time.created,
-                    input: data.session.input.has(sessionID(), message.id),
-                  },
-                ]
-              : [],
-          ),
+        data.session.message.list(sessionID()).flatMap((message) =>
+          message.type === "user"
+            ? [
+                {
+                  id: message.id,
+                  created: message.time.created,
+                  input: data.session.input.has(sessionID(), message.id),
+                },
+              ]
+            : [],
+        ),
       () => setRows(reconcile(reduce())),
     ),
   )
@@ -138,6 +136,14 @@ export function createSessionRows(sessionID: Accessor<string>) {
       }),
     )
 
+  const removeFooter = (messageID: string) =>
+    setRows(
+      produce((draft) => {
+        const index = draft.findIndex((row) => row.type === "assistant-footer" && row.messageID === messageID)
+        if (index !== -1) draft.splice(index, 1)
+      }),
+    )
+
   const isQueued = (messageID: string) => {
     return data.session.input.has(sessionID(), messageID)
   }
@@ -166,23 +172,29 @@ export function createSessionRows(sessionID: Accessor<string>) {
     data.on("session.compaction.ended", message),
     data.on("session.text.delta", (event) => {
       if (event.data.sessionID === sessionID())
-        appendPart({ messageID: event.data.assistantMessageID, partID: event.data.textID })
+        appendPart({ messageID: event.data.assistantMessageID, partID: `text:${event.data.ordinal}` })
     }),
     data.on("session.text.ended", (event) => {
       if (event.data.sessionID === sessionID() && event.data.text.trim())
-        appendPart({ messageID: event.data.assistantMessageID, partID: event.data.textID })
+        appendPart({ messageID: event.data.assistantMessageID, partID: `text:${event.data.ordinal}` })
     }),
     data.on("session.reasoning.delta", (event) => {
       if (event.data.sessionID === sessionID())
-        appendPart({ messageID: event.data.assistantMessageID, partID: event.data.reasoningID })
+        appendPart({ messageID: event.data.assistantMessageID, partID: `reasoning:${event.data.ordinal}` })
     }),
     data.on("session.reasoning.ended", (event) => {
       if (event.data.sessionID === sessionID() && event.data.text.trim())
-        appendPart({ messageID: event.data.assistantMessageID, partID: event.data.reasoningID })
+        appendPart({ messageID: event.data.assistantMessageID, partID: `reasoning:${event.data.ordinal}` })
     }),
     data.on("session.tool.input.started", (event) => {
       if (event.data.sessionID === sessionID())
         appendPart({ messageID: event.data.assistantMessageID, partID: event.data.callID }, event.data.name)
+    }),
+    data.on("session.retry.scheduled", (event) => {
+      if (event.data.sessionID === sessionID()) appendFooter(event.data.assistantMessageID)
+    }),
+    data.on("session.step.started", (event) => {
+      if (event.data.sessionID === sessionID()) removeFooter(event.data.assistantMessageID)
     }),
     data.on("session.step.ended", (event) => {
       if (event.data.sessionID !== sessionID() || ["tool-calls", "unknown"].includes(event.data.finish)) return
@@ -207,11 +219,13 @@ export function reduceSessionRows(messages: SessionMessage[], inputs = new Set<s
         rows.push({ type: "message", messageID: message.id })
         return rows
       }
+      const ordinals = { text: 0, reasoning: 0 }
       message.content.forEach((part) => {
+        const partID = part.type === "tool" ? part.id : `${part.type}:${ordinals[part.type]++}`
         if ((part.type === "text" || part.type === "reasoning") && !part.text.trim()) return
-        append(rows, { messageID: message.id, partID: part.id }, part)
+        append(rows, { messageID: message.id, partID }, part)
       })
-      if ((message.finish && !["tool-calls", "unknown"].includes(message.finish)) || message.error) {
+      if ((message.finish && !["tool-calls", "unknown"].includes(message.finish)) || message.error || message.retry) {
         completePrevious(rows)
         rows.push({ type: "assistant-footer", messageID: message.id })
       }
@@ -219,6 +233,15 @@ export function reduceSessionRows(messages: SessionMessage[], inputs = new Set<s
     },
     [],
   )
+}
+
+export function resolvePart(message: SessionMessageAssistant, partID: string) {
+  const tool = message.content.find((part) => part.type === "tool" && part.id === partID)
+  if (tool) return tool
+  const match = /^(text|reasoning):(\d+)$/.exec(partID)
+  if (!match) return
+  const ordinal = Number(match[2])
+  return message.content.filter((part) => part.type === match[1])[ordinal]
 }
 
 function append(rows: SessionRow[], ref: PartRef, part: SessionMessageAssistant["content"][number]) {

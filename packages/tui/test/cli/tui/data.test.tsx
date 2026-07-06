@@ -8,7 +8,7 @@ import { onMount } from "solid-js"
 import { ProjectProvider } from "../../../src/context/project"
 import { SDKProvider } from "../../../src/context/sdk"
 import { DataProvider, useData } from "../../../src/context/data"
-import { createSessionRows } from "../../../src/routes/session/rows"
+import { createSessionRows, type SessionRow } from "../../../src/routes/session/rows"
 import { createApi, createClient, createEventStream, createFetch, directory, json } from "../../fixture/tui-sdk"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 
@@ -177,16 +177,11 @@ test("reconnects the event stream and bootstraps fresh data", async () => {
 
     await wait(() => requests.active === 2 && data.connection.status() === "connected", 4000)
     emitEvent(events, {
-      id: "evt_step_started_after_reconnect",
+      id: "evt_execution_started_after_reconnect",
       created: 1,
-      type: "session.step.started",
+      type: "session.execution.started",
       durable: durable("session-new"),
-      data: {
-        sessionID: "session-new",
-        assistantMessageID: "message-new",
-        agent: "build",
-        model: { id: "model", providerID: "provider" },
-      },
+      data: { sessionID: "session-new" },
     })
     await wait(() => data.session.status("session-new") === "running")
     resolveActive(json({ data: {} }))
@@ -326,7 +321,7 @@ test("removes committed revert messages from local state", async () => {
       created: 3,
       type: "session.revert.committed",
       durable: durable(sessionID, 3),
-      data: { sessionID, messageID: "msg_002" },
+      data: { sessionID, to: "msg_002" },
     })
 
     await wait(() => data.session.message.ids(sessionID).length === 1)
@@ -406,9 +401,11 @@ test("tracks session status from active sessions and execution events", async ()
     if (url.pathname === "/api/session/active") return json({ data: { "session-active": { type: "running" } } })
   }, events)
   let data!: ReturnType<typeof useData>
+  let rows!: SessionRow[]
 
   function Probe() {
     data = useData()
+    rows = createSessionRows(() => "session-retry")
     return <box />
   }
 
@@ -429,6 +426,15 @@ test("tracks session status from active sessions and execution events", async ()
     expect(data.session.status("session-idle")).toBe("idle")
 
     emitEvent(events, {
+      id: "evt_execution_started",
+      created: 0,
+      type: "session.execution.started",
+      durable: durable("session-live"),
+      data: { sessionID: "session-live" },
+    })
+    await wait(() => data.session.status("session-live") === "running")
+
+    emitEvent(events, {
       id: "evt_step_started",
       created: 0,
       type: "session.step.started",
@@ -440,8 +446,6 @@ test("tracks session status from active sessions and execution events", async ()
         model: { id: "model", providerID: "provider" },
       },
     })
-    await wait(() => data.session.status("session-live") === "running")
-
     emitEvent(events, {
       id: "evt_step_ended",
       created: 0,
@@ -462,15 +466,22 @@ test("tracks session status from active sessions and execution events", async ()
     expect(data.session.status("session-live")).toBe("running")
 
     emitEvent(events, {
-      id: "evt_execution_settled",
+      id: "evt_execution_succeeded",
       created: 0,
-      type: "session.execution.settled",
-      data: {
-        sessionID: "session-live",
-        outcome: "success",
-      },
+      type: "session.execution.succeeded",
+      durable: durable("session-live", 1, 3),
+      data: { sessionID: "session-live" },
     })
     await wait(() => data.session.status("session-live") === "idle")
+
+    emitEvent(events, {
+      id: "evt_failed_execution_started",
+      created: 0,
+      type: "session.execution.started",
+      durable: durable("session-failed"),
+      data: { sessionID: "session-failed" },
+    })
+    await wait(() => data.session.status("session-failed") === "running")
 
     emitEvent(events, {
       id: "evt_failed_step_started",
@@ -484,8 +495,6 @@ test("tracks session status from active sessions and execution events", async ()
         model: { id: "model", providerID: "provider" },
       },
     })
-    await wait(() => data.session.status("session-failed") === "running")
-
     emitEvent(events, {
       id: "evt_step_failed",
       created: 0,
@@ -494,26 +503,146 @@ test("tracks session status from active sessions and execution events", async ()
       data: {
         sessionID: "session-failed",
         assistantMessageID: "message-failed",
-        error: { type: "unknown", message: "Provider unavailable" },
+        error: { type: "provider.content-filter", message: "Provider blocked the response" },
       },
     })
     await wait(() => {
       const assistant = data.session.message.get("session-failed", "message-failed")
-      return assistant?.type === "assistant" && assistant.finish === "error"
+      return (
+        assistant?.type === "assistant" &&
+        assistant.finish === "error" &&
+        assistant.error?.type === "provider.content-filter"
+      )
     })
     expect(data.session.status("session-failed")).toBe("running")
 
     emitEvent(events, {
-      id: "evt_failed_execution_settled",
+      id: "evt_failed_execution_failed",
       created: 0,
-      type: "session.execution.settled",
+      type: "session.execution.failed",
+      durable: durable("session-failed", 1, 3),
       data: {
         sessionID: "session-failed",
-        outcome: "failure",
-        error: { type: "unknown", message: "Provider unavailable" },
+        error: { type: "provider.content-filter", message: "Provider blocked the response" },
       },
     })
     await wait(() => data.session.status("session-failed") === "idle")
+
+    emitEvent(events, {
+      id: "evt_retry_execution_started",
+      created: 0,
+      type: "session.execution.started",
+      durable: durable("session-retry"),
+      data: { sessionID: "session-retry" },
+    })
+    emitEvent(events, {
+      id: "evt_retry_step_started",
+      created: 0,
+      type: "session.step.started",
+      durable: durable("session-retry", 1, 2),
+      data: {
+        sessionID: "session-retry",
+        assistantMessageID: "message-retry",
+        agent: "build",
+        model: { id: "model", providerID: "provider" },
+      },
+    })
+    emitEvent(events, {
+      id: "evt_retry_scheduled",
+      created: 0,
+      type: "session.retry.scheduled",
+      durable: durable("session-retry", 1, 3),
+      data: {
+        sessionID: "session-retry",
+        assistantMessageID: "message-retry",
+        attempt: 2,
+        at: 2_000,
+        error: { type: "provider.transport", message: "Disconnected" },
+      },
+    })
+    await wait(() => {
+      const assistant = data.session.message.get("session-retry", "message-retry")
+      return assistant?.type === "assistant" && assistant.retry?.attempt === 2
+    })
+    await wait(() => rows.some((row) => row.type === "assistant-footer" && row.messageID === "message-retry"))
+    emitEvent(events, {
+      id: "evt_retry_next_step",
+      created: 2_000,
+      type: "session.step.started",
+      durable: durable("session-retry", 1, 4),
+      data: {
+        sessionID: "session-retry",
+        assistantMessageID: "message-retry",
+        agent: "build",
+        model: { id: "model", providerID: "provider" },
+      },
+    })
+    await wait(() => {
+      const assistant = data.session.message.get("session-retry", "message-retry")
+      return assistant?.type === "assistant" && assistant.retry === undefined
+    })
+    await wait(() => !rows.some((row) => row.type === "assistant-footer" && row.messageID === "message-retry"))
+    expect(data.session.message.list("session-retry").filter((message) => message.type === "assistant")).toHaveLength(1)
+    emitEvent(events, {
+      id: "evt_retry_scheduled_again",
+      created: 2_000,
+      type: "session.retry.scheduled",
+      durable: durable("session-retry", 1, 5),
+      data: {
+        sessionID: "session-retry",
+        assistantMessageID: "message-retry",
+        attempt: 3,
+        at: 6_000,
+        error: { type: "provider.transport", message: "Disconnected again" },
+      },
+    })
+    await wait(() => {
+      const assistant = data.session.message.get("session-retry", "message-retry")
+      return assistant?.type === "assistant" && assistant.retry?.attempt === 3
+    })
+    emitEvent(events, {
+      id: "evt_retry_interrupted",
+      created: 2_000,
+      type: "session.execution.interrupted",
+      durable: durable("session-retry", 1, 6),
+      data: { sessionID: "session-retry", reason: "shutdown" },
+    })
+    await wait(() => data.session.status("session-retry") === "idle")
+    expect(data.session.message.get("session-retry", "message-retry")).not.toHaveProperty("retry")
+
+    emitEvent(events, {
+      id: "evt_compaction_started",
+      created: 0,
+      type: "session.compaction.started",
+      durable: durable("session-live", 2),
+      data: { sessionID: "session-live", reason: "auto" },
+    })
+    emitEvent(events, {
+      id: "evt_compaction_delta_1",
+      created: 0,
+      type: "session.compaction.delta",
+      data: { sessionID: "session-live", text: "Live " },
+    })
+    emitEvent(events, {
+      id: "evt_compaction_delta_2",
+      created: 0,
+      type: "session.compaction.delta",
+      data: { sessionID: "session-live", text: "summary" },
+    })
+    await wait(() => data.session.compaction("session-live") === "Live summary")
+
+    emitEvent(events, {
+      id: "evt_compaction_ended",
+      created: 0,
+      type: "session.compaction.ended",
+      durable: durable("session-live", 3),
+      data: { sessionID: "session-live", reason: "auto", text: "Live summary", recent: "recent" },
+    })
+    await wait(() => data.session.compaction("session-live") === undefined)
+    expect(data.session.message.get("session-live", "msg_compaction_ended")).toMatchObject({
+      type: "compaction",
+      summary: "Live summary",
+    })
   } finally {
     app.renderer.destroy()
   }
@@ -1020,9 +1149,9 @@ test("settles pending tools when a live failure arrives", async () => {
         sessionID: "session-1",
         assistantMessageID: "msg_explicit_assistant_9",
         callID: "call-1",
-        tool: "bash",
         input: {},
-        provider: { executed: false, metadata: { fake: { call: true } } },
+        executed: false,
+        state: { call: true },
       },
     })
     emitEvent(events, {
@@ -1035,7 +1164,8 @@ test("settles pending tools when a live failure arrives", async () => {
         assistantMessageID: "msg_explicit_assistant_9",
         callID: "call-1",
         error: { type: "unknown", message: "aborted" },
-        provider: { executed: false, metadata: { fake: { result: true } } },
+        executed: false,
+        resultState: { result: true },
       },
     })
 
@@ -1061,11 +1191,9 @@ test("settles pending tools when a live failure arrives", async () => {
     expect(tool.state.input).toEqual({})
     expect(tool.state.structured).toEqual({})
     expect(tool.state.content).toEqual([])
-    expect(tool.provider).toEqual({
-      executed: false,
-      metadata: { fake: { call: true } },
-      resultMetadata: { fake: { result: true } },
-    })
+    expect(tool.executed).toBe(false)
+    expect(tool.providerState).toEqual({ call: true })
+    expect(tool.providerResultState).toEqual({ result: true })
     expect(sync.session.message.list("session-1").map((message) => message.type)).toEqual([
       "agent-switched",
       "model-switched",

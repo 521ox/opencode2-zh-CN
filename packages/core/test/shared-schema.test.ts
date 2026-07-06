@@ -103,6 +103,7 @@ test("Core reuses the canonical shared schemas", async () => {
     [coreIntegration.Ref, Integration.Ref],
     [coreLocation.Ref, Location.Ref],
     [coreLLM.ProviderMetadata, LLM.ProviderMetadata],
+    [coreLLM.FinishReason, LLM.FinishReason],
     [coreLLM.ToolTextContent, LLM.ToolTextContent],
     [coreLLM.ToolFileContent, LLM.ToolFileContent],
     [coreLLM.ToolContent, LLM.ToolContent],
@@ -137,7 +138,7 @@ test("Core reuses the canonical shared schemas", async () => {
     [coreSessionInput.Delivery, SessionInput.Delivery],
     [coreSessionInput.Admitted, SessionInput.Admitted],
     [coreSessionMessage.ID, SessionMessage.ID],
-    [coreSessionMessage.UnknownError, SessionMessage.UnknownError],
+    [coreSessionMessage.AssistantRetry, SessionMessage.AssistantRetry],
     [coreSessionMessage.AgentSelected, SessionMessage.AgentSelected],
     [coreSessionMessage.ModelSelected, SessionMessage.ModelSelected],
     [coreSessionMessage.User, SessionMessage.User],
@@ -183,7 +184,7 @@ test("Core reuses the canonical shared schemas", async () => {
 test("shared record schemas construct and decode plain objects", () => {
   const made = Prompt.make({ text: "hello" })
   const decoded = Schema.decodeUnknownSync(Prompt)({ text: "hello" })
-  const content = Schema.decodeUnknownSync(SessionMessage.AssistantText)({ type: "text", id: "part_1", text: "hi" })
+  const content = Schema.decodeUnknownSync(SessionMessage.AssistantText)({ type: "text", text: "hi" })
 
   expect(Object.getPrototypeOf(made)).toBe(Object.prototype)
   expect(Object.getPrototypeOf(decoded)).toBe(Object.prototype)
