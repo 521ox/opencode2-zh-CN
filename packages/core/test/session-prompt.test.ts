@@ -1,5 +1,7 @@
 import { describe, expect } from "bun:test"
 import { DateTime, Effect, Fiber, Layer, Schema, Stream } from "effect"
+import path from "path"
+import { pathToFileURL } from "url"
 import { eq } from "drizzle-orm"
 import { Database } from "@opencode-ai/core/database/database"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
@@ -221,20 +223,70 @@ describe("SessionV2.prompt", () => {
     Effect.gen(function* () {
       yield* setup
       const session = yield* SessionV2.Service
+      const uri =
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
 
       const message = yield* session.prompt({
         sessionID,
         prompt: {
           text: "Inspect this image",
-          files: [{ uri: "data:image/png;base64,aGVsbG8=", name: "image.png" }],
+          files: [{ uri, name: "image.png" }],
+        },
+        resume: false,
+      })
+
+      expect(message.prompt.files).toEqual([{ uri, name: "image.png", mime: "image/png" }])
+      expect((yield* admitted(message.id))?.prompt.files).toEqual(message.prompt.files)
+    }),
+  )
+
+  it.effect("classifies source files and directories from local content", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const directory = import.meta.dir
+      const source = path.join(directory, "session-prompt.test.ts")
+      const sourceUri = pathToFileURL(source)
+      sourceUri.searchParams.set("start", "1")
+      sourceUri.searchParams.set("end", "1")
+
+      const message = yield* session.prompt({
+        sessionID,
+        prompt: {
+          text: "Inspect these",
+          files: [
+            { uri: sourceUri.href, name: "main.ts" },
+            { uri: pathToFileURL(directory).href, name: "source" },
+          ],
         },
         resume: false,
       })
 
       expect(message.prompt.files).toEqual([
-        { uri: "data:image/png;base64,aGVsbG8=", name: "image.png", mime: "image/png" },
+        {
+          uri: sourceUri.href,
+          name: "main.ts",
+          mime: "text/plain",
+          content: 'import { describe, expect } from "bun:test"',
+        },
+        { uri: pathToFileURL(directory).href, name: "source", mime: "application/x-directory" },
       ])
-      expect((yield* admitted(message.id))?.prompt.files).toEqual(message.prompt.files)
+    }),
+  )
+
+  it.effect("sniffs data URL content instead of trusting its declared MIME", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const uri = `data:video/mp2t;base64,${Buffer.from("export const value = 1\n").toString("base64")}`
+
+      const message = yield* session.prompt({
+        sessionID,
+        prompt: { text: "Inspect this", files: [{ uri, name: "main.ts" }] },
+        resume: false,
+      })
+
+      expect(message.prompt.files).toEqual([{ uri, name: "main.ts", mime: "text/plain" }])
     }),
   )
 

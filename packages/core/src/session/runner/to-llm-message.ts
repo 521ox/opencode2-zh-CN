@@ -19,6 +19,41 @@ const media = (file: FileAttachment): ContentPart => ({
   metadata: file.description === undefined ? undefined : { description: file.description },
 })
 
+const textAttachment = (file: FileAttachment) =>
+  Message.make({
+    role: "user",
+    content: [
+      `Attached file: ${file.name ?? file.uri}`,
+      `Source: ${file.uri}`,
+      file.description === undefined ? undefined : `Description: ${file.description}`,
+      "",
+      file.content ?? readTextData(file.uri) ?? "[Attachment content unavailable]",
+    ]
+      .filter((line): line is string => line !== undefined)
+      .join("\n"),
+    metadata: {
+      attachment: {
+        uri: file.uri,
+        name: file.name,
+        description: file.description,
+      },
+    },
+  })
+
+function readTextData(uri: string) {
+  if (!uri.startsWith("data:")) return
+  const comma = uri.indexOf(",")
+  if (comma === -1) return
+  const metadata = uri.slice(5, comma)
+  const payload = uri.slice(comma + 1)
+  if (metadata.split(";").some((part) => part.toLowerCase() === "base64")) return Buffer.from(payload, "base64").toString("utf8")
+  try {
+    return decodeURIComponent(payload)
+  } catch {
+    return
+  }
+}
+
 const decodeToolInput = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)
 
 const toolInput = (tool: SessionMessage.AssistantTool) =>
@@ -117,11 +152,15 @@ function toLLMMessage(message: SessionMessage.Message, model: Model): Message[] 
     case "model-switched":
       return []
     case "user":
+      const files = message.files ?? []
       return [
+        ...files
+          .filter((file) => file.mime === "text/plain")
+          .map(textAttachment),
         Message.make({
           id: message.id,
           role: "user",
-          content: [{ type: "text", text: message.text }, ...(message.files ?? []).map(media)],
+          content: [{ type: "text", text: message.text }, ...files.filter((file) => file.mime !== "text/plain").map(media)],
           metadata: {
             ...message.metadata,
             ...(message.agents?.length ? { agents: message.agents } : {}),

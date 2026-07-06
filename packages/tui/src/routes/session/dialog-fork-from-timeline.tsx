@@ -6,8 +6,7 @@ import { Locale } from "../../util/locale"
 import { useSDK } from "../../context/sdk"
 import { useRoute } from "../../context/route"
 import { useDialog, type DialogContext } from "../../ui/dialog"
-import type { PromptInfo } from "../../component/prompt/history"
-import { stripPromptPartIDs as strip } from "../../prompt/part"
+import { emptyPrompt, type PromptInfo } from "../../component/prompt/history"
 
 export function DialogForkFromTimeline(props: { sessionID: string; onMove: (messageID?: string) => void }) {
   const sync = useSync()
@@ -53,12 +52,25 @@ export function DialogForkFromTimeline(props: { sessionID: string; onMove: (mess
           const prompt = parts.reduce(
             (agg, part) => {
               if (part.type === "text") {
-                if (!part.synthetic) agg.input += part.text
+                if (!part.synthetic) agg.text += part.text
               }
-              if (part.type === "file") agg.parts.push(strip(part))
+              if (part.type === "file") {
+                const files = (agg.files ??= [])
+                files.push({
+                  uri: part.url,
+                  name: part.filename,
+                  source: part.source?.text
+                    ? {
+                        start: part.source.text.start,
+                        end: part.source.text.end,
+                        text: part.source.text.value,
+                      }
+                    : undefined,
+                })
+              }
               return agg
             },
-            { input: "", parts: [] as PromptInfo["parts"] },
+            emptyPrompt() as PromptInfo,
           )
           route.navigate({
             sessionID: forked.data!.id,

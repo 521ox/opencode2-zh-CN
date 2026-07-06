@@ -1420,11 +1420,11 @@ function UserMessage(props: { message: SessionMessageUser }) {
             <box flexDirection="row" paddingBottom={metadataVisible() ? 1 : 0} paddingTop={1} gap={1} flexWrap="wrap">
               <For each={files()}>
                 {(file) => {
-                  const directory = file.mime === "application/x-directory"
+                  const label = file.mime === "application/x-directory" ? "Directory" : file.mime
                   return (
                     <text fg={theme.text}>
                       <span style={{ bg: theme.secondary, fg: theme.background }}>
-                        {directory ? " Directory " : " File "}
+                        {` ${label} `}
                       </span>
                       <span style={{ bg: theme.backgroundElement, fg: theme.textMuted }}>
                         {" "}

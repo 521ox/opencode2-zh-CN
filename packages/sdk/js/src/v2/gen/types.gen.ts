@@ -3264,6 +3264,7 @@ export type PromptSource = {
 export type PromptFileAttachment = {
   uri: string
   mime: string
+  content?: string
   name?: string
   description?: string
   source?: PromptSource
@@ -7903,6 +7904,7 @@ export type PromptInputV2 = {
 export type PromptFileAttachment2 = {
   uri: string
   mime: string
+  content?: string
   name?: string
   description?: string
   source?: PromptSource2

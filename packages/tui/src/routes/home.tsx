@@ -51,7 +51,7 @@ export function Home() {
       return
     }
     if (!args.prompt) return
-    r.set({ input: args.prompt, parts: [] })
+    r.set({ text: args.prompt, files: [], agents: [], pasted: [] })
     once = true
   }
 
@@ -62,7 +62,7 @@ export function Home() {
     if (!r) return
     if (!sync.ready || !local.model.ready) return
     if (!args.prompt) return
-    if (r.current.input !== args.prompt) return
+    if (r.current.text !== args.prompt) return
     sent = true
     r.submit()
   })

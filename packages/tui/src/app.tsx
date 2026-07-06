@@ -1020,7 +1020,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     enabled: () => {
       const current = promptRef.current
       if (!current?.focused) return true
-      return current.current.input === ""
+      return current.current.text === ""
     },
     bindings: tuiConfig.keybinds.gather("app_exit", ["app.exit"]),
   }))

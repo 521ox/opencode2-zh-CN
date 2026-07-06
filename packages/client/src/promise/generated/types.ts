@@ -604,6 +604,7 @@ export type SessionPromptOutput = {
       readonly files?: ReadonlyArray<{
         readonly uri: string
         readonly mime: string
+        readonly content?: string
         readonly name?: string
         readonly description?: string
         readonly source?: { readonly start: number; readonly end: number; readonly text: string }
@@ -804,6 +805,7 @@ export type SessionCommandOutput = {
       readonly files?: ReadonlyArray<{
         readonly uri: string
         readonly mime: string
+        readonly content?: string
         readonly name?: string
         readonly description?: string
         readonly source?: { readonly start: number; readonly end: number; readonly text: string }
@@ -934,6 +936,7 @@ export type SessionContextOutput = {
         readonly files?: ReadonlyArray<{
           readonly uri: string
           readonly mime: string
+          readonly content?: string
           readonly name?: string
           readonly description?: string
           readonly source?: { readonly start: number; readonly end: number; readonly text: string }
@@ -1037,6 +1040,7 @@ export type SessionContextOutput = {
                     readonly attachments?: ReadonlyArray<{
                       readonly uri: string
                       readonly mime: string
+                      readonly content?: string
                       readonly name?: string
                       readonly description?: string
                       readonly source?: { readonly start: number; readonly end: number; readonly text: string }
@@ -1196,6 +1200,7 @@ export type SessionLogOutput =
               readonly files?: ReadonlyArray<{
                 readonly uri: string
                 readonly mime: string
+                readonly content?: string
                 readonly name?: string
                 readonly description?: string
                 readonly source?: { readonly start: number; readonly end: number; readonly text: string }
@@ -1628,6 +1633,7 @@ export type SessionMessageOutput = {
         readonly files?: ReadonlyArray<{
           readonly uri: string
           readonly mime: string
+          readonly content?: string
           readonly name?: string
           readonly description?: string
           readonly source?: { readonly start: number; readonly end: number; readonly text: string }
@@ -1731,6 +1737,7 @@ export type SessionMessageOutput = {
                     readonly attachments?: ReadonlyArray<{
                       readonly uri: string
                       readonly mime: string
+                      readonly content?: string
                       readonly name?: string
                       readonly description?: string
                       readonly source?: { readonly start: number; readonly end: number; readonly text: string }
@@ -1828,6 +1835,7 @@ export type MessageListOutput = {
         readonly files?: ReadonlyArray<{
           readonly uri: string
           readonly mime: string
+          readonly content?: string
           readonly name?: string
           readonly description?: string
           readonly source?: { readonly start: number; readonly end: number; readonly text: string }
@@ -1931,6 +1939,7 @@ export type MessageListOutput = {
                     readonly attachments?: ReadonlyArray<{
                       readonly uri: string
                       readonly mime: string
+                      readonly content?: string
                       readonly name?: string
                       readonly description?: string
                       readonly source?: { readonly start: number; readonly end: number; readonly text: string }
@@ -4478,6 +4487,7 @@ export type EventSubscribeOutput =
           readonly files?: ReadonlyArray<{
             readonly uri: string
             readonly mime: string
+            readonly content?: string
             readonly name?: string
             readonly description?: string
             readonly source?: { readonly start: number; readonly end: number; readonly text: string }

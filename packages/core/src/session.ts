@@ -37,6 +37,7 @@ import { SessionCompaction } from "./session/compaction"
 import { SessionRevert } from "./session/revert"
 import { Revert } from "@opencode-ai/schema/revert"
 import { FSUtil } from "./fs-util"
+import { Mime } from "./mime"
 import type { EventLog } from "@opencode-ai/schema/event-log"
 import { SkillV2 } from "./skill"
 import { Job } from "./job"
@@ -44,6 +45,7 @@ import { CommandV2 } from "./command"
 import { Shell } from "./shell"
 import { Shell as ShellSchema } from "@opencode-ai/schema/shell"
 import { KeyedMutex } from "./effect/keyed-mutex"
+import { fileURLToPath } from "url"
 
 export const RevertState = Revert.State
 export type RevertState = Revert.State
@@ -251,6 +253,7 @@ const layer = Layer.effect(
     const execution = yield* SessionExecution.Service
     const store = yield* SessionStore.Service
     const locations = yield* LocationServiceMap.Service
+    const fs = yield* FSUtil.Service
     const jobs = yield* Job.Service
     const scope = yield* Scope.Scope
     const activeShells = new Set<SessionSchema.ID>()
@@ -456,7 +459,7 @@ const layer = Layer.effect(
             // continues from the reverted boundary rather than stale post-boundary history.
             if (session.revert)
               yield* SessionRevert.commit(session).pipe(Effect.provideService(EventV2.Service, events))
-            const prompt = resolvePrompt(input.prompt)
+            const prompt = yield* resolvePrompt(input.prompt).pipe(Effect.provideService(FSUtil.Service, fs))
             const messageID = input.id ?? SessionMessage.ID.create()
             const delivery = input.delivery ?? "steer"
             const expected = { sessionID: input.sessionID, messageID, prompt, delivery }
@@ -713,19 +716,52 @@ function synthesizeTerminalShellInfo(started: ShellSchema.Info): ShellSchema.Inf
   }
 }
 
-const resolvePrompt = (input: PromptInput.Prompt) =>
-  Prompt.make({
-    text: input.text,
-    agents: input.agents,
-    files: input.files?.map((file) => {
-      const dataMime = file.uri.match(/^data:([^;,]+)[;,]/i)?.[1]
-      const target = URL.canParse(file.uri) ? new URL(file.uri).pathname : (file.name ?? file.uri)
-      return {
-        ...file,
-        mime: dataMime ?? (target.endsWith("/") ? "application/x-directory" : FSUtil.mimeType(target)),
-      }
+const resolvePrompt = Effect.fn("V2Session.resolvePrompt")(function* (input: PromptInput.Prompt) {
+  const fs = yield* FSUtil.Service
+  const files = input.files
+    ? yield* Effect.forEach(
+        input.files,
+        (file) =>
+          Effect.gen(function* () {
+            const mime = yield* Mime.resolve(file.uri)
+            const content = mime === "text/plain" ? yield* readTextAttachment(fs, file.uri) : undefined
+            return { ...file, mime, ...(content === undefined ? {} : { content }) }
+          }),
+        { concurrency: 8 },
+      )
+    : undefined
+  return Prompt.make({ text: input.text, agents: input.agents, files })
+})
+
+function readTextAttachment(fs: FSUtil.Interface, uri: string) {
+  if (uri.startsWith("data:")) return Effect.succeed(undefined)
+  return Effect.try({
+    try: () => new URL(uri),
+    catch: () => new Error("Invalid attachment URI"),
+  }).pipe(
+    Effect.flatMap((url) => {
+      if (url.protocol !== "file:") return Effect.succeed(undefined)
+      const start = positiveInt(url.searchParams.get("start"))
+      const end = positiveInt(url.searchParams.get("end"))
+      url.search = ""
+      url.hash = ""
+      return Effect.try({
+        try: () => fileURLToPath(url),
+        catch: () => new Error("Invalid file URI"),
+      }).pipe(
+        Effect.flatMap((target) => fs.readFileString(target)),
+        Effect.map((content) => (start === undefined ? content : content.split("\n").slice(start - 1, end).join("\n"))),
+      )
     }),
-  })
+    Effect.catch(() => Effect.succeed(undefined)),
+  )
+}
+
+function positiveInt(value: string | null) {
+  if (value === null) return
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined
+}
 
 // Mirrors the shell tool's in-memory preview safety limit.
 const SHELL_MAX_CAPTURE_BYTES = 1024 * 1024
@@ -742,5 +778,6 @@ export const node = makeGlobalNode({
     SessionStore.node,
     LocationServiceMap.node,
     SessionProjector.node,
+    FSUtil.node,
   ],
 })

@@ -149,6 +149,67 @@ Recent work
     ])
   })
 
+  test("lowers text attachments as separate user messages", () => {
+    const file = FileAttachment.make({
+      uri: "file:///project/main.ts",
+      mime: "text/plain",
+      content: "export const value = 1",
+      name: "main.ts",
+    })
+    const messages = toLLMMessages(
+      [
+        SessionMessage.User.make({
+          id: id("user-text-file"),
+          type: "user",
+          text: "Review this file",
+          files: [file],
+          time: { created },
+        }),
+      ],
+      model,
+    )
+
+    expect(messages).toHaveLength(2)
+    expect(messages[0]).toMatchObject({
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text: "Attached file: main.ts\nSource: file:///project/main.ts\n\nexport const value = 1",
+        },
+      ],
+      metadata: { attachment: { uri: "file:///project/main.ts", name: "main.ts" } },
+    })
+    expect(messages[1]).toMatchObject({
+      id: id("user-text-file"),
+      role: "user",
+      content: [{ type: "text", text: "Review this file" }],
+    })
+  })
+
+  test("derives text attachment content from durable data URLs", () => {
+    const uri = `data:text/plain;base64,${Buffer.from("inline content").toString("base64")}`
+    const messages = toLLMMessages(
+      [
+        SessionMessage.User.make({
+          id: id("user-data-file"),
+          type: "user",
+          text: "Review this file",
+          files: [FileAttachment.make({ uri, mime: "text/plain", name: "inline.txt" })],
+          time: { created },
+        }),
+      ],
+      model,
+    )
+
+    expect(messages[0]?.content).toEqual([
+      {
+        type: "text",
+        text: `Attached file: inline.txt\nSource: ${uri}\n\ninline content`,
+      },
+    ])
+  })
+
   test("replays durable tool media into canonical tool messages without structured base64", () => {
     const messages = toLLMMessages(
       [
