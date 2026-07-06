@@ -47,7 +47,7 @@ test("exposes every standard HTTP API group", () => {
   expect(Object.keys(client.vcs)).toEqual(["status", "diff"])
   expect(Object.keys(client.pty)).toEqual(["list", "create", "get", "update", "remove"])
   expect(Object.keys(client.shell)).toEqual(["list", "create", "get", "output", "remove"])
-  expect(Object.keys(client.project)).toEqual(["current", "directories"])
+  expect(Object.keys(client.project)).toEqual(["list", "current", "directories"])
 })
 
 test("file.read returns binary content from the public HTTP contract", async () => {
@@ -198,7 +198,7 @@ test("session methods use the public HTTP contract", async () => {
       if (url.includes("/context")) return Response.json({ data: [] })
       if (url.includes("/message/")) return Response.json({ data: modelSwitchedMessage })
       if (url.endsWith("/api/session/active"))
-        return Response.json({ data: { ses_test: { type: "running" } }, watermarks: { ses_test: 3 } })
+        return Response.json({ data: { ses_test: { type: "running" } } })
       if (init?.method === "POST" && url.endsWith("/api/session")) return Response.json(session)
       if (init?.method === "POST") return new Response(null, { status: 204 })
       return Response.json({ data: [session.data], cursor: { next: "next" } })
@@ -227,7 +227,7 @@ test("session methods use the public HTTP contract", async () => {
   const message = await client.session.message({ sessionID: "ses_test", messageID: "msg_model" })
 
   expect(page.cursor.next).toBe("next")
-  expect(active).toEqual({ data: { ses_test: { type: "running" } }, watermarks: { ses_test: 3 } })
+  expect(active).toEqual({ ses_test: { type: "running" } })
   expect(created.id).toBe("ses_test")
   expect(admitted.id).toBe("msg_test")
   expect(context).toEqual([])
@@ -243,7 +243,7 @@ test("session methods use the public HTTP contract", async () => {
     ["POST", "http://localhost:3000/api/session/ses_test/compact"],
     ["POST", "http://localhost:3000/api/session/ses_test/wait"],
     ["GET", "http://localhost:3000/api/session/ses_test/context"],
-    ["GET", "http://localhost:3000/api/session/ses_test/log?after=0"],
+    ["GET", "http://localhost:3000/api/experimental/session/ses_test/log?after=0"],
     ["POST", "http://localhost:3000/api/session/ses_test/interrupt"],
     ["GET", "http://localhost:3000/api/session/ses_test/message/msg_model"],
   ])

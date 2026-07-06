@@ -204,7 +204,6 @@ describe("OpenAPI.fromSpec", () => {
     expect(toolAt(result.tools, "v2.pty.connect")).toBeUndefined()
     expect(toolAt(result.tools, "v2.session.log")).toBeUndefined()
     expect(toolAt(result.tools, "v2.event.subscribe")).toBeUndefined()
-    expect(toolAt(result.tools, "v2.event.changes")).toBeUndefined()
     expect(toolAt(result.tools, "v2.fs.read")).toBeUndefined()
     expect(toolAt(result.tools, "v2.pty.connectToken")).not.toBeUndefined()
   })

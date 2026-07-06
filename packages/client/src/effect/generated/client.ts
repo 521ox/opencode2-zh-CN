@@ -82,7 +82,10 @@ const Endpoint4_1 = (raw: RawClient["server.session"]) => (input?: Endpoint4_1In
   )
 
 const Endpoint4_2 = (raw: RawClient["server.session"]) => () =>
-  raw["session.active"]({}).pipe(Effect.mapError(mapClientError))
+  raw["session.active"]({}).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
 
 type Endpoint4_3Request = Parameters<RawClient["server.session"]["session.get"]>[0]
 type Endpoint4_3Input = { readonly sessionID: Endpoint4_3Request["params"]["sessionID"] }
@@ -796,15 +799,7 @@ const Endpoint18_0 = (raw: RawClient["server.event"]) => () =>
     ),
   )
 
-const Endpoint18_1 = (raw: RawClient["server.event"]) => () =>
-  Stream.unwrap(
-    raw["event.changes"]({}).pipe(
-      Effect.mapError(mapClientError),
-      Effect.map((stream) => stream.pipe(Stream.mapError(mapClientError))),
-    ),
-  )
-
-const adaptGroup18 = (raw: RawClient["server.event"]) => ({ subscribe: Endpoint18_0(raw), changes: Endpoint18_1(raw) })
+const adaptGroup18 = (raw: RawClient["server.event"]) => ({ subscribe: Endpoint18_0(raw) })
 
 type Endpoint19_0Request = Parameters<RawClient["server.pty"]["pty.list"]>[0]
 type Endpoint19_0Input = { readonly location?: Endpoint19_0Request["query"]["location"] }

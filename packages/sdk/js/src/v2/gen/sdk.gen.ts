@@ -278,8 +278,6 @@ import type {
   V2CredentialUpdateResponses,
   V2DebugLocationErrors,
   V2DebugLocationResponses,
-  V2EventChangesErrors,
-  V2EventChangesResponses,
   V2EventSubscribeErrors,
   V2EventSubscribeResponses,
   V2FormRequestListErrors,
@@ -334,6 +332,8 @@ import type {
   V2ProjectCurrentResponses,
   V2ProjectDirectoriesErrors,
   V2ProjectDirectoriesResponses,
+  V2ProjectListErrors,
+  V2ProjectListResponses,
   V2ProviderGetErrors,
   V2ProviderGetResponses,
   V2ProviderListErrors,
@@ -5896,7 +5896,7 @@ export class Session3 extends HeyApiClient {
   /**
    * List active sessions
    *
-   * Retrieve foreground Session drains currently owned by this OpenCode process. Sessions absent from the result are inactive. Watermarks are the durable log positions read alongside the activity snapshot; activity itself is process state, so the pairing is advisory rather than transactional.
+   * Retrieve foreground Session drains currently owned by this OpenCode process. Sessions absent from the result are inactive.
    */
   public active<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
     return (options?.client ?? this.client).get<V2SessionActiveResponses, V2SessionActiveErrors, ThrowOnError>({
@@ -6341,7 +6341,7 @@ export class Session3 extends HeyApiClient {
   /**
    * Read the session log
    *
-   * Durable, ordered, gap-free read of public session events after an exclusive aggregate sequence. Emits a synced marker once replay reaches the captured watermark, then completes; with follow=true it continues with live events instead. The only event API that promises reliability: attach after a snapshot watermark to compose fetch and stream without a race window.
+   * Experimental durable session event log. Reads events after an exclusive aggregate sequence and continues with live events when follow=true.
    */
   public log<ThrowOnError extends boolean = false>(
     parameters: {
@@ -6364,7 +6364,7 @@ export class Session3 extends HeyApiClient {
       ],
     )
     return (options?.client ?? this.client).sse.get<V2SessionLogResponses, V2SessionLogErrors, ThrowOnError>({
-      url: "/api/session/{sessionID}/log",
+      url: "/api/experimental/session/{sessionID}/log",
       ...options,
       ...params,
     })
@@ -7033,6 +7033,18 @@ export class Credential extends HeyApiClient {
 
 export class Project2 extends HeyApiClient {
   /**
+   * List projects
+   *
+   * List known projects.
+   */
+  public list<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).get<V2ProjectListResponses, V2ProjectListErrors, ThrowOnError>({
+      url: "/api/project",
+      ...options,
+    })
+  }
+
+  /**
    * Get current project
    *
    * Resolve the project for the requested location.
@@ -7357,23 +7369,11 @@ export class Event2 extends HeyApiClient {
   /**
    * Subscribe to events
    *
-   * Subscribe to native event payloads for the server. Volatile by contract: a slow consumer overflows and fails the stream, and events during disconnection are missed. Consumers that need reliability should combine the changes feed with durable session log reads.
+   * Subscribe to native event payloads for the server. Volatile by contract: a slow consumer overflows and fails the stream, and events during disconnection are missed.
    */
   public subscribe<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
     return (options?.client ?? this.client).sse.get<V2EventSubscribeResponses, V2EventSubscribeErrors, ThrowOnError>({
       url: "/api/event",
-      ...options,
-    })
-  }
-
-  /**
-   * Subscribe to change hints
-   *
-   * Payload-free hint channel: after an event commits, a subscriber eventually receives a hint for that aggregate with seq at or beyond the event, or a sweep-required marker. Hints coalesce to the latest seq per aggregate under backpressure and the stream never fails from overflow. No consumer may derive correctness from receiving a hint; correctness always comes from durable log reads plus the consumer's own checkpoint. A sweep-required marker is emitted first on every (re)subscribe and whenever hint retention is exceeded: treat every aggregate as potentially dirty and recover via bounded sweep plus log reads.
-   */
-  public changes<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
-    return (options?.client ?? this.client).sse.get<V2EventChangesResponses, V2EventChangesErrors, ThrowOnError>({
-      url: "/api/event/changes",
       ...options,
     })
   }

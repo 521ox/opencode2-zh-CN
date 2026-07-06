@@ -66,7 +66,7 @@ export type Endpoint4_1Input = {
 export type Endpoint4_1Output = EffectValue<ReturnType<RawClient["server.session"]["session.create"]>>["data"]
 export type SessionCreateOperation<E = never> = (input?: Endpoint4_1Input) => Effect.Effect<Endpoint4_1Output, E>
 
-export type Endpoint4_2Output = EffectValue<ReturnType<RawClient["server.session"]["session.active"]>>
+export type Endpoint4_2Output = EffectValue<ReturnType<RawClient["server.session"]["session.active"]>>["data"]
 export type SessionActiveOperation<E = never> = () => Effect.Effect<Endpoint4_2Output, E>
 
 type Endpoint4_3Request = Parameters<RawClient["server.session"]["session.get"]>[0]
@@ -658,12 +658,8 @@ export interface SkillApi<E = never> {
 export type Endpoint18_0Output = StreamValue<EffectValue<ReturnType<RawClient["server.event"]["event.subscribe"]>>>
 export type EventSubscribeOperation<E = never> = () => Stream.Stream<Endpoint18_0Output, E>
 
-export type Endpoint18_1Output = StreamValue<EffectValue<ReturnType<RawClient["server.event"]["event.changes"]>>>
-export type EventChangesOperation<E = never> = () => Stream.Stream<Endpoint18_1Output, E>
-
 export interface EventApi<E = never> {
   readonly subscribe: EventSubscribeOperation<E>
-  readonly changes: EventChangesOperation<E>
 }
 
 type Endpoint19_0Request = Parameters<RawClient["server.pty"]["pty.list"]>[0]

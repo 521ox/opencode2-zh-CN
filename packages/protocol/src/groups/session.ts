@@ -104,12 +104,6 @@ const SessionActive = Schema.Struct({
   type: Schema.Literal("running"),
 }).annotate({ identifier: "SessionActive" })
 
-const SessionWatermarks = Schema.Record(Session.ID, Event.Seq).annotate({
-  identifier: "SessionWatermarks",
-  description:
-    "Durable log seq each session's snapshot was computed at. Attach a live log read after the watermark to compose fetch and stream gap-free; apply a snapshot only where its watermark is at or beyond already-applied events. Sessions without durable events are absent.",
-})
-
 const BooleanFromString = Schema.Literals(["true", "false"]).pipe(
   Schema.decodeTo(Schema.Boolean, {
     decode: SchemaGetter.transform((value) => value === "true"),
@@ -136,7 +130,6 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
         query: SessionsQuery,
         success: Schema.Struct({
           data: Schema.Array(Session.Info),
-          watermarks: SessionWatermarks,
           cursor: Schema.Struct({
             previous: SessionsCursor.pipe(Schema.optional),
             next: SessionsCursor.pipe(Schema.optional),
@@ -171,13 +164,13 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
     )
     .add(
       HttpApiEndpoint.get("session.active", "/api/session/active", {
-        success: Schema.Struct({ data: Schema.Record(Session.ID, SessionActive), watermarks: SessionWatermarks }),
+        success: Schema.Struct({ data: Schema.Record(Session.ID, SessionActive) }),
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "v2.session.active",
           summary: "List active sessions",
           description:
-            "Retrieve foreground Session drains currently owned by this OpenCode process. Sessions absent from the result are inactive. Watermarks are the durable log positions read alongside the activity snapshot; activity itself is process state, so the pairing is advisory rather than transactional.",
+            "Retrieve foreground Session drains currently owned by this OpenCode process. Sessions absent from the result are inactive.",
         }),
       ),
     )
@@ -498,7 +491,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
         ),
     )
     .add(
-      HttpApiEndpoint.get("session.log", "/api/session/:sessionID/log", {
+      HttpApiEndpoint.get("session.log", "/api/experimental/session/:sessionID/log", {
         params: { sessionID: Session.ID },
         query: {
           after: Schema.NumberFromString.pipe(Schema.decodeTo(Event.Seq), Schema.optional),
@@ -515,7 +508,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
             identifier: "v2.session.log",
             summary: "Read the session log",
             description:
-              "Durable, ordered, gap-free read of public session events after an exclusive aggregate sequence. Emits a synced marker once replay reaches the captured watermark, then completes; with follow=true it continues with live events instead. The only event API that promises reliability: attach after a snapshot watermark to compose fetch and stream without a race window.",
+              "Experimental durable session event log. Reads events after an exclusive aggregate sequence and continues with live events when follow=true.",
           }),
         ),
     )

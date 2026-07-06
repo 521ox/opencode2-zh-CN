@@ -44,7 +44,6 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
           const last = sessions.at(-1)
           return {
             data: sessions,
-            watermarks: Object.fromEntries(page.watermarks),
             cursor: {
               previous: first
                 ? SessionsCursor.make({
@@ -89,10 +88,8 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         "session.active",
         Effect.fn(function* () {
           const active = yield* session.active
-          const watermarks = yield* session.watermarks(Array.from(active))
           return {
             data: Object.fromEntries(Array.from(active, (sessionID) => [sessionID, { type: "running" as const }])),
-            watermarks: Object.fromEntries(watermarks),
           }
         }),
       )

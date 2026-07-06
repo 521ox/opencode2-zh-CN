@@ -911,7 +911,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         .then((active) => {
           if (generation !== connectionGeneration) return
           const status: Record<string, DataSessionStatus> = Object.fromEntries(
-            Object.keys(active.data).map((sessionID) => [sessionID, "running" as const]),
+            Object.keys(active).map((sessionID) => [sessionID, "running" as const]),
           )
           for (const sessionID of changed) status[sessionID] = store.session.status[sessionID]
           setStore("session", "status", reconcile(status))

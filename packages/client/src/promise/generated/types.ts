@@ -354,7 +354,6 @@ export type SessionListOutput = {
       }>
     }
   }>
-  readonly watermarks: { readonly [x: string]: number }
   readonly cursor: { readonly previous?: string | null; readonly next?: string | null }
 }
 
@@ -419,10 +418,7 @@ export type SessionCreateOutput = {
   }
 }["data"]
 
-export type SessionActiveOutput = {
-  readonly data: { readonly [x: string]: { readonly type: "running" } }
-  readonly watermarks: { readonly [x: string]: number }
-}
+export type SessionActiveOutput = { readonly data: { readonly [x: string]: { readonly type: "running" } } }["data"]
 
 export type SessionGetInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
 
@@ -1987,7 +1983,6 @@ export type MessageListOutput = {
         readonly time: { readonly created: number }
       }
   >
-  readonly watermark?: number
   readonly cursor: { readonly previous?: string | null; readonly next?: string | null }
 }
 
@@ -5545,10 +5540,6 @@ export type EventSubscribeOutput =
       readonly type: "server.connected"
       readonly data: {}
     }
-
-export type EventChangesOutput =
-  | { readonly type: "log.hint"; readonly aggregateID: string; readonly seq: number }
-  | { readonly type: "log.sweep_required" }
 
 export type PtyListInput = {
   readonly location?: {

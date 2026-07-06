@@ -544,8 +544,8 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
     state.permissions = permissions.map(permission)
     state.questions = questions.map(question)
     syncBlockers()
-    await subagents.hydrate({ messages: [...projected], active: active.data })
-    const running = input.sessionID in active.data
+    await subagents.hydrate({ messages: [...projected], active })
+    const running = input.sessionID in active
     write([], { phase: running ? "running" : "idle", status: running ? "assistant responding" : "" })
     if (!running && state.wait && (state.wait.promoted || state.wait.interrupted)) {
       const current = state.wait

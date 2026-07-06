@@ -2796,13 +2796,8 @@ export type UnauthorizedError = {
   message: string
 }
 
-export type SessionWatermarks = {
-  [key: string]: unknown | number
-}
-
 export type SessionsResponse = {
   data: Array<SessionV2Info>
-  watermarks: SessionWatermarks
   cursor: {
     previous?: string
     next?: string
@@ -2930,7 +2925,6 @@ export type SessionLogItemStream = string
 
 export type SessionMessagesResponse = {
   data: Array<SessionMessage>
-  watermark?: number
   cursor: {
     previous?: string
     next?: string
@@ -6615,20 +6609,6 @@ export type GlobalDisposed = {
   }
 }
 
-export type EventLogHint = {
-  type: "log.hint"
-  aggregateID: string
-  seq: number
-}
-
-export type EventLogSweepRequired = {
-  type: "log.sweep_required"
-}
-
-export type EventLogChange = EventLogHint | EventLogSweepRequired
-
-export type EventLogChangeStream = string
-
 export type QuestionV2Request = {
   id: string
   sessionID: string
@@ -7859,16 +7839,8 @@ export type SessionV2Info2 = {
   revert?: RevertState2
 }
 
-/**
- * Durable log seq each session's snapshot was computed at. Attach a live log read after the watermark to compose fetch and stream gap-free; apply a snapshot only where its watermark is at or beyond already-applied events. Sessions without durable events are absent.
- */
-export type SessionWatermarksV2 = {
-  [key: string]: unknown | number
-}
-
 export type SessionsResponseV2 = {
   data: Array<SessionV2Info2>
-  watermarks: SessionWatermarksV2
   cursor: {
     previous?: string | null
     next?: string | null
@@ -9059,7 +9031,6 @@ export type SessionLogItemStreamV2 = string
 
 export type SessionMessagesResponseV2 = {
   data: Array<SessionMessage2>
-  watermark?: number
   cursor: {
     previous?: string | null
     next?: string | null
@@ -9327,6 +9298,38 @@ export type McpServer2 = {
     | McpStatusNeedsAuth3
     | McpStatusNeedsClientRegistration3
   integrationID?: string
+}
+
+export type ProjectVcs2 = "git" | "hg"
+
+export type ProjectIcon2 = {
+  url?: string
+  override?: string
+  color?: string
+}
+
+export type ProjectCommands2 = {
+  /**
+   * Startup script to run when creating a new workspace (worktree)
+   */
+  start?: string
+}
+
+export type ProjectTime2 = {
+  created: number
+  updated: number
+  initialized?: number
+}
+
+export type ProjectV2 = {
+  id: string
+  worktree: string
+  vcs?: ProjectVcs2
+  name?: string
+  icon?: ProjectIcon2
+  commands?: ProjectCommands2
+  time: ProjectTime2
+  sandboxes: Array<string>
 }
 
 export type ProjectCurrent2 = {
@@ -11275,26 +11278,6 @@ export type V2EventV2 =
   | V2EventServerConnected
 
 export type V2EventStreamV2 = string
-
-/**
- * Payload-free change hint: the aggregate's durable log advanced to at least seq. Hints coalesce under backpressure (latest per aggregate) and are never a delivery guarantee.
- */
-export type EventLogHint2 = {
-  type: "log.hint"
-  aggregateID: string
-  seq: number
-}
-
-/**
- * Hints may have been lost; treat every aggregate as potentially dirty and recover via bounded sweep plus durable log reads. Emitted first on every (re)subscribe.
- */
-export type EventLogSweepRequired2 = {
-  type: "log.sweep_required"
-}
-
-export type EventLogChange2 = EventLogHint2 | EventLogSweepRequired2
-
-export type EventLogChangeStream2 = string
 
 export type PtyNotFoundErrorV2 = {
   _tag: "PtyNotFoundError"
@@ -15770,7 +15753,6 @@ export type V2SessionActiveResponses = {
     data: {
       [key: string]: unknown | SessionActiveV2
     }
-    watermarks: SessionWatermarksV2
   }
 }
 
@@ -16563,7 +16545,7 @@ export type V2SessionLogData = {
     after?: number | null
     follow?: "true" | "false" | null
   }
-  url: "/api/session/{sessionID}/log"
+  url: "/api/experimental/session/{sessionID}/log"
 }
 
 export type V2SessionLogErrors = {
@@ -17352,6 +17334,35 @@ export type V2CredentialUpdateResponses = {
 }
 
 export type V2CredentialUpdateResponse = V2CredentialUpdateResponses[keyof V2CredentialUpdateResponses]
+
+export type V2ProjectListData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/api/project"
+}
+
+export type V2ProjectListErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestErrorV2
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedErrorV2
+}
+
+export type V2ProjectListError = V2ProjectListErrors[keyof V2ProjectListErrors]
+
+export type V2ProjectListResponses = {
+  /**
+   * Success
+   */
+  200: Array<ProjectV2>
+}
+
+export type V2ProjectListResponse = V2ProjectListResponses[keyof V2ProjectListResponses]
 
 export type V2ProjectCurrentData = {
   body?: never
@@ -18175,39 +18186,6 @@ export type V2EventSubscribeResponses = {
 }
 
 export type V2EventSubscribeResponse = V2EventSubscribeResponses[keyof V2EventSubscribeResponses]
-
-export type V2EventChangesData = {
-  body?: never
-  path?: never
-  query?: never
-  url: "/api/event/changes"
-}
-
-export type V2EventChangesErrors = {
-  /**
-   * InvalidRequestError
-   */
-  400: InvalidRequestErrorV2
-  /**
-   * UnauthorizedError
-   */
-  401: UnauthorizedErrorV2
-}
-
-export type V2EventChangesError = V2EventChangesErrors[keyof V2EventChangesErrors]
-
-export type V2EventChangesResponses = {
-  /**
-   * Success
-   */
-  200: {
-    id: string | null
-    event: string
-    data: EventLogChangeStream2
-  }
-}
-
-export type V2EventChangesResponse = V2EventChangesResponses[keyof V2EventChangesResponses]
 
 export type V2PtyListData = {
   body?: never

@@ -1289,52 +1289,6 @@ describe("EventV2", () => {
     }),
   )
 
-  it.effect("changes emits sweep-required on subscribe then coalesced hints per aggregate", () =>
-    Effect.gen(function* () {
-      const events = yield* EventV2.Service
-      const first = Session.ID.create()
-      const second = Session.ID.create()
-      const pull = yield* Stream.toPull(events.changes())
-
-      expect(Array.from(yield* pull)).toEqual([{ type: "log.sweep_required" }])
-
-      yield* events.publish(DurableMessage, durableData(first, "zero"))
-      yield* events.publish(DurableMessage, durableData(first, "one"))
-      yield* events.publish(DurableMessage, durableData(first, "two"))
-      yield* events.publish(DurableMessage, durableData(second, "zero"))
-
-      expect(Array.from(yield* pull)).toEqual([
-        { type: "log.hint", aggregateID: first, seq: EventV2.Seq.make(2) },
-        { type: "log.hint", aggregateID: second, seq: EventV2.Seq.make(0) },
-      ])
-    }),
-  )
-
-  it.effect("changes abandons the hint buffer for a sweep when key retention is exceeded", () =>
-    Effect.gen(function* () {
-      const eventLayer = EventV2.layerWith({ changesKeyCapacity: 2 }).pipe(
-        Layer.provide(LayerNode.compile(Database.node)),
-      )
-
-      yield* Effect.gen(function* () {
-        const events = yield* EventV2.Service
-        const pull = yield* Stream.toPull(events.changes())
-        expect(Array.from(yield* pull)).toEqual([{ type: "log.sweep_required" }])
-
-        yield* events.publish(DurableMessage, durableData(Session.ID.create(), "a"))
-        yield* events.publish(DurableMessage, durableData(Session.ID.create(), "b"))
-        yield* events.publish(DurableMessage, durableData(Session.ID.create(), "c"))
-
-        expect(Array.from(yield* pull)).toEqual([{ type: "log.sweep_required" }])
-
-        const late = Session.ID.create()
-        yield* events.publish(DurableMessage, durableData(late, "d"))
-
-        expect(Array.from(yield* pull)).toEqual([{ type: "log.hint", aggregateID: late, seq: EventV2.Seq.make(0) }])
-      }).pipe(Effect.provide(Layer.merge(LayerNode.compile(Database.node), eventLayer)))
-    }),
-  )
-
   it.effect("sequences returns the latest committed seq per aggregate and omits unknown aggregates", () =>
     Effect.gen(function* () {
       const events = yield* EventV2.Service

@@ -99,7 +99,7 @@ test("session methods retain decoded Effect inputs and outputs", async () => {
       return Effect.succeed(
         HttpClientResponse.fromWeb(
           request,
-          Response.json({ data: { ses_test: { type: "running" } }, watermarks: { ses_test: 3 } }),
+          Response.json({ data: { ses_test: { type: "running" } } }),
         ),
       )
     }
@@ -112,7 +112,7 @@ test("session methods retain decoded Effect inputs and outputs", async () => {
     return Effect.succeed(
       HttpClientResponse.fromWeb(
         request,
-        Response.json({ data: [session.data], watermarks: { ses_test: 3 }, cursor: { next: "next" } }),
+        Response.json({ data: [session.data], cursor: { next: "next" } }),
       ),
     )
   })
@@ -148,8 +148,7 @@ test("session methods retain decoded Effect inputs and outputs", async () => {
   }).pipe(Effect.provideService(HttpClient.HttpClient, httpClient), Effect.runPromise)
 
   expect(DateTime.toEpochMillis(result.page.data[0].time.created)).toBe(1_717_171_717_000)
-  expect(result.active).toEqual({ data: { ses_test: { type: "running" } }, watermarks: { ses_test: 3 } })
-  expect(result.page.watermarks).toEqual({ ses_test: 3 })
+  expect(result.active).toEqual({ ses_test: { type: "running" } })
   expect(Object.getPrototypeOf(result.page.data[0])).toBe(Object.prototype)
   expect(Object.getPrototypeOf(result.created)).toBe(Object.prototype)
   expect(result.created.id).toBe("ses_test")

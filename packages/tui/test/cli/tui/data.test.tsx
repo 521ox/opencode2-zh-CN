@@ -119,7 +119,7 @@ test("reconnects the event stream and bootstraps fresh data", async () => {
     }
     if (url.pathname === "/api/session/active") {
       requests.active++
-      if (requests.active === 1) return json({ data: { "session-stale": { type: "running" } }, watermarks: {} })
+      if (requests.active === 1) return json({ data: { "session-stale": { type: "running" } } })
       return new Promise<Response>((resolve) => {
         resolveActive = resolve
       })
@@ -189,7 +189,7 @@ test("reconnects the event stream and bootstraps fresh data", async () => {
       },
     })
     await wait(() => data.session.status("session-new") === "running")
-    resolveActive(json({ data: {}, watermarks: {} }))
+    resolveActive(json({ data: {} }))
 
     await wait(() => data.location.model.list()?.[0]?.id === "model-2", 4000)
     await wait(() => data.session.status("session-stale") === "idle")
@@ -350,7 +350,7 @@ test("tracks session status from active sessions and execution events", async ()
   const events = createEventStream()
   const calls = createFetch((url) => {
     if (url.pathname === "/api/session/active")
-      return json({ data: { "session-active": { type: "running" } }, watermarks: {} })
+      return json({ data: { "session-active": { type: "running" } } })
   }, events)
   let data!: ReturnType<typeof useData>
 
