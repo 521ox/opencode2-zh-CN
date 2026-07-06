@@ -2137,7 +2137,7 @@ function Shell(props: ToolProps) {
         </Show>
         <Show when={shellID()}>
           <text>
-            <span style={{ bg: theme.backgroundElement, fg: theme.textMuted }}> Backgrounded </span>
+            <span style={{ bg: theme.backgroundElement, fg: theme.textMuted }}> Background </span>
           </text>
         </Show>
         <Show when={collapsed().overflow}>
