@@ -831,15 +831,6 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             shell: Object.fromEntries(mutable(result.data).map((info) => [info.id, info])),
           })
         },
-        async remove(id: string) {
-          await sdk.api.shell.remove({ id })
-          setStore(
-            "location",
-            produce((draft) => {
-              for (const data of Object.values(draft)) delete data.shell?.[id]
-            }),
-          )
-        },
       },
       location: {
         default() {
