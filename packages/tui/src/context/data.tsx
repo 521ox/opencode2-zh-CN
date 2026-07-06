@@ -1,6 +1,8 @@
 import type {
   AgentV2Info,
   CommandV2Info,
+  FormFormInfo,
+  FormUrlInfo,
   IntegrationInfo,
   LocationRef,
   McpServer,
@@ -29,6 +31,8 @@ export type DataSessionStatus = "idle" | "running"
 
 const messageIDFromEvent = (eventID: string) => eventID.replace(/^evt_/, "msg_")
 
+export type FormInfo = FormFormInfo | FormUrlInfo
+
 type LocationData = {
   agent?: AgentV2Info[]
   command?: CommandV2Info[]
@@ -54,6 +58,8 @@ type Data = {
     message: Record<string, SessionMessage[]>
     permission: Record<string, PermissionV2Request[]>
     question: Record<string, QuestionV2Request[]>
+    // Pending forms keyed by session ID.
+    form: Record<string, FormInfo[]>
   }
   project: {
     permission: Record<string, PermissionSavedInfo[]>
@@ -88,6 +94,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         message: {},
         permission: {},
         question: {},
+        form: {},
       },
       project: {
         permission: {},
@@ -602,6 +609,22 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             ),
           )
           break
+        case "form.created":
+          if (store.session.form[event.data.form.sessionID]?.some((form) => form.id === event.data.form.id)) break
+          setStore("session", "form", event.data.form.sessionID, [
+            ...(store.session.form[event.data.form.sessionID] ?? []),
+            mutable(event.data.form),
+          ])
+          break
+        case "form.replied":
+        case "form.cancelled":
+          setStore(
+            "session",
+            "form",
+            event.data.sessionID,
+            (store.session.form[event.data.sessionID] ?? []).filter((form) => form.id !== event.data.id),
+          )
+          break
         case "shell.created":
           setStore("location", locationKey(event.location ?? defaultLocation()), (data) => ({
             ...data,
@@ -726,6 +749,14 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           },
           async refresh(sessionID: string) {
             setStore("session", "question", sessionID, mutable(await sdk.api.question.list({ sessionID })))
+          },
+        },
+        form: {
+          list(sessionID: string) {
+            return store.session.form[sessionID]
+          },
+          async refresh(sessionID: string) {
+            setStore("session", "form", sessionID, mutable(await sdk.api.form.list({ sessionID })))
           },
         },
       },
