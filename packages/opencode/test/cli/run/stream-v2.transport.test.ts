@@ -108,7 +108,7 @@ function sdk(input: {
   )
   spyOn(client.permission, "list").mockImplementation(() => ok([]))
   spyOn(client.question, "list").mockImplementation(() => ok([]))
-  spyOn(client.session, "active").mockImplementation(() => ok({ data: input.active?.() ?? {}, watermarks: {} }))
+  spyOn(client.session, "active").mockImplementation(() => ok(input.active?.() ?? {}))
   spyOn(client.session, "switchAgent").mockImplementation(() => ok(undefined))
   spyOn(client.session, "switchModel").mockImplementation(() => ok(undefined))
   // The generated methods have conditional return types for throwOnError; the
