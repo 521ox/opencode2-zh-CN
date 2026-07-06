@@ -17,6 +17,7 @@ import simplifyIntegrationCredentialsMigration from "@opencode-ai/core/database/
 import simplifySessionInputMigration from "@opencode-ai/core/database/migration/20260622202450_simplify_session_input"
 import resetSessionEventsMigration from "@opencode-ai/core/database/migration/20260703200000_reset_v2_session_events"
 import renameInstructionsMigration from "@opencode-ai/core/database/migration/20260705180000_rename_instructions"
+import addSessionForkMigration from "@opencode-ai/core/database/migration/20260706223930_add-session-fork"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { EventV2 } from "@opencode-ai/core/event"
@@ -151,6 +152,39 @@ describe("DatabaseMigration", () => {
 
         expect(yield* db.get(sql`SELECT agent FROM session_context_epoch WHERE session_id = 'ses_existing'`)).toEqual({
           agent: "build",
+        })
+      }),
+    )
+  })
+
+  test("separates existing fork provenance from subagent hierarchy", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`CREATE TABLE session (id text PRIMARY KEY, parent_id text)`)
+        yield* db.run(
+          sql`CREATE TABLE event (aggregate_id text NOT NULL, seq integer NOT NULL, type text NOT NULL, data text NOT NULL)`,
+        )
+        yield* db.run(sql`INSERT INTO session VALUES ('ses_source', NULL), ('ses_fork', 'ses_source')`)
+        yield* db.run(
+          sql`INSERT INTO event VALUES ('ses_fork', 0, 'session.forked', '{"sessionID":"ses_fork","parentID":"ses_source","from":"msg_boundary"}')`,
+        )
+
+        yield* DatabaseMigration.applyOnly(db, [addSessionForkMigration])
+
+        expect(
+          yield* db.get(sql`SELECT parent_id, fork_session_id, fork_message_id FROM session WHERE id = 'ses_fork'`),
+        ).toEqual({
+          parent_id: null,
+          fork_session_id: "ses_source",
+          fork_message_id: "msg_boundary",
+        })
+        expect(
+          yield* db.get(sql`SELECT parent_id, fork_session_id, fork_message_id FROM session WHERE id = 'ses_source'`),
+        ).toEqual({
+          parent_id: null,
+          fork_session_id: null,
+          fork_message_id: null,
         })
       }),
     )

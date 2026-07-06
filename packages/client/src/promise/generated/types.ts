@@ -326,6 +326,7 @@ export type SessionListOutput = {
   readonly data: ReadonlyArray<{
     readonly id: string
     readonly parentID?: string
+    readonly fork?: { readonly sessionID: string; readonly messageID?: string }
     readonly projectID: string
     readonly agent?: string
     readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string }
@@ -388,6 +389,7 @@ export type SessionCreateOutput = {
   readonly data: {
     readonly id: string
     readonly parentID?: string
+    readonly fork?: { readonly sessionID: string; readonly messageID?: string }
     readonly projectID: string
     readonly agent?: string
     readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string }
@@ -426,6 +428,7 @@ export type SessionGetOutput = {
   readonly data: {
     readonly id: string
     readonly parentID?: string
+    readonly fork?: { readonly sessionID: string; readonly messageID?: string }
     readonly projectID: string
     readonly agent?: string
     readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string }
@@ -465,6 +468,7 @@ export type SessionForkOutput = {
   readonly data: {
     readonly id: string
     readonly parentID?: string
+    readonly fork?: { readonly sessionID: string; readonly messageID?: string }
     readonly projectID: string
     readonly agent?: string
     readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string }

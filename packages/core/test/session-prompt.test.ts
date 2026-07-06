@@ -283,25 +283,27 @@ describe("SessionV2.prompt", () => {
     }),
   )
 
-  it.effect("rejects directories as file attachments", () =>
+  it.effect("materializes directories as directory attachments", () =>
     Effect.gen(function* () {
       yield* setup
       const session = yield* SessionV2.Service
       const uri = pathToFileURL(import.meta.dir).href
 
-      const error = yield* session
-        .prompt({
-          sessionID,
-          prompt: { text: "Inspect this", files: [{ uri, name: "source" }] },
-          resume: false,
-        })
-        .pipe(Effect.flip)
-
-      expect(error).toMatchObject({
-        _tag: "Session.AttachmentError",
-        uri,
-        message: `Attachment is not a file: ${uri}`,
+      const message = yield* session.prompt({
+        sessionID,
+        prompt: { text: "Inspect this", files: [{ uri, name: "source" }] },
+        resume: false,
       })
+
+      expect(message.prompt.files).toHaveLength(1)
+      expect(message.prompt.files?.[0]).toMatchObject({
+        mime: "application/x-directory",
+        source: { type: "uri", uri },
+        name: "source",
+      })
+      expect(Buffer.from(message.prompt.files?.[0]?.data ?? "", "base64").toString("utf8")).toContain(
+        "session-prompt.test.ts",
+      )
     }),
   )
 

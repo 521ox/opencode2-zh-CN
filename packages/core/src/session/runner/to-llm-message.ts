@@ -41,6 +41,26 @@ const textAttachment = (file: FileAttachment) =>
     },
   })
 
+const directoryAttachment = (file: FileAttachment) =>
+  Message.make({
+    role: "user",
+    content: [
+      `Attached directory: ${file.name ?? (file.source.type === "uri" ? file.source.uri : "directory")}`,
+      file.description === undefined ? undefined : `Description: ${file.description}`,
+      file.data.length === 0 ? undefined : "",
+      file.data.length === 0 ? undefined : Buffer.from(file.data, "base64").toString("utf8"),
+    ]
+      .filter((line): line is string => line !== undefined)
+      .join("\n"),
+    metadata: {
+      attachment: {
+        source: file.source,
+        name: file.name,
+        description: file.description,
+      },
+    },
+  })
+
 const decodeToolInput = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)
 
 const providerMetadata = (
@@ -157,6 +177,7 @@ function toLLMMessage(message: SessionMessage.Message, model: ModelV2.Ref): Mess
       const files = message.files ?? []
       return [
         ...files.filter((file) => file.mime === "text/plain").map(textAttachment),
+        ...files.filter((file) => file.mime === "application/x-directory").map(directoryAttachment),
         Message.make({
           id: message.id,
           role: "user",

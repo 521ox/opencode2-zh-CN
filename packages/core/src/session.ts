@@ -746,6 +746,7 @@ const materializeAttachment = Effect.fn("V2Session.materializeAttachment")(funct
         start: undefined,
         end: undefined,
         name: undefined,
+        mime: undefined,
       }
     : yield* readFileAttachment(fs, input.uri)
   if (resolved.bytes.byteLength > MAX_ATTACHMENT_BYTES)
@@ -754,7 +755,7 @@ const materializeAttachment = Effect.fn("V2Session.materializeAttachment")(funct
       message: `Attachment exceeds the ${MAX_ATTACHMENT_BYTES} byte limit: ${input.uri}`,
     })
 
-  const mime = Mime.detect(resolved.bytes)
+  const mime = resolved.mime ?? Mime.detect(resolved.bytes)
   const content =
     mime === "text/plain" && resolved.start !== undefined
       ? Buffer.from(
@@ -791,6 +792,25 @@ const readFileAttachment = Effect.fn("V2Session.readFileAttachment")(function* (
   const info = yield* fs.stat(target).pipe(
     Effect.mapError(() => new AttachmentError({ uri, message: `Unable to read attachment: ${uri}` })),
   )
+  if (info.type === "Directory") {
+    const entries = yield* fs.readDirectoryEntries(target).pipe(
+      Effect.mapError(() => new AttachmentError({ uri, message: `Unable to read attachment: ${uri}` })),
+    )
+    return {
+      bytes: Buffer.from(
+        entries
+          .filter((entry) => entry.type === "file" || entry.type === "directory")
+          .sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === "directory" ? -1 : 1))
+          .map((entry) => entry.name + (entry.type === "directory" ? path.sep : ""))
+          .join("\n"),
+      ),
+      source: { type: "uri" as const, uri },
+      start: undefined,
+      end: undefined,
+      name: path.basename(target),
+      mime: "application/x-directory",
+    }
+  }
   if (info.type !== "File") return yield* new AttachmentError({ uri, message: `Attachment is not a file: ${uri}` })
   if (Number(info.size) > MAX_ATTACHMENT_BYTES)
     return yield* new AttachmentError({
@@ -800,7 +820,7 @@ const readFileAttachment = Effect.fn("V2Session.readFileAttachment")(function* (
   const bytes = yield* fs.readFile(target).pipe(
     Effect.mapError(() => new AttachmentError({ uri, message: `Unable to read attachment: ${uri}` })),
   )
-  return { bytes, source: { type: "uri" as const, uri }, start, end, name: path.basename(target) }
+  return { bytes, source: { type: "uri" as const, uri }, start, end, name: path.basename(target), mime: undefined }
 })
 
 function decodeDataURL(uri: string) {

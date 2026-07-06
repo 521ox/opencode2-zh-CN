@@ -46,6 +46,7 @@ import { useDialog } from "../../ui/dialog"
 import { DialogSessionRename } from "../../component/dialog-session-rename"
 import { TodoItem } from "../../component/todo-item"
 import { DialogMessage } from "./dialog-message"
+import { DialogFork } from "./dialog-fork"
 import { Sidebar } from "./sidebar"
 import { Composer } from "./composer"
 import { filetype } from "../../util/filetype"
@@ -370,7 +371,18 @@ export function Session() {
       value: "session.fork",
       category: "Session",
       slash: { name: "fork" },
-      run: () => unavailable("Forking"),
+      run: () => {
+        dialog.replace(() => (
+          <DialogFork
+            sessionID={route.sessionID}
+            onMove={(messageID) => {
+              if (!messageID) return
+              const child = scroll.getChildren().find((child) => child.id === messageID)
+              if (child) scroll.scrollBy(child.y - scroll.y - 1)
+            }}
+          />
+        ))
+      },
     },
     {
       title: "Compact session",
@@ -1405,7 +1417,7 @@ function UserMessage(props: { message: SessionMessageUser }) {
       <box
         id={props.message.id}
         border={["left"]}
-        borderColor={queued() ? theme.textMuted : color()}
+        borderColor={queued() ? theme.border : color()}
         customBorderChars={SplitBorder.customBorderChars}
       >
         <box

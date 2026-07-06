@@ -559,13 +559,10 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
           route.navigate({ type: "session", sessionID: match })
           return
         }
-        void sdk.client.session.fork({ sessionID: match }).then((result) => {
-          if (result.data?.id) {
-            route.navigate({ type: "session", sessionID: result.data.id })
-            return
-          }
-          toast.show({ message: "Failed to fork session", variant: "error" })
-        })
+        void sdk.api.session
+          .fork({ sessionID: match })
+          .then((result) => route.navigate({ type: "session", sessionID: result.id }))
+          .catch(toast.error)
       })
       .catch(toast.error)
   })
@@ -577,13 +574,10 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
   createEffect(() => {
     if (forked || sync.status !== "complete" || !args.sessionID || !args.fork) return
     forked = true
-    void sdk.client.session.fork({ sessionID: args.sessionID }).then((result) => {
-      if (result.data?.id) {
-        route.navigate({ type: "session", sessionID: result.data.id })
-      } else {
-        toast.show({ message: "Failed to fork session", variant: "error" })
-      }
-    })
+    void sdk.api.session
+      .fork({ sessionID: args.sessionID })
+      .then((result) => route.navigate({ type: "session", sessionID: result.id }))
+      .catch(toast.error)
   })
 
   const connected = useConnected()

@@ -217,6 +217,35 @@ Recent work
     ])
   })
 
+  test("lowers directory attachments as directory context", () => {
+    const directory = FileAttachment.make({
+      data: Base64.make(Buffer.from("lib/\nindex.ts").toString("base64")),
+      mime: "application/x-directory",
+      source: { type: "uri", uri: "file:///project/src" },
+      name: "src/",
+    })
+    const messages = toLLMMessages(
+      [
+        SessionMessage.User.make({
+          id: id("user-directory"),
+          type: "user",
+          text: "Review this directory",
+          files: [directory],
+          time: { created },
+        }),
+      ],
+      model,
+    )
+
+    expect(messages).toHaveLength(2)
+    expect(messages[0]).toMatchObject({
+      role: "user",
+      content: [{ type: "text", text: "Attached directory: src/\n\nlib/\nindex.ts" }],
+      metadata: { attachment: { source: directory.source, name: "src/" } },
+    })
+    expect(messages[1]?.content).toEqual([{ type: "text", text: "Review this directory" }])
+  })
+
   test("uses materialized image data as provider media and drops unsupported attachments", () => {
     const data = Base64.make("AAECAw==")
     const messages = toLLMMessages(

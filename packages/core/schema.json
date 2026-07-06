@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "992b24b9-f3e9-41f5-87a5-4917d1423169",
+  "id": "95328a41-789d-44de-9643-6ac6ecd6b4ec",
   "prevIds": [
-    "96e9fe64-660f-4a73-9414-b38bb7eac290"
+    "992b24b9-f3e9-41f5-87a5-4917d1423169"
   ],
   "ddl": [
     {
@@ -1163,6 +1163,26 @@
       "default": null,
       "generated": null,
       "name": "parent_id",
+      "entityType": "columns",
+      "table": "session"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "fork_session_id",
+      "entityType": "columns",
+      "table": "session"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "fork_message_id",
       "entityType": "columns",
       "table": "session"
     },

@@ -206,7 +206,8 @@ describe("SessionV2.create", () => {
       const forkContext = yield* session.context(forked.id)
       const history = Array.from(yield* Stream.runCollect(logEvents(session, forked.id)))
 
-      expect(forked).toMatchObject({ parentID: parent.id, title: "Parent (fork #1)" })
+      expect(forked).toMatchObject({ title: "Parent (fork #1)", fork: { sessionID: parent.id } })
+      expect(forked.parentID).toBeUndefined()
       expect(forkContext).toMatchObject([
         { type: "user", text: "First" },
         { type: "synthetic", text: "parent note", sessionID: forked.id },
@@ -264,6 +265,7 @@ describe("SessionV2.create", () => {
 
       const context = yield* session.context(forked.id)
       const history = Array.from(yield* Stream.runCollect(logEvents(session, forked.id)))
+      expect(forked.fork).toEqual({ sessionID: parent.id, messageID: second.id })
       expect(context).toMatchObject([{ text: "First" }])
       expect(context[0]?.id).not.toBe(first.id)
       expect(history[0]).toMatchObject({ data: { from: second.id } })

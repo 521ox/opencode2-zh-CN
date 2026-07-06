@@ -190,7 +190,9 @@ const projectFork = Effect.fn("SessionProjector.projectFork")(function* (
     .insert(SessionTable)
     .values({
       id: event.data.sessionID,
-      parent_id: event.data.parentID,
+      parent_id: null,
+      fork_session_id: event.data.parentID,
+      fork_message_id: event.data.from,
       project_id: parent.project_id,
       workspace_id: parent.workspace_id,
       slug: Slug.create(),

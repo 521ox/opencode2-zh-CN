@@ -4330,6 +4330,10 @@ export type PluginInfo = {
 export type SessionV2Info = {
   id: string
   parentID?: string
+  fork?: {
+    sessionID: string
+    messageID?: string
+  }
   projectID: string
   agent?: string
   model?: ModelRef
@@ -8541,6 +8545,10 @@ export type RevertStateV2 = {
 export type SessionV2InfoV2 = {
   id: string
   parentID?: string
+  fork?: {
+    sessionID: string
+    messageID?: string
+  }
   projectID: string
   agent?: string
   model?: ModelRef
