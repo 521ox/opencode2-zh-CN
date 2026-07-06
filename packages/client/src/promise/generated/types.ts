@@ -459,6 +459,10 @@ export type SessionGetOutput = {
   }
 }["data"]
 
+export type SessionRemoveInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+
+export type SessionRemoveOutput = void
+
 export type SessionForkInput = {
   readonly sessionID: { readonly sessionID: string }["sessionID"]
   readonly messageID?: { readonly messageID?: string | undefined }["messageID"]
@@ -1172,6 +1176,15 @@ export type SessionLogOutput =
           readonly durable: { readonly aggregateID: string; readonly seq: number; readonly version: number }
           readonly location?: { readonly directory: string; readonly workspaceID?: string }
           readonly data: { readonly sessionID: string; readonly title: string }
+        }
+      | {
+          readonly id: string
+          readonly created: number
+          readonly metadata?: { readonly [x: string]: unknown }
+          readonly type: "session.deleted"
+          readonly durable: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+          readonly location?: { readonly directory: string; readonly workspaceID?: string }
+          readonly data: { readonly sessionID: string }
         }
       | {
           readonly id: string
@@ -4442,6 +4455,15 @@ export type EventSubscribeOutput =
       readonly durable: { readonly aggregateID: string; readonly seq: number; readonly version: number }
       readonly location?: { readonly directory: string; readonly workspaceID?: string }
       readonly data: { readonly sessionID: string; readonly title: string }
+    }
+  | {
+      readonly id: string
+      readonly created: number
+      readonly metadata?: { readonly [x: string]: unknown }
+      readonly type: "session.deleted"
+      readonly durable: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+      readonly location?: { readonly directory: string; readonly workspaceID?: string }
+      readonly data: { readonly sessionID: string }
     }
   | {
       readonly id: string

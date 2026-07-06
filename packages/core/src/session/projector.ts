@@ -26,7 +26,10 @@ import type { DeepMutable } from "../schema"
 import { Slug } from "../util/slug"
 
 type DatabaseService = Database.Interface["db"]
-type MessageEvent = Exclude<SessionEvent.DurableEvent, typeof SessionEvent.Forked.Type>
+type MessageEvent = Exclude<
+  SessionEvent.DurableEvent,
+  typeof SessionEvent.Forked.Type | typeof SessionEvent.Deleted.Type
+>
 
 const decodeMessage = Schema.decodeUnknownSync(SessionMessage.Message)
 const encodeMessage = Schema.encodeSync(SessionMessage.Message)
@@ -503,6 +506,9 @@ const layer = Layer.effectDiscard(
       }),
     )
     yield* events.project(SessionV1.Event.Deleted, (event) =>
+      db.delete(SessionTable).where(eq(SessionTable.id, event.data.sessionID)).run().pipe(Effect.orDie),
+    )
+    yield* events.project(SessionEvent.Deleted, (event) =>
       db.delete(SessionTable).where(eq(SessionTable.id, event.data.sessionID)).run().pipe(Effect.orDie),
     )
     yield* events.project(SessionV1.Event.MessageUpdated, (event) =>

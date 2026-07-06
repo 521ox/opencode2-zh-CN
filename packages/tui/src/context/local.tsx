@@ -470,7 +470,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       }
 
       event.on("session.deleted", (evt) => {
-        prune(evt.data.info.id)
+        prune(evt.data.sessionID)
       })
 
       return {

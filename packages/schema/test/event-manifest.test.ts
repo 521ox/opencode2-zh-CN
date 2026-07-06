@@ -46,11 +46,12 @@ describe("public event manifest", () => {
       SessionV1.Event.Error,
     ])
     expect(Array.from(EventManifest.Latest.keys())).toEqual(
-      EventManifest.Definitions.map((definition) => definition.type),
+      Array.from(new Set(EventManifest.Definitions.map((definition) => definition.type))),
     )
     expect(EventManifest.Latest.get("agent.updated")).toBe(Agent.Event.Updated)
     expect(EventManifest.Latest.get("plugin.updated")).toBe(Plugin.Event.Updated)
     expect(EventManifest.Server.get("mcp.status.changed")).toBe(McpEvent.StatusChanged)
+    expect(EventManifest.Server.get("session.deleted")).toBe(SessionEvent.Deleted)
     expect(EventManifest.Server.has("mcp.tools.changed")).toBe(false)
     expect(Agent.Event.Updated.durable).toBeUndefined()
     expect(EventManifest.Durable.has("agent.updated")).toBe(false)
@@ -95,6 +96,7 @@ describe("public event manifest", () => {
         "session.created.1",
         "session.updated.1",
         "session.deleted.1",
+        "session.deleted.2",
         "message.updated.1",
         "message.removed.1",
         "message.part.updated.1",
@@ -169,5 +171,12 @@ describe("public event manifest", () => {
     expect(tool).not.toHaveProperty("provider")
     expect(SessionEvent.Text.Started.durable?.version).toBe(1)
     expect(SessionEvent.Tool.Called.durable?.version).toBe(1)
+  })
+
+  test("keeps current session deletion minimal", () => {
+    const sessionID = SessionID.make("ses_test")
+
+    expect(SessionEvent.Deleted.data.make({ sessionID })).toEqual({ sessionID })
+    expect(SessionEvent.Deleted.durable?.version).toBe(2)
   })
 })

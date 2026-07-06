@@ -84,6 +84,16 @@ export const Renamed = Event.durable({
 })
 export type Renamed = typeof Renamed.Type
 
+export const Deleted = Event.durable({
+  type: "session.deleted",
+  durable: {
+    aggregate: "sessionID",
+    version: 2,
+  },
+  schema: Base,
+})
+export type Deleted = typeof Deleted.Type
+
 export const Forked = Event.durable({
   type: "session.forked",
   ...options,
@@ -477,6 +487,7 @@ export const Definitions = Event.inventory(
   ModelSelected,
   Moved,
   Renamed,
+  Deleted,
   Forked,
   PromptPromoted,
   PromptAdmitted,

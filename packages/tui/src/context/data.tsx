@@ -213,10 +213,34 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       )
     }
 
+    function removeSession(sessionID: string) {
+      messageIndex.delete(sessionID)
+      setStore(
+        "session",
+        produce((draft) => {
+          delete draft.info[sessionID]
+          delete draft.status[sessionID]
+          delete draft.compaction[sessionID]
+          delete draft.message[sessionID]
+          delete draft.input[sessionID]
+          delete draft.permission[sessionID]
+          delete draft.form[sessionID]
+          for (const [rootID, family] of Object.entries(draft.family)) {
+            const next = family.filter((id) => id !== sessionID)
+            if (next.length === 0) delete draft.family[rootID]
+            else draft.family[rootID] = next
+          }
+        }),
+      )
+    }
+
     function handleEvent(event: V2Event) {
       switch (event.type) {
         case "session.created":
           void result.session.refresh(event.data.sessionID)
+          break
+        case "session.deleted":
+          removeSession(event.data.sessionID)
           break
         case "catalog.updated":
           void Promise.all([

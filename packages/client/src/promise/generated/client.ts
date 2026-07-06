@@ -13,6 +13,8 @@ import type {
   SessionActiveOutput,
   SessionGetInput,
   SessionGetOutput,
+  SessionRemoveInput,
+  SessionRemoveOutput,
   SessionForkInput,
   SessionForkOutput,
   SessionSwitchAgentInput,
@@ -422,6 +424,17 @@ export function make(options: ClientOptions) {
           },
           requestOptions,
         ).then((value) => value.data),
+      remove: (input: SessionRemoveInput, requestOptions?: RequestOptions) =>
+        request<SessionRemoveOutput>(
+          {
+            method: "DELETE",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}`,
+            successStatus: 204,
+            declaredStatuses: [404, 400, 401],
+            empty: true,
+          },
+          requestOptions,
+        ),
       fork: (input: SessionForkInput, requestOptions?: RequestOptions) =>
         request<{ readonly data: SessionForkOutput }>(
           {

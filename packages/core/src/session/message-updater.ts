@@ -152,6 +152,7 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
       },
       "session.moved": () => Effect.void,
       "session.renamed": () => Effect.void,
+      "session.deleted": () => Effect.void,
       "session.forked": () => Effect.void,
       "session.prompt.promoted": () => Effect.void,
       "session.prompt.admitted": () => Effect.void,
@@ -168,7 +169,6 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
             time: { created: event.created },
           }),
         ),
-      "session.instructions.discovered": () => Effect.void,
       "session.synthetic": (event) => {
         return adapter.appendMessage(
           SessionMessage.Synthetic.make({

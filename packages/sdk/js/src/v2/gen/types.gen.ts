@@ -824,7 +824,6 @@ export type GlobalEvent = {
         type: "session.deleted"
         properties: {
           sessionID: string
-          info: Session
         }
       }
     | {
@@ -2914,6 +2913,7 @@ export type SessionDurableEvent =
   | SessionModelSelected
   | SessionMoved
   | SessionRenamed
+  | SessionDeleted
   | SessionForked
   | SessionPromptPromoted
   | SessionPromptAdmitted
@@ -3576,13 +3576,12 @@ export type SyncEventSessionDeleted = {
   type: "sync"
   id: string
   syncEvent: {
-    type: "session.deleted.1"
+    type: "session.deleted.2"
     id: string
     seq: number
     aggregateID: string
     data: {
       sessionID: string
-      info: Session
     }
   }
 }
@@ -4698,6 +4697,24 @@ export type SessionRenamed = {
   }
 }
 
+export type SessionDeleted = {
+  id: string
+  created: number
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "session.deleted"
+  durable: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    sessionID: string
+  }
+}
+
 export type SessionForked = {
   id: string
   created: number
@@ -5749,25 +5766,6 @@ export type SessionUpdated = {
     [key: string]: unknown
   }
   type: "session.updated"
-  durable: {
-    aggregateID: string
-    seq: number
-    version: number
-  }
-  location?: LocationRef
-  data: {
-    sessionID: string
-    info: Session
-  }
-}
-
-export type SessionDeleted = {
-  id: string
-  created: number
-  metadata?: {
-    [key: string]: unknown
-  }
-  type: "session.deleted"
   durable: {
     aggregateID: string
     seq: number
@@ -6835,7 +6833,6 @@ export type EventSessionDeleted = {
   type: "session.deleted"
   properties: {
     sessionID: string
-    info: Session
   }
 }
 
@@ -8403,7 +8400,7 @@ export type V2EventV2 =
   | AgentUpdatedV2
   | SessionCreatedV2
   | SessionUpdatedV2
-  | SessionDeletedV2
+  | SessionDeleted1
   | MessageUpdatedV2
   | MessageRemovedV2
   | MessagePartUpdatedV2
@@ -8412,6 +8409,7 @@ export type V2EventV2 =
   | SessionModelSelectedV2
   | SessionMovedV2
   | SessionRenamedV2
+  | SessionDeletedV2
   | SessionForkedV2
   | SessionPromptPromotedV2
   | SessionPromptAdmittedV2
@@ -8814,6 +8812,24 @@ export type SessionRenamedV2 = {
   data: {
     sessionID: string
     title: string
+  }
+}
+
+export type SessionDeletedV2 = {
+  id: string
+  created: number
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "session.deleted"
+  durable: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRefV2
+  data: {
+    sessionID: string
   }
 }
 
@@ -9718,7 +9734,7 @@ export type SessionUpdatedV2 = {
   }
 }
 
-export type SessionDeletedV2 = {
+export type SessionDeleted1 = {
   id: string
   created: number
   metadata?: {
@@ -14967,6 +14983,41 @@ export type V2SessionActiveResponses = {
 }
 
 export type V2SessionActiveResponse = V2SessionActiveResponses[keyof V2SessionActiveResponses]
+
+export type V2SessionRemoveData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}"
+}
+
+export type V2SessionRemoveErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestErrorV2
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+}
+
+export type V2SessionRemoveError = V2SessionRemoveErrors[keyof V2SessionRemoveErrors]
+
+export type V2SessionRemoveResponses = {
+  /**
+   * <No Content>
+   */
+  204: void
+}
+
+export type V2SessionRemoveResponse = V2SessionRemoveResponses[keyof V2SessionRemoveResponses]
 
 export type V2SessionGetData = {
   body?: never
