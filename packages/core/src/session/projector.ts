@@ -1,6 +1,6 @@
 export * as SessionProjector from "./projector"
 
-import { and, asc, desc, eq, gt, inArray, lt, or, sql } from "drizzle-orm"
+import { and, asc, desc, eq, gt, gte, inArray, lt, or, sql } from "drizzle-orm"
 import { DateTime, Effect, Layer, Schema } from "effect"
 import { Database } from "../database/database"
 import { EventV2 } from "../event"
@@ -698,7 +698,7 @@ const layer = Layer.effectDiscard(
         yield* db
           .delete(SessionMessageTable)
           .where(
-            and(eq(SessionMessageTable.session_id, event.data.sessionID), gt(SessionMessageTable.seq, boundary.seq)),
+            and(eq(SessionMessageTable.session_id, event.data.sessionID), gte(SessionMessageTable.seq, boundary.seq)),
           )
           .run()
           .pipe(Effect.orDie)
@@ -707,7 +707,7 @@ const layer = Layer.effectDiscard(
           .where(
             and(
               eq(SessionInputTable.session_id, event.data.sessionID),
-              or(gt(SessionInputTable.admitted_seq, boundary.seq), gt(SessionInputTable.promoted_seq, boundary.seq)),
+              or(gte(SessionInputTable.admitted_seq, boundary.seq), gte(SessionInputTable.promoted_seq, boundary.seq)),
             ),
           )
           .run()

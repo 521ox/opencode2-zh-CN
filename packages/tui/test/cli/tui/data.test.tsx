@@ -284,6 +284,60 @@ test("completes exploration when a queued prompt is promoted", async () => {
   }
 })
 
+test("removes committed revert messages from local state", async () => {
+  const events = createEventStream()
+  const sessionID = "session-revert"
+  const calls = createFetch((url) => {
+    if (url.pathname === `/api/session/${sessionID}/message`) return json({ data: [], cursor: {} })
+  }, events)
+  let data!: ReturnType<typeof useData>
+
+  function Probe() {
+    data = useData()
+    return <box />
+  }
+
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <SDKProvider client={createClient(calls.fetch)} api={createApi(calls.fetch)}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </SDKProvider>
+    </TestTuiContexts>
+  ))
+
+  try {
+    for (const [seq, inputID] of ["msg_001", "msg_002", "msg_003"].entries()) {
+      emitEvent(events, {
+        id: EventV2.ID.create(),
+        created: seq,
+        type: "session.prompt.admitted",
+        durable: durable(sessionID, seq),
+        data: { sessionID, inputID, prompt: { text: inputID }, delivery: "steer" },
+      })
+    }
+    await wait(() => data.session.message.ids(sessionID).length === 3)
+
+    emitEvent(events, {
+      id: EventV2.ID.create(),
+      created: 3,
+      type: "session.revert.committed",
+      durable: durable(sessionID, 3),
+      data: { sessionID, messageID: "msg_002" },
+    })
+
+    await wait(() => data.session.message.ids(sessionID).length === 1)
+    expect(data.session.message.ids(sessionID)).toEqual(["msg_001"])
+    expect(data.session.message.get(sessionID, "msg_002")).toBeUndefined()
+    expect(data.session.message.get(sessionID, "msg_003")).toBeUndefined()
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("connectedOnce is false until first connect and persists across disconnect", async () => {
   const encoder = new TextEncoder()
   let stream: ReadableStreamDefaultController<Uint8Array> | undefined

@@ -70,9 +70,14 @@ describe("SessionProjector", () => {
         })
         .run()
       const boundary = SessionMessage.ID.make("msg_boundary")
+      const earlier = SessionMessage.ID.make("msg_earlier")
       yield* db
         .insert(SessionMessageTable)
-        .values([assistantRow(boundary, 1), assistantRow(SessionMessage.ID.make("msg_later"), 2)])
+        .values([
+          assistantRow(earlier, 0),
+          assistantRow(boundary, 1),
+          assistantRow(SessionMessage.ID.make("msg_later"), 2),
+        ])
         .run()
       yield* db
         .insert(SessionContextCheckpointTable)
@@ -100,7 +105,7 @@ describe("SessionProjector", () => {
       })
       expect(
         (yield* db.select({ id: SessionMessageTable.id }).from(SessionMessageTable).all()).map((row) => row.id),
-      ).toEqual([boundary])
+      ).toEqual([earlier])
       // A committed revert resets the context checkpoint so the next turn re-initializes.
       expect(yield* db.select().from(SessionContextCheckpointTable).get().pipe(Effect.orDie)).toBeUndefined()
     }),

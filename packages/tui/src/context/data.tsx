@@ -553,9 +553,17 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             setStore("session", "info", event.data.sessionID, "revert", event.data.revert)
           break
         case "session.revert.cleared":
+          if (store.session.info[event.data.sessionID])
+            setStore("session", "info", event.data.sessionID, "revert", undefined)
+          break
         case "session.revert.committed":
           if (store.session.info[event.data.sessionID])
             setStore("session", "info", event.data.sessionID, "revert", undefined)
+          message.update(event.data.sessionID, (draft, index) => {
+            const position = draft.findIndex((item) => item.id >= event.data.messageID)
+            if (position === -1) return
+            for (const item of draft.splice(position)) index.delete(item.id)
+          })
           break
         case "session.compaction.delta":
           break

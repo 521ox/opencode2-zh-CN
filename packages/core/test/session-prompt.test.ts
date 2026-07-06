@@ -212,7 +212,8 @@ describe("SessionV2.prompt", () => {
         (yield* db.select({ id: SessionMessageTable.id }).from(SessionMessageTable).all().pipe(Effect.orDie)).map(
           (row) => row.id,
         ),
-      ).not.toContain(stale)
+      ).not.toContainAnyValues([boundary.id, stale])
+      expect(yield* SessionInput.find(db, boundary.id)).toBeUndefined()
     }),
   )
 
