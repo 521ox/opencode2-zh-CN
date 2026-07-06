@@ -8,7 +8,7 @@ import { FSUtil } from "../fs-util"
 import { LocationMutation } from "../location-mutation"
 import { PermissionV2 } from "../permission"
 import { PluginRuntime } from "../plugin/runtime"
-import { PositiveInt } from "../schema"
+import { NonNegativeInt } from "../schema"
 import { SessionSchema } from "../session/schema"
 import { Shell } from "../shell"
 import { Tool, type Content } from "./tool"
@@ -27,10 +27,10 @@ export const Input = Schema.Struct({
   workdir: Schema.String.pipe(Schema.optional).annotate({
     description: "Working directory. Defaults to the active Location; relative paths resolve from that Location.",
   }),
-  timeout: PositiveInt.check(Schema.isLessThanOrEqualTo(MAX_TIMEOUT_MS))
+  timeout: NonNegativeInt.check(Schema.isLessThanOrEqualTo(MAX_TIMEOUT_MS))
     .pipe(Schema.optional)
     .annotate({
-      description: `Timeout in milliseconds. Defaults to ${DEFAULT_TIMEOUT_MS} and may not exceed ${MAX_TIMEOUT_MS}.`,
+      description: `Optional timeout in milliseconds. Zero means unlimited. Foreground commands default to ${DEFAULT_TIMEOUT_MS}; background commands default to unlimited. May not exceed ${MAX_TIMEOUT_MS}.`,
     }),
   background: Schema.Boolean.pipe(Schema.optional).annotate({
     description:
@@ -143,7 +143,7 @@ export const Plugin = {
         draft.add(
           name,
           Tool.make({
-            description: `Execute one shell command string with the host user's filesystem, process, and network authority. The active Location is the default working directory. Relative workdir values resolve from that Location. External workdir values require external_directory approval; best-effort command-argument path warnings are advisory only. Timeout values are milliseconds (default: ${DEFAULT_TIMEOUT_MS}; maximum: ${MAX_TIMEOUT_MS}). Uses the configured shell when set; otherwise uses /bin/sh on POSIX and COMSPEC or cmd.exe on Windows. Background mode (background=true) launches the command asynchronously and returns immediately; you are notified when it finishes.`,
+            description: `Execute one shell command string with the host user's filesystem, process, and network authority. The active Location is the default working directory. Relative workdir values resolve from that Location. External workdir values require external_directory approval; best-effort command-argument path warnings are advisory only. An optional timeout may be provided in milliseconds (zero: unlimited; foreground default: ${DEFAULT_TIMEOUT_MS}; maximum: ${MAX_TIMEOUT_MS}). Background commands default to unlimited. Uses the configured shell when set; otherwise uses /bin/sh on POSIX and COMSPEC or cmd.exe on Windows. Background mode (background=true) launches the command asynchronously and returns immediately; you are notified when it finishes.`,
             input: Input,
             output: Output,
             structured: StructuredOutput,
@@ -191,7 +191,7 @@ export const Plugin = {
                 if ((yield* fsUtil.stat(target.canonical)).type !== "Directory")
                   return yield* Effect.fail(new Error(`Working directory is not a directory: ${target.canonical}`))
 
-                const timeout = input.timeout ?? DEFAULT_TIMEOUT_MS
+                const timeout = input.background === true ? (input.timeout ?? 0) : (input.timeout ?? DEFAULT_TIMEOUT_MS)
                 const info = yield* shell.create({
                   command: input.command,
                   cwd: target.canonical,
@@ -252,6 +252,7 @@ export const Plugin = {
                   .block({ id: job.id, sessionID: context.sessionID })
                   .pipe(Effect.onInterrupt(() => runtime.job.cancel(job.id).pipe(Effect.ignore)))
                 if (result?.type === "backgrounded") {
+                  yield* shell.timeout(info.id, 0)
                   yield* notifyWhenDone(context.sessionID, context.toolCallID, input.command)
                   return {
                     output: BACKGROUND_STARTED,

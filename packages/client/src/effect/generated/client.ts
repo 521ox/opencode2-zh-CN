@@ -883,7 +883,7 @@ type Endpoint20_1Input = {
   readonly location?: Endpoint20_1Request["query"]["location"]
   readonly command: Endpoint20_1Request["payload"]["command"]
   readonly cwd?: Endpoint20_1Request["payload"]["cwd"]
-  readonly timeout?: Endpoint20_1Request["payload"]["timeout"]
+  readonly timeout: Endpoint20_1Request["payload"]["timeout"]
   readonly metadata?: Endpoint20_1Request["payload"]["metadata"]
 }
 const Endpoint20_1 = (raw: RawClient["server.shell"]) => (input: Endpoint20_1Input) =>
@@ -902,25 +902,38 @@ const Endpoint20_2 = (raw: RawClient["server.shell"]) => (input: Endpoint20_2Inp
     Effect.mapError(mapClientError),
   )
 
-type Endpoint20_3Request = Parameters<RawClient["server.shell"]["shell.output"]>[0]
+type Endpoint20_3Request = Parameters<RawClient["server.shell"]["shell.timeout"]>[0]
 type Endpoint20_3Input = {
   readonly id: Endpoint20_3Request["params"]["id"]
   readonly location?: Endpoint20_3Request["query"]["location"]
-  readonly cursor?: Endpoint20_3Request["query"]["cursor"]
-  readonly limit?: Endpoint20_3Request["query"]["limit"]
+  readonly timeout: Endpoint20_3Request["payload"]["timeout"]
 }
 const Endpoint20_3 = (raw: RawClient["server.shell"]) => (input: Endpoint20_3Input) =>
+  raw["shell.timeout"]({
+    params: { id: input["id"] },
+    query: { location: input["location"] },
+    payload: { timeout: input["timeout"] },
+  }).pipe(Effect.mapError(mapClientError))
+
+type Endpoint20_4Request = Parameters<RawClient["server.shell"]["shell.output"]>[0]
+type Endpoint20_4Input = {
+  readonly id: Endpoint20_4Request["params"]["id"]
+  readonly location?: Endpoint20_4Request["query"]["location"]
+  readonly cursor?: Endpoint20_4Request["query"]["cursor"]
+  readonly limit?: Endpoint20_4Request["query"]["limit"]
+}
+const Endpoint20_4 = (raw: RawClient["server.shell"]) => (input: Endpoint20_4Input) =>
   raw["shell.output"]({
     params: { id: input["id"] },
     query: { location: input["location"], cursor: input["cursor"], limit: input["limit"] },
   }).pipe(Effect.mapError(mapClientError))
 
-type Endpoint20_4Request = Parameters<RawClient["server.shell"]["shell.remove"]>[0]
-type Endpoint20_4Input = {
-  readonly id: Endpoint20_4Request["params"]["id"]
-  readonly location?: Endpoint20_4Request["query"]["location"]
+type Endpoint20_5Request = Parameters<RawClient["server.shell"]["shell.remove"]>[0]
+type Endpoint20_5Input = {
+  readonly id: Endpoint20_5Request["params"]["id"]
+  readonly location?: Endpoint20_5Request["query"]["location"]
 }
-const Endpoint20_4 = (raw: RawClient["server.shell"]) => (input: Endpoint20_4Input) =>
+const Endpoint20_5 = (raw: RawClient["server.shell"]) => (input: Endpoint20_5Input) =>
   raw["shell.remove"]({ params: { id: input["id"] }, query: { location: input["location"] } }).pipe(
     Effect.mapError(mapClientError),
   )
@@ -929,8 +942,9 @@ const adaptGroup20 = (raw: RawClient["server.shell"]) => ({
   list: Endpoint20_0(raw),
   create: Endpoint20_1(raw),
   get: Endpoint20_2(raw),
-  output: Endpoint20_3(raw),
-  remove: Endpoint20_4(raw),
+  timeout: Endpoint20_3(raw),
+  output: Endpoint20_4(raw),
+  remove: Endpoint20_5(raw),
 })
 
 type Endpoint21_0Request = Parameters<RawClient["server.question"]["question.request.list"]>[0]

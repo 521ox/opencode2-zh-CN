@@ -5757,25 +5757,25 @@ export type ShellCreateInput = {
   readonly command: {
     readonly command: string
     readonly cwd?: string
-    readonly timeout?: number
+    readonly timeout: number
     readonly metadata?: { readonly [x: string]: JsonValue }
   }["command"]
   readonly cwd?: {
     readonly command: string
     readonly cwd?: string
-    readonly timeout?: number
+    readonly timeout: number
     readonly metadata?: { readonly [x: string]: JsonValue }
   }["cwd"]
-  readonly timeout?: {
+  readonly timeout: {
     readonly command: string
     readonly cwd?: string
-    readonly timeout?: number
+    readonly timeout: number
     readonly metadata?: { readonly [x: string]: JsonValue }
   }["timeout"]
   readonly metadata?: {
     readonly command: string
     readonly cwd?: string
-    readonly timeout?: number
+    readonly timeout: number
     readonly metadata?: { readonly [x: string]: JsonValue }
   }["metadata"]
 }
@@ -5811,6 +5811,37 @@ export type ShellGetInput = {
 }
 
 export type ShellGetOutput = {
+  readonly location: {
+    readonly directory: string
+    readonly workspaceID?: string
+    readonly project: { readonly id: string; readonly directory: string }
+  }
+  readonly data: {
+    readonly id: string
+    readonly status: "running" | "exited" | "timeout" | "killed"
+    readonly command: string
+    readonly cwd: string
+    readonly shell: string
+    readonly file: string
+    readonly pid?: number
+    readonly exit?: number | "Infinity" | "-Infinity" | "NaN"
+    readonly metadata: { readonly [x: string]: JsonValue }
+    readonly time: {
+      readonly started: number | "Infinity" | "-Infinity" | "NaN"
+      readonly completed?: number | "Infinity" | "-Infinity" | "NaN"
+    }
+  }
+}
+
+export type ShellTimeoutInput = {
+  readonly id: { readonly id: string }["id"]
+  readonly location?: {
+    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+  }["location"]
+  readonly timeout: { readonly timeout: number }["timeout"]
+}
+
+export type ShellTimeoutOutput = {
   readonly location: {
     readonly directory: string
     readonly workspaceID?: string

@@ -735,7 +735,7 @@ export type Endpoint20_1Input = {
   readonly location?: Endpoint20_1Request["query"]["location"]
   readonly command: Endpoint20_1Request["payload"]["command"]
   readonly cwd?: Endpoint20_1Request["payload"]["cwd"]
-  readonly timeout?: Endpoint20_1Request["payload"]["timeout"]
+  readonly timeout: Endpoint20_1Request["payload"]["timeout"]
   readonly metadata?: Endpoint20_1Request["payload"]["metadata"]
 }
 export type Endpoint20_1Output = EffectValue<ReturnType<RawClient["server.shell"]["shell.create"]>>
@@ -749,28 +749,38 @@ export type Endpoint20_2Input = {
 export type Endpoint20_2Output = EffectValue<ReturnType<RawClient["server.shell"]["shell.get"]>>
 export type ShellGetOperation<E = never> = (input: Endpoint20_2Input) => Effect.Effect<Endpoint20_2Output, E>
 
-type Endpoint20_3Request = Parameters<RawClient["server.shell"]["shell.output"]>[0]
+type Endpoint20_3Request = Parameters<RawClient["server.shell"]["shell.timeout"]>[0]
 export type Endpoint20_3Input = {
   readonly id: Endpoint20_3Request["params"]["id"]
   readonly location?: Endpoint20_3Request["query"]["location"]
-  readonly cursor?: Endpoint20_3Request["query"]["cursor"]
-  readonly limit?: Endpoint20_3Request["query"]["limit"]
+  readonly timeout: Endpoint20_3Request["payload"]["timeout"]
 }
-export type Endpoint20_3Output = EffectValue<ReturnType<RawClient["server.shell"]["shell.output"]>>
-export type ShellOutputOperation<E = never> = (input: Endpoint20_3Input) => Effect.Effect<Endpoint20_3Output, E>
+export type Endpoint20_3Output = EffectValue<ReturnType<RawClient["server.shell"]["shell.timeout"]>>
+export type ShellTimeoutOperation<E = never> = (input: Endpoint20_3Input) => Effect.Effect<Endpoint20_3Output, E>
 
-type Endpoint20_4Request = Parameters<RawClient["server.shell"]["shell.remove"]>[0]
+type Endpoint20_4Request = Parameters<RawClient["server.shell"]["shell.output"]>[0]
 export type Endpoint20_4Input = {
   readonly id: Endpoint20_4Request["params"]["id"]
   readonly location?: Endpoint20_4Request["query"]["location"]
+  readonly cursor?: Endpoint20_4Request["query"]["cursor"]
+  readonly limit?: Endpoint20_4Request["query"]["limit"]
 }
-export type Endpoint20_4Output = EffectValue<ReturnType<RawClient["server.shell"]["shell.remove"]>>
-export type ShellRemoveOperation<E = never> = (input: Endpoint20_4Input) => Effect.Effect<Endpoint20_4Output, E>
+export type Endpoint20_4Output = EffectValue<ReturnType<RawClient["server.shell"]["shell.output"]>>
+export type ShellOutputOperation<E = never> = (input: Endpoint20_4Input) => Effect.Effect<Endpoint20_4Output, E>
+
+type Endpoint20_5Request = Parameters<RawClient["server.shell"]["shell.remove"]>[0]
+export type Endpoint20_5Input = {
+  readonly id: Endpoint20_5Request["params"]["id"]
+  readonly location?: Endpoint20_5Request["query"]["location"]
+}
+export type Endpoint20_5Output = EffectValue<ReturnType<RawClient["server.shell"]["shell.remove"]>>
+export type ShellRemoveOperation<E = never> = (input: Endpoint20_5Input) => Effect.Effect<Endpoint20_5Output, E>
 
 export interface ShellApi<E = never> {
   readonly list: ShellListOperation<E>
   readonly create: ShellCreateOperation<E>
   readonly get: ShellGetOperation<E>
+  readonly timeout: ShellTimeoutOperation<E>
   readonly output: ShellOutputOperation<E>
   readonly remove: ShellRemoveOperation<E>
 }
