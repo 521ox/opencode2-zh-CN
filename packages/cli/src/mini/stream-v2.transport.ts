@@ -190,7 +190,7 @@ async function prepareFile(file: RunFilePart) {
   return { text: `<file name="${file.filename}">\n${content}\n</file>` }
 }
 
-function promptFileSource(part: PromptFilePart) {
+function promptFileMention(part: PromptFilePart) {
   if (!part.source?.text) return
   return {
     start: part.source.text.start,
@@ -206,7 +206,7 @@ function promptFiles(next: SessionTurnInput) {
           {
             uri: part.url,
             name: part.filename,
-            source: promptFileSource(part),
+            mention: promptFileMention(part),
           },
         ]
       : [],
@@ -219,7 +219,7 @@ function promptAgents(next: SessionTurnInput) {
       ? [
           {
             name: part.name,
-            source: part.source
+            mention: part.source
               ? { start: part.source.start, end: part.source.end, text: part.source.value }
               : undefined,
           },
