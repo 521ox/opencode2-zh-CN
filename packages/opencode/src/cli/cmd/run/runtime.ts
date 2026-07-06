@@ -15,8 +15,7 @@
 import { createOpencodeClient } from "@opencode-ai/sdk/v2"
 import { Flag } from "@opencode-ai/core/flag/flag"
 import { MessageID } from "@/session/schema"
-import { loadRunAgents, loadRunCommands, loadRunReferences } from "./catalog.shared"
-import { createRunDemo } from "./demo"
+import { loadRunAgents, loadRunCommands, loadRunReferences, waitForDefaultModel } from "./catalog.shared"
 import { resolveModelInfo, resolveModelInfoStrict, resolveRunTuiConfig, resolveSessionInfo } from "./runtime.boot"
 import { createRuntimeLifecycle } from "./runtime.lifecycle"
 import { trace } from "./trace"
@@ -91,6 +90,8 @@ type StreamState = {
   handle: Awaited<ReturnType<StreamTransportModule["createSessionTransport"]>>
 }
 
+type RunDemo = ReturnType<(typeof import("./demo"))["createRunDemo"]>
+
 type ResolvedSession = {
   sessionID: string
   sessionTitle?: string
@@ -130,7 +131,7 @@ type RuntimeState = {
   sessionTitle?: string
   agent: string | undefined
   switching?: Promise<void>
-  demo?: ReturnType<typeof createRunDemo>
+  demo?: RunDemo
   selectSubagent?: (sessionID: string | undefined) => void
   session?: Promise<void>
   stream?: Promise<StreamState>
@@ -181,21 +182,21 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
   const log = trace()
   const tuiConfigTask = resolveRunTuiConfig()
   const ctx = await input.boot()
-  const modelTask = resolveModelInfo(ctx.sdk, ctx.directory, ctx.model)
   const sessionTask =
     ctx.resume === true
       ? resolveSessionInfo(ctx.sdk, ctx.sessionID, ctx.model)
       : Promise.resolve({
           first: true,
           history: [],
+          model: undefined,
           variant: undefined,
         })
   const savedTask = resolveSavedVariant(ctx.model)
-  const [tuiConfig, session, savedVariant] = await Promise.all([tuiConfigTask, sessionTask, savedTask])
+  const [session, savedVariant] = await Promise.all([sessionTask, savedTask])
   const state: RuntimeState = {
     shown: !session.first,
     aborting: false,
-    model: ctx.model,
+    model: ctx.model ?? session.model,
     providers: [],
     variants: [],
     limits: {},
@@ -206,23 +207,43 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
     sessionTitle: ctx.sessionTitle,
     agent: ctx.agent,
   }
-  const ensureSession = () => {
-    if (!input.resolveSession || state.sessionID) {
-      return Promise.resolve()
+  const loadModel = async () => {
+    if (state.model) {
+      return {
+        model: state.model,
+        savedVariant,
+        boot: true,
+        info: await resolveModelInfo(ctx.sdk, ctx.directory, state.model),
+      }
     }
 
-    if (state.session) {
-      return state.session
-    }
-
-    state.session = input.resolveSession(ctx).then((next) => {
-      state.sessionID = next.sessionID
-      state.sessionTitle = next.sessionTitle ?? state.sessionTitle
-      state.agent = next.agent
+    const model = await waitForDefaultModel({
+      sdk: ctx.sdk,
+      directory: ctx.directory,
+      active: () => !footer.isClosed,
     })
-    return state.session
-  }
+    if (footer.isClosed) return
+    const [fallbackSavedVariant, info] = await Promise.all([
+      resolveSavedVariant(model),
+      resolveModelInfo(ctx.sdk, ctx.directory, model),
+    ])
+    if (!model || state.model) {
+      return {
+        model: state.model,
+        savedVariant: undefined,
+        boot: false,
+        info,
+      }
+    }
 
+    state.model = model
+    return {
+      model,
+      savedVariant: fallbackSavedVariant,
+      boot: true,
+      info,
+    }
+  }
   const shell = await (deps.createRuntimeLifecycle ?? createRuntimeLifecycle)({
     directory: ctx.directory,
     findFiles: (query) =>
@@ -240,7 +261,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
     agent: state.agent,
     model: state.model,
     variant: state.activeVariant,
-    tuiConfig,
+    tuiConfig: tuiConfigTask,
     backgroundSubagents: input.backgroundSubagents,
     onPermissionReply: async (next) => {
       if (state.demo?.permission(next)) {
@@ -345,9 +366,11 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
       }
 
       state.aborting = true
-      void (state.stream
-        ? state.stream.then((item) => item.handle.interruptActiveTurn())
-        : ctx.sdk.v2.session.interrupt({ sessionID: state.sessionID }))
+      void (
+        state.stream
+          ? state.stream.then((item) => item.handle.interruptActiveTurn())
+          : ctx.sdk.v2.session.interrupt({ sessionID: state.sessionID })
+      )
         .catch(() => {})
         .finally(() => {
           state.aborting = false
@@ -374,6 +397,24 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
     },
   })
   const footer = shell.footer
+  const firstPaint = footer.idle().catch(() => {})
+  const modelTask = firstPaint.then(() => (footer.isClosed ? undefined : loadModel()))
+  const ensureSession = () => {
+    if (!input.resolveSession || state.sessionID) {
+      return Promise.resolve()
+    }
+
+    if (state.session) {
+      return state.session
+    }
+
+    state.session = input.resolveSession(ctx).then((next) => {
+      state.sessionID = next.sessionID
+      state.sessionTitle = next.sessionTitle ?? state.sessionTitle
+      state.agent = next.agent
+    })
+    return state.session
+  }
   const rememberLocal = (commit: StreamCommit, after?: LocalReplayAnchor) => {
     state.localRows = [...state.localRows, { commit, after }].slice(-LOCAL_REPLAY_ROW_LIMIT)
   }
@@ -417,12 +458,13 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
     info: Awaited<ReturnType<typeof resolveModelInfo>>,
     current: string | undefined,
     boot = false,
+    saved = savedVariant,
   ) => {
     state.providers = info.providers
     state.variants = variantsFor(state.providers, state.model)
     state.limits = info.limits
     state.activeVariant = boot
-      ? resolveVariant(ctx.variant, current, savedVariant, state.variants)
+      ? resolveVariant(ctx.variant, current, saved, state.variants)
       : current && !state.variants.includes(current)
         ? undefined
         : current
@@ -430,7 +472,11 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
     footer.event({ type: "models", providers: info.providers })
     footer.event({ type: "variants", variants: state.variants, current: state.activeVariant })
     if (state.model)
-      footer.event({ type: "model", model: formatModelLabel(state.model, state.activeVariant, state.providers) })
+      footer.event({
+        type: "model",
+        model: formatModelLabel(state.model, state.activeVariant, state.providers),
+        selection: state.model,
+      })
   }
 
   let catalogRefresh: Promise<void> | undefined
@@ -456,24 +502,24 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
     void catalogRefresh.catch(() => {})
   }
 
-  const initialCatalog = footer
-    .idle()
-    .then(loadCatalog)
-    .catch(() => {})
+  const initialCatalog = firstPaint.then(() => (footer.isClosed ? undefined : loadCatalog())).catch(() => {})
   void initialCatalog
 
   if (Flag.OPENCODE_SHOW_TTFD) {
-    footer.append({
-      kind: "system",
-      text: `startup ${Math.max(0, Math.round(performance.now() - start))}ms`,
-      phase: "final",
-      source: "system",
+    void firstPaint.then(() => {
+      if (footer.isClosed) return
+      footer.append({
+        kind: "system",
+        text: `startup ${Math.max(0, Math.round(performance.now() - start))}ms`,
+        phase: "final",
+        source: "system",
+      })
     })
   }
 
-  if (input.demo) {
-    await ensureSession()
-    state.demo = createRunDemo({
+  const createDemo = async () => {
+    const { createRunDemo } = await import("./demo")
+    return createRunDemo({
       footer,
       sessionID: state.sessionID,
       thinking: input.thinking,
@@ -481,13 +527,35 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
     })
   }
 
-  if (input.afterPaint) {
-    void Promise.resolve(input.afterPaint(ctx)).catch(() => {})
+  if (input.demo) {
+    await firstPaint
+    if (!footer.isClosed) {
+      await ensureSession()
+      state.demo = await createDemo()
+    }
   }
 
-  void modelTask.then((info) => applyModelInfo(info, session.variant, true))
+  if (input.afterPaint) {
+    void firstPaint.then(() => (footer.isClosed ? undefined : input.afterPaint?.(ctx))).catch(() => {})
+  }
 
-  const streamTask = deps.streamTransport ?? import("./stream-v2.transport")
+  void modelTask.then((result) => {
+    if (!result) return
+    const current = state.model
+    const boot =
+      result.boot &&
+      !!current &&
+      current.providerID === result.model?.providerID &&
+      current.modelID === result.model.modelID
+    applyModelInfo(result.info, boot ? session.variant : state.activeVariant, boot, result.savedVariant)
+  })
+
+  let streamTask = deps.streamTransport
+  const loadStreamTransport = () => {
+    if (streamTask) return streamTask
+    streamTask = import("./stream-v2.transport")
+    return streamTask
+  }
   const ensureStream = () => {
     if (state.stream) {
       return state.stream
@@ -501,7 +569,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
         throw new Error("runtime closed")
       }
 
-      const mod = await streamTask
+      const mod = await loadStreamTransport()
       if (footer.isClosed) {
         throw new Error("runtime closed")
       }
@@ -570,6 +638,8 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
   })
 
   const runQueue = async () => {
+    await firstPaint
+    if (footer.isClosed) return
     let includeFiles = true
     if (state.demo) {
       await state.demo.start()
@@ -615,14 +685,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
               state.history = []
               state.localRows = []
               includeFiles = true
-              state.demo = input.demo
-                ? createRunDemo({
-                    footer,
-                    sessionID: state.sessionID,
-                    thinking: input.thinking,
-                    limits: () => state.limits,
-                  })
-                : undefined
+              state.demo = input.demo ? await createDemo() : undefined
               log?.write("session.new", {
                 sessionID: state.sessionID,
               })
@@ -727,6 +790,8 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
   try {
     const eager = eagerStream(input, ctx)
     if (eager) {
+      await firstPaint
+      if (footer.isClosed) return
       if (input.replay && state.shown) {
         // Replay commits immutable scrollback rows, so wait for provider names
         // before bootstrapping existing session history.
@@ -737,13 +802,15 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
     }
 
     if (!eager && input.resolveSession) {
-      queueMicrotask(() => {
-        if (footer.isClosed) {
-          return
-        }
+      void firstPaint
+        .then(() => {
+          if (footer.isClosed) {
+            return
+          }
 
-        void ensureStream().catch(() => {})
-      })
+          return ensureStream()
+        })
+        .catch(() => {})
     }
 
     try {
