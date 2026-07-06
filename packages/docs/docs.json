@@ -17,11 +17,24 @@
     "tabs": [
       {
         "tab": "Docs",
-        "pages": ["index"]
+        "pages": ["index", "config", "plugins", "troubleshooting"]
       },
       {
         "tab": "SDK",
         "pages": ["sdk/index"]
+      },
+      {
+        "tab": "API",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": ["api/index"]
+          },
+          {
+            "group": "Endpoints",
+            "openapi": "openapi.json"
+          }
+        ]
       }
     ],
     "global": {}

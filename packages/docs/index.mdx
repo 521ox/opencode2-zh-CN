@@ -98,19 +98,19 @@ Standalone binaries are not available in beta.
 
 With OpenCode you can use any LLM provider by configuring its API key.
 
-If you are new to LLM providers, we recommend [OpenCode Zen](https://opencode.ai/docs/zen). It's a curated list of models
-that have been tested and verified by the OpenCode team.
+Run `/connect` in the TUI and select your provider.
 
-1. Run `/connect` in the TUI, select **opencode**, and open [opencode.ai/auth](https://opencode.ai/auth).
+```text
+/connect
+```
 
-   ```text
-   /connect
-   ```
+If you'd like easy access to all the best coding models you can try out
+[OpenCode Console](https://console.opencode.ai).
 
-2. Sign in, add your billing details, and copy your API key.
-3. Paste your API key into the prompt.
+You can also try [OpenCode Go](https://opencode.ai/go) a $10/month subscription
+plan that grants you access to the best open source models.
 
-Alternatively, select another provider. See the current [provider directory](https://opencode.ai/docs/providers#directory).
+See the current [provider directory](https://opencode.ai/docs/providers#directory).
 
 ---
 
@@ -130,53 +130,15 @@ How is authentication handled in @packages/functions/src/api/index.ts
 
 ### Add features
 
-For larger features, start by asking OpenCode to create a plan.
-
-1. **Create a plan**
-
-   Switch to **Plan mode** with `Tab`. Plan mode prevents OpenCode from making changes while it proposes an implementation.
-
-   ```text
-   <TAB>
-   ```
-
-   Describe the feature with enough context to understand the desired behavior.
-
-   ```text
-   When a user deletes a note, flag it as deleted in the database.
-   Create a screen that shows recently deleted notes.
-   From this screen, the user can restore a note or permanently delete it.
-   ```
-
-   <Tip>Give OpenCode plenty of context and examples.</Tip>
-
-2. **Iterate on the plan**
-
-   Give feedback or add more detail after OpenCode proposes a plan.
-
-   ```text
-   Use the attached image as a visual reference for the new screen.
-   ```
-
-   You can drag and drop images into the terminal to add them to your prompt.
-
-3. **Build the feature**
-
-   When the plan looks right, press `Tab` to return to **Build mode** and ask OpenCode to implement it.
-
-   ```text
-   Sounds good. Go ahead and make the changes.
-   ```
-
-### Make changes
-
-For straightforward work, ask OpenCode to make the change directly and include relevant files and examples.
+Ask OpenCode to add a feature by describing the desired behavior and providing relevant context.
 
 ```text
-Add authentication to the /settings route. Follow the approach used in
-@packages/functions/src/notes.ts and implement it in
-@packages/functions/src/settings.ts.
+When a user deletes a note, flag it as deleted in the database.
+Create a screen that shows recently deleted notes.
+From this screen, the user can restore a note or permanently delete it.
 ```
+
+<Tip>Give OpenCode plenty of context and examples.</Tip>
 
 ### Undo changes
 

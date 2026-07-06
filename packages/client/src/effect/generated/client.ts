@@ -544,25 +544,29 @@ const Endpoint11_1 = (raw: RawClient["server.credential"]) => (input: Endpoint11
 
 const adaptGroup11 = (raw: RawClient["server.credential"]) => ({ update: Endpoint11_0(raw), remove: Endpoint11_1(raw) })
 
-type Endpoint12_0Request = Parameters<RawClient["server.project"]["project.current"]>[0]
-type Endpoint12_0Input = { readonly location?: Endpoint12_0Request["query"]["location"] }
-const Endpoint12_0 = (raw: RawClient["server.project"]) => (input?: Endpoint12_0Input) =>
+const Endpoint12_0 = (raw: RawClient["server.project"]) => () =>
+  raw["project.list"]({}).pipe(Effect.mapError(mapClientError))
+
+type Endpoint12_1Request = Parameters<RawClient["server.project"]["project.current"]>[0]
+type Endpoint12_1Input = { readonly location?: Endpoint12_1Request["query"]["location"] }
+const Endpoint12_1 = (raw: RawClient["server.project"]) => (input?: Endpoint12_1Input) =>
   raw["project.current"]({ query: { location: input?.["location"] } }).pipe(Effect.mapError(mapClientError))
 
-type Endpoint12_1Request = Parameters<RawClient["server.project"]["project.directories"]>[0]
-type Endpoint12_1Input = {
-  readonly projectID: Endpoint12_1Request["params"]["projectID"]
-  readonly location?: Endpoint12_1Request["query"]["location"]
+type Endpoint12_2Request = Parameters<RawClient["server.project"]["project.directories"]>[0]
+type Endpoint12_2Input = {
+  readonly projectID: Endpoint12_2Request["params"]["projectID"]
+  readonly location?: Endpoint12_2Request["query"]["location"]
 }
-const Endpoint12_1 = (raw: RawClient["server.project"]) => (input: Endpoint12_1Input) =>
+const Endpoint12_2 = (raw: RawClient["server.project"]) => (input: Endpoint12_2Input) =>
   raw["project.directories"]({
     params: { projectID: input["projectID"] },
     query: { location: input["location"] },
   }).pipe(Effect.mapError(mapClientError))
 
 const adaptGroup12 = (raw: RawClient["server.project"]) => ({
-  current: Endpoint12_0(raw),
-  directories: Endpoint12_1(raw),
+  list: Endpoint12_0(raw),
+  current: Endpoint12_1(raw),
+  directories: Endpoint12_2(raw),
 })
 
 type Endpoint13_0Request = Parameters<RawClient["server.form"]["form.request.list"]>[0]

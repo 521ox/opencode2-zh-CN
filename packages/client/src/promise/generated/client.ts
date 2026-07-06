@@ -89,6 +89,7 @@ import type {
   CredentialUpdateOutput,
   CredentialRemoveInput,
   CredentialRemoveOutput,
+  ProjectListOutput,
   ProjectCurrentInput,
   ProjectCurrentOutput,
   ProjectDirectoriesInput,
@@ -899,6 +900,11 @@ export function make(options: ClientOptions) {
         ),
     },
     project: {
+      list: (requestOptions?: RequestOptions) =>
+        request<ProjectListOutput>(
+          { method: "GET", path: `/api/project`, successStatus: 200, declaredStatuses: [401, 400], empty: false },
+          requestOptions,
+        ),
       current: (input?: ProjectCurrentInput, requestOptions?: RequestOptions) =>
         request<ProjectCurrentOutput>(
           {

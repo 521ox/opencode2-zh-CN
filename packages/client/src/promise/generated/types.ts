@@ -2458,6 +2458,17 @@ export type CredentialRemoveInput = {
 
 export type CredentialRemoveOutput = void
 
+export type ProjectListOutput = ReadonlyArray<{
+  readonly id: string
+  readonly worktree: string
+  readonly vcs?: "git" | "hg"
+  readonly name?: string
+  readonly icon?: { readonly url?: string; readonly override?: string; readonly color?: string }
+  readonly commands?: { readonly start?: string }
+  readonly time: { readonly created: number; readonly updated: number; readonly initialized?: number }
+  readonly sandboxes: ReadonlyArray<string>
+}>
+
 export type ProjectCurrentInput = {
   readonly location?: {
     readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
