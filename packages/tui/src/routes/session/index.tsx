@@ -1448,10 +1448,10 @@ function UserMessage(props: { message: SessionMessageUser }) {
             >
               <For each={files()}>
                 {(file) => {
-                  const label = file.mime === "application/x-directory" ? "Directory" : file.mime
+                  const label = file.mime === "application/x-directory" ? "dir" : "file"
                   return (
                     <text fg={theme.text}>
-                      <span style={{ bg: theme.secondary, fg: theme.background }}>{` ${label} `}</span>
+                      <span style={{ bg: theme.secondary, fg: theme.background, bold: true }}>{` ${label} `}</span>
                       <span style={{ bg: theme.backgroundElement, fg: theme.textMuted }}>
                         {" "}
                         {file.name ?? (file.source.type === "uri" ? file.source.uri : "attachment")}{" "}
