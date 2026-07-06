@@ -159,7 +159,7 @@ export const make = Effect.fn("PluginHost.make")(function* (plugin: PluginV2.Int
         }),
     },
     event: {
-      subscribe: () => events.live().pipe(Stream.filter(EventManifest.isServer)),
+      subscribe: () => events.subscribe().pipe(Stream.filter(EventManifest.isServer)),
     },
     integration: {
       list: () => response(integration.list()),

@@ -118,6 +118,11 @@ export type SubscribePayload<D extends readonly Definition[]> = D[number] extend
   : never
 
 export interface Subscribe {
+  /**
+   * Volatile live channel: every event published from now on, nothing before or
+   * across a disconnect. Consumers that need reliability combine it with `log`.
+   */
+  (): Stream.Stream<Payload>
   <D extends Definition>(definition: D): Stream.Stream<Payload<D>>
   <const D extends readonly [Definition, ...Definition[]]>(definitions: D): Stream.Stream<SubscribePayload<D>>
 }
@@ -132,12 +137,6 @@ export interface Interface {
   ) => Effect.Effect<Payload<D>>
   readonly subscribe: Subscribe
   /**
-   * Volatile live channel: every event published from now on, nothing before,
-   * nothing across a disconnect. The only channel that carries non-durable
-   * events; consumers that need reliability combine `changes` with `log`.
-   */
-  readonly live: () => Stream.Stream<Payload>
-  /**
    * Durable, ordered, gap-free per-aggregate log read. `follow: false`
    * completes at the end of the log; `follow: true` replays then transitions
    * to live. Both modes emit one `Synced` marker at the captured replay
@@ -150,7 +149,7 @@ export interface Interface {
   }) => Stream.Stream<LogItem>
   /** Latest committed seq per aggregate. Aggregates without events are absent. */
   readonly sequences: (aggregateIDs: ReadonlyArray<string>) => Effect.Effect<ReadonlyMap<string, Seq>>
-  /** @deprecated Use `all()` and consume the returned stream. */
+  /** @deprecated Use `subscribe()` and consume the returned stream. */
   readonly listen: (listener: Subscriber) => Effect.Effect<Unsubscribe>
   readonly project: <D extends Definition>(definition: D, projector: Subscriber<D>) => Effect.Effect<void>
   readonly replay: (
@@ -575,17 +574,16 @@ export const layerWith = (options?: LayerOptions) =>
           ),
         )
 
-      const subscribeOne = <D extends Definition>(definition: D): Stream.Stream<Payload<D>> =>
-        local(Stream.unwrap(getOrCreate(definition).pipe(Effect.map((pubsub) => Stream.fromPubSub(pubsub))))).pipe(
-          Stream.map((event) => event as Payload<D>),
-        )
-
+      function subscribe(): Stream.Stream<Payload>
       function subscribe<D extends Definition>(definition: D): Stream.Stream<Payload<D>>
       function subscribe<const D extends readonly [Definition, ...Definition[]]>(
         definitions: D,
       ): Stream.Stream<SubscribePayload<D>>
-      function subscribe(input: Definition | readonly Definition[]): Stream.Stream<Payload> {
-        if (isDefinition(input)) return subscribeOne(input)
+      function subscribe(input?: Definition | readonly Definition[]): Stream.Stream<Payload> {
+        if (input === undefined) return streamLive()
+        if (isDefinition(input)) {
+          return local(Stream.unwrap(getOrCreate(input).pipe(Effect.map((pubsub) => Stream.fromPubSub(pubsub)))))
+        }
         const types = new Set(input.map((definition) => definition.type))
         return streamLive().pipe(Stream.filter((event) => types.has(event.type)))
       }
@@ -737,7 +735,6 @@ export const layerWith = (options?: LayerOptions) =>
       return Service.of({
         publish,
         subscribe,
-        live: streamLive,
         log,
         sequences,
         listen,

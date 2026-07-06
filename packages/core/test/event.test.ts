@@ -177,7 +177,7 @@ describe("EventV2", () => {
     Effect.gen(function* () {
       const events = yield* EventV2.Service
       const typed = yield* events.subscribe(Message).pipe(Stream.take(1), Stream.runCollect, Effect.forkScoped)
-      const wildcard = yield* events.live().pipe(Stream.take(1), Stream.runCollect, Effect.forkScoped)
+      const wildcard = yield* events.subscribe().pipe(Stream.take(1), Stream.runCollect, Effect.forkScoped)
       yield* Effect.yieldNow
       const event = yield* events.publish(Message, { text: "hello" })
 
@@ -258,7 +258,7 @@ describe("EventV2", () => {
     Effect.gen(function* () {
       const events = yield* EventV2.Service
       const received = new Array<string>()
-      const fiber = yield* events.live().pipe(
+      const fiber = yield* events.subscribe().pipe(
         Stream.take(1),
         Stream.runForEach(() => Effect.sync(() => received.push("stream"))),
         Effect.forkScoped,
