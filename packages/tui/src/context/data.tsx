@@ -1074,6 +1074,16 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           )
           setStore("session", "permission", reconcile(permissions))
         }),
+        sdk.api.form.listRequests({ location: locationQuery(defaultLocation()) }).then((response) => {
+          const forms = mutable(response.data).reduce<Record<string, FormInfo[]>>(
+            (result, form) => ({
+              ...result,
+              [form.sessionID]: [...(result[form.sessionID] ?? []), form],
+            }),
+            {},
+          )
+          setStore("session", "form", reconcile(forms))
+        }),
         result.location.refresh(),
         result.location.agent.refresh(),
         result.location.integration.refresh(),
