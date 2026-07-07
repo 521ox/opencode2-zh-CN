@@ -530,17 +530,29 @@ const invokeArrayStatic = (name: string, args: Array<unknown>, node: AstNode): u
       if (args[0] instanceof SandboxURLSearchParams) {
         return Array.from(args[0].params.entries(), ([key, value]) => [key, value])
       }
-      const source = boundedData(args[0], "Array.from input")
+      const source = args[0]
+      if (source instanceof SandboxPromise) {
+        throw new InterpreterRuntimeError(
+          "Array.from received an un-awaited Promise; await it before creating the array.",
+          node,
+          "InvalidDataValue",
+        )
+      }
       if (typeof source === "string") return Array.from(source)
       if (Array.isArray(source)) return [...source]
       if (
         source !== null &&
         typeof source === "object" &&
+        (Object.getPrototypeOf(source) === Object.prototype || Object.getPrototypeOf(source) === null) &&
         typeof (source as { length?: unknown }).length === "number"
       ) {
         return Array.from(source as ArrayLike<unknown>)
       }
-      throw new InterpreterRuntimeError("Array.from expects an array, string, Map, Set, or array-like value.", node)
+      throw new InterpreterRuntimeError(
+        "Array.from expects an array, string, Map, Set, or array-like value.",
+        node,
+        "InvalidDataValue",
+      )
     }
     default:
       throw new InterpreterRuntimeError(`Array.${name} is not available in CodeMode.`, node)
@@ -2003,6 +2015,9 @@ class Interpreter<R> {
           return self.invokeObjectMethodOnTools(callable.name, args[0], node)
         }
         if (callable.namespace === "Object" && objectMethodsPreservingIdentity.has(callable.name)) {
+          return invokeGlobalMethod(callable, args, node)
+        }
+        if (callable.namespace === "Array" && (callable.name === "from" || callable.name === "of")) {
           return invokeGlobalMethod(callable, args, node)
         }
         return boundedData(invokeGlobalMethod(callable, args, node), `${callable.namespace}.${callable.name} result`)
