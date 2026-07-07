@@ -110,6 +110,9 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       directory: process.cwd(),
     })
     const messageIndex = new Map<string, Map<string, number>>()
+    const sessionRefreshGeneration = new Map<string, number>()
+    const sessionRefreshApplied = new Map<string, number>()
+    const sessionUsage = new Map<string, { generation: number; cost: number; tokens: SessionV2Info["tokens"] }>()
     let connectionGeneration = 0
     let statusChanges: Set<string> | undefined
     let bootstrapping: Promise<void> | undefined
@@ -117,6 +120,24 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     function setSessionStatus(sessionID: string, status: DataSessionStatus) {
       statusChanges?.add(sessionID)
       setStore("session", "status", sessionID, status)
+    }
+
+    function nextSessionRefresh(sessionID: string) {
+      const generation = (sessionRefreshGeneration.get(sessionID) ?? 0) + 1
+      sessionRefreshGeneration.set(sessionID, generation)
+      return generation
+    }
+
+    function applySessionRefresh(sessionID: string, generation: number) {
+      if ((sessionRefreshApplied.get(sessionID) ?? 0) > generation) return false
+      sessionRefreshApplied.set(sessionID, generation)
+      return true
+    }
+
+    function updateSessionUsage(sessionID: string, cost: number, tokens: SessionV2Info["tokens"]) {
+      sessionUsage.set(sessionID, { generation: (sessionUsage.get(sessionID)?.generation ?? 0) + 1, cost, tokens })
+      if (!store.session.info[sessionID]) return
+      setStore("session", "info", sessionID, { cost, tokens })
     }
 
     const message = {
@@ -222,6 +243,8 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     }
 
     function removeSession(sessionID: string) {
+      sessionRefreshApplied.set(sessionID, nextSessionRefresh(sessionID))
+      sessionUsage.delete(sessionID)
       messageIndex.delete(sessionID)
       setStore(
         "session",
@@ -249,6 +272,9 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           break
         case "session.deleted":
           removeSession(event.data.sessionID)
+          break
+        case "session.usage.updated":
+          updateSessionUsage(event.data.sessionID, event.data.cost, event.data.tokens)
           break
         case "catalog.updated":
           void Promise.all([
@@ -420,7 +446,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             })
           })
           break
-        case "session.step.ended":
+        case "session.step.ended": {
           message.update(event.data.sessionID, (draft, index) => {
             const currentAssistant = message.assistant(draft, index, event.data.assistantMessageID)
             if (!currentAssistant) return
@@ -432,6 +458,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
               currentAssistant.snapshot = { ...currentAssistant.snapshot, end: event.data.snapshot }
           })
           break
+        }
         case "session.step.failed":
           message.update(event.data.sessionID, (draft, index) => {
             const currentAssistant = message.assistant(draft, index, event.data.assistantMessageID)
@@ -440,6 +467,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             currentAssistant.finish = "error"
             currentAssistant.error = event.data.error
             currentAssistant.retry = undefined
+            if (event.data.cost !== undefined && event.data.tokens !== undefined) {
+              currentAssistant.cost = event.data.cost
+              currentAssistant.tokens = event.data.tokens
+            }
           })
           break
         case "session.text.started":
@@ -639,8 +670,9 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             setStore("session", "info", event.data.sessionID, "revert", undefined)
           break
         case "session.revert.committed":
-          if (store.session.info[event.data.sessionID])
+          if (store.session.info[event.data.sessionID]) {
             setStore("session", "info", event.data.sessionID, "revert", undefined)
+          }
           setStore(
             "session",
             "input",
@@ -811,7 +843,17 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           return store.session.compaction[sessionID]
         },
         async refresh(sessionID: string) {
-          setStore("session", "info", sessionID, mutable(await sdk.api.session.get({ sessionID })))
+          const generation = nextSessionRefresh(sessionID)
+          const usageGeneration = sessionUsage.get(sessionID)?.generation ?? 0
+          const info = mutable(await sdk.api.session.get({ sessionID }))
+          if (!applySessionRefresh(sessionID, generation)) return
+          const usage = sessionUsage.get(sessionID)
+          setStore(
+            "session",
+            "info",
+            sessionID,
+            usage && usage.generation !== usageGeneration ? { ...info, cost: usage.cost, tokens: usage.tokens } : info,
+          )
           registerSession(sessionID)
         },
         message: {
@@ -994,6 +1036,8 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
 
     async function bootstrap() {
       if (bootstrapping) return bootstrapping
+      const generation = new Map(sessionRefreshApplied)
+      const usageGeneration = new Map(Array.from(sessionUsage, ([id, usage]) => [id, usage.generation]))
       bootstrapping = Promise.allSettled([
         sdk.api.session
           .list({
@@ -1007,7 +1051,15 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
               "session",
               "info",
               produce((draft) => {
-                for (const session of response.data) draft[session.id] = mutable(session)
+                for (const session of response.data) {
+                  if ((sessionRefreshApplied.get(session.id) ?? 0) !== (generation.get(session.id) ?? 0)) continue
+                  const usage = sessionUsage.get(session.id)
+                  draft[session.id] = mutable(
+                    usage && usage.generation !== (usageGeneration.get(session.id) ?? 0)
+                      ? { ...session, cost: usage.cost, tokens: usage.tokens }
+                      : session,
+                  )
+                }
               }),
             )
             for (const session of response.data) registerSession(session.id)

@@ -51,13 +51,11 @@ it.effect("projects request settings, headers, and body overlays", () =>
       apiKey: "secret",
       thinkingConfig: { thinkingBudget: 1024 },
     })
-    const resolved = yield* aisdk.model(
-      {
-        ...input,
-        headers: { "x-test": "header" },
-        body: { safety_setting: "strict" },
-      },
-    )
+    const resolved = yield* aisdk.model({
+      ...input,
+      headers: { "x-test": "header" },
+      body: { safety_setting: "strict" },
+    })
     const prepared = yield* LLMClient.prepare<LanguageModelV3CallOptions>(
       LLM.request({ model: resolved, prompt: "Hello" }),
     )

@@ -1,4 +1,4 @@
-import { describe, expect } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import {
   LLMClient,
   LLMError,
@@ -116,6 +116,28 @@ const recoveryModel = Model.make({
   provider: "fake",
   route: OpenAIChat.route.with({ limits: { context: 20_000, output: 1_000 } }),
 })
+
+test("calculates step cost using the matching context tier", () => {
+  expect(
+    SessionRunnerLLM.calculateCost(
+      [
+        { input: 1, output: 2, cache: { read: 0.1, write: 0.5 } },
+        { tier: { type: "context", size: 100 }, input: 3, output: 4, cache: { read: 0.2, write: 0.6 } },
+      ],
+      { input: 80, output: 10, reasoning: 2, cache: { read: 20, write: 1 } },
+    ),
+  ).toBeCloseTo(0.0002926)
+})
+
+test("does not apply an ineligible tier without base pricing", () => {
+  expect(
+    SessionRunnerLLM.calculateCost(
+      [{ tier: { type: "context", size: 100 }, input: 3, output: 4, cache: { read: 0.2, write: 0.6 } }],
+      { input: 80, output: 10, reasoning: 2, cache: { read: 20, write: 0 } },
+    ),
+  ).toBe(0)
+})
+
 const authorizations: Tool.Context[] = []
 const executions: string[] = []
 const permission = Layer.succeed(
@@ -1704,6 +1726,7 @@ describe("SessionRunnerLLM", () => {
         {
           type: "assistant",
           finish: "tool-calls",
+          cost: 0,
           tokens: { input: 8, output: 3, reasoning: 1, cache: { read: 2, write: 0 } },
           content: [
             { type: "reasoning", text: "Think" },
@@ -3635,7 +3658,11 @@ describe("SessionRunnerLLM", () => {
         LLMEvent.stepStart({ index: 0 }),
         LLMEvent.textStart({ id: "partial" }),
         LLMEvent.textDelta({ id: "partial", text: "Partial" }),
-        LLMEvent.stepFinish({ index: 0, reason: "content-filter" }),
+        LLMEvent.stepFinish({
+          index: 0,
+          reason: "content-filter",
+          usage: { nonCachedInputTokens: 8, outputTokens: 3, reasoningTokens: 1 },
+        }),
         LLMEvent.finish({ reason: "content-filter" }),
       ]
 
@@ -3646,9 +3673,15 @@ describe("SessionRunnerLLM", () => {
           type: "assistant",
           finish: "error",
           error: { type: "provider.content-filter" },
+          cost: 0,
+          tokens: { input: 8, output: 2, reasoning: 1, cache: { read: 0, write: 0 } },
           content: [{ type: "text", text: "Partial" }],
         },
       ])
+      expect(yield* session.get(sessionID)).toMatchObject({
+        cost: 0,
+        tokens: { input: 8, output: 2, reasoning: 1, cache: { read: 0, write: 0 } },
+      })
       expect(yield* recordedEventTypes(sessionID)).not.toContain("session.step.ended.1")
     }),
   )

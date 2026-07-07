@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { DateTime, Effect, Schema } from "effect"
+import { DateTime, Effect, Fiber, Option, Schema, Stream } from "effect"
 import { asc, eq } from "drizzle-orm"
 import { Database } from "@opencode-ai/core/database/database"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
@@ -41,12 +41,15 @@ const assistantRow = (
   id: SessionMessage.ID,
   seq: number,
   time: { created: DateTime.Utc; completed?: DateTime.Utc } = { created },
+  usage?: Pick<SessionMessage.Assistant, "cost" | "tokens">,
 ) => {
   const {
     id: _,
     type,
     ...data
-  } = encodeMessage(SessionMessage.Assistant.make({ id, type: "assistant", agent: "build", model, content: [], time }))
+  } = encodeMessage(
+    SessionMessage.Assistant.make({ id, type: "assistant", agent: "build", model, content: [], time, ...usage }),
+  )
   return { id, session_id: sessionID, type, seq, time_created: DateTime.toEpochMillis(time.created), data }
 }
 
@@ -67,6 +70,12 @@ describe("SessionProjector", () => {
           directory: "/project",
           title: "test",
           version: "test",
+          cost: 1.25,
+          tokens_input: 10,
+          tokens_output: 4,
+          tokens_reasoning: 2,
+          tokens_cache_read: 3,
+          tokens_cache_write: 1,
         })
         .run()
       const boundary = SessionMessage.ID.make("msg_boundary")
@@ -75,8 +84,24 @@ describe("SessionProjector", () => {
         .insert(SessionMessageTable)
         .values([
           assistantRow(earlier, 0),
-          assistantRow(boundary, 1),
-          assistantRow(SessionMessage.ID.make("msg_later"), 2),
+          assistantRow(
+            boundary,
+            1,
+            { created },
+            {
+              cost: 0.5,
+              tokens: { input: 4, output: 1, reasoning: 1, cache: { read: 1, write: 0 } },
+            },
+          ),
+          assistantRow(
+            SessionMessage.ID.make("msg_later"),
+            2,
+            { created },
+            {
+              cost: 0.75,
+              tokens: { input: 6, output: 3, reasoning: 1, cache: { read: 2, write: 1 } },
+            },
+          ),
         ])
         .run()
       yield* db
@@ -106,6 +131,14 @@ describe("SessionProjector", () => {
       expect(
         (yield* db.select({ id: SessionMessageTable.id }).from(SessionMessageTable).all()).map((row) => row.id),
       ).toEqual([earlier])
+      expect(yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get()).toMatchObject({
+        cost: 1.25,
+        tokens_input: 10,
+        tokens_output: 4,
+        tokens_reasoning: 2,
+        tokens_cache_read: 3,
+        tokens_cache_write: 1,
+      })
       // A committed revert resets the context checkpoint so the next turn re-initializes.
       expect(yield* db.select().from(InstructionCheckpointTable).get().pipe(Effect.orDie)).toBeUndefined()
     }),
@@ -534,12 +567,15 @@ describe("SessionProjector", () => {
         .pipe(Effect.orDie)
 
       const service = yield* EventV2.Service
+      const usageUpdated = yield* service
+        .subscribe(SessionEvent.UsageUpdated)
+        .pipe(Stream.runHead, Effect.forkScoped({ startImmediately: true }))
       yield* service.publish(SessionEvent.Step.Ended, {
         sessionID,
         assistantMessageID: SessionMessage.ID.make("msg_assistant_2"),
         finish: "stop",
-        cost: 0,
-        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        cost: 1.25,
+        tokens: { input: 10, output: 4, reasoning: 2, cache: { read: 3, write: 1 } },
       })
 
       const rows = yield* db
@@ -556,7 +592,24 @@ describe("SessionProjector", () => {
       expect(messages[1]).toMatchObject({
         type: "assistant",
         finish: "stop",
+        cost: 1.25,
+        tokens: { input: 10, output: 4, reasoning: 2, cache: { read: 3, write: 1 } },
         time: { completed: DateTime.makeUnsafe(0) },
+      })
+      expect(
+        yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie),
+      ).toMatchObject({
+        cost: 1.25,
+        tokens_input: 10,
+        tokens_output: 4,
+        tokens_reasoning: 2,
+        tokens_cache_read: 3,
+        tokens_cache_write: 1,
+      })
+      expect(Option.getOrThrow(yield* Fiber.join(usageUpdated)).data).toEqual({
+        sessionID,
+        cost: 1.25,
+        tokens: { input: 10, output: 4, reasoning: 2, cache: { read: 3, write: 1 } },
       })
     }),
   )

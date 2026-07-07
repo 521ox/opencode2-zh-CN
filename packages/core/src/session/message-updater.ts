@@ -143,6 +143,7 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
 
   return Effect.gen(function* () {
     yield* SessionEvent.All.match(event, {
+      "session.usage.updated": () => Effect.void,
       "session.agent.selected": (event) => {
         return adapter.appendMessage(
           SessionMessage.AgentSelected.make({
@@ -296,6 +297,10 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
           draft.finish = "error"
           draft.error = castDraft(event.data.error)
           draft.retry = undefined
+          if (event.data.cost !== undefined && event.data.tokens !== undefined) {
+            draft.cost = event.data.cost
+            draft.tokens = castDraft(event.data.tokens)
+          }
         })
       },
       "session.text.started": (event) => {

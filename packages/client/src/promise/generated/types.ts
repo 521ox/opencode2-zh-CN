@@ -1439,6 +1439,13 @@ export type SessionLogOutput =
             readonly sessionID: string
             readonly assistantMessageID: string
             readonly error: { readonly type: string; readonly message: string }
+            readonly cost?: number
+            readonly tokens?: {
+              readonly input: number
+              readonly output: number
+              readonly reasoning: number
+              readonly cache: { readonly read: number; readonly write: number }
+            }
           }
         }
       | {
@@ -4546,6 +4553,23 @@ export type EventSubscribeOutput =
       readonly id: string
       readonly created: number
       readonly metadata?: { readonly [x: string]: unknown }
+      readonly type: "session.usage.updated"
+      readonly location?: { readonly directory: string; readonly workspaceID?: string }
+      readonly data: {
+        readonly sessionID: string
+        readonly cost: number
+        readonly tokens: {
+          readonly input: number
+          readonly output: number
+          readonly reasoning: number
+          readonly cache: { readonly read: number; readonly write: number }
+        }
+      }
+    }
+  | {
+      readonly id: string
+      readonly created: number
+      readonly metadata?: { readonly [x: string]: unknown }
       readonly type: "session.deleted"
       readonly durable: { readonly aggregateID: string; readonly seq: number; readonly version: number }
       readonly location?: { readonly directory: string; readonly workspaceID?: string }
@@ -4765,6 +4789,13 @@ export type EventSubscribeOutput =
         readonly sessionID: string
         readonly assistantMessageID: string
         readonly error: { readonly type: string; readonly message: string }
+        readonly cost?: number
+        readonly tokens?: {
+          readonly input: number
+          readonly output: number
+          readonly reasoning: number
+          readonly cache: { readonly read: number; readonly write: number }
+        }
       }
     }
   | {

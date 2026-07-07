@@ -6,6 +6,7 @@ import type {
   JSONValue,
   LanguageModelV3,
   LanguageModelV3CallOptions,
+  LanguageModelV3FinishReason,
   LanguageModelV3FunctionTool,
   LanguageModelV3Message,
   LanguageModelV3Prompt,
@@ -624,8 +625,8 @@ function usage(input: Extract<LanguageModelV3StreamPart, { type: "finish" }>["us
   return Object.values(output).some((value) => value !== undefined) ? output : undefined
 }
 
-function finishReason(value: unknown): FinishReason {
-  return Schema.is(FinishReason)(value) ? value : "unknown"
+function finishReason(value: LanguageModelV3FinishReason): FinishReason {
+  return value.unified === "other" ? "unknown" : value.unified
 }
 
 function providerMetadata(value: unknown) {

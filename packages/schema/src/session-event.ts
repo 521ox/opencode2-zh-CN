@@ -30,6 +30,15 @@ export interface Source extends Schema.Schema.Type<typeof Source> {}
 const Base = {
   sessionID: SessionID,
 }
+const Tokens = Schema.Struct({
+  input: Schema.Finite,
+  output: Schema.Finite,
+  reasoning: Schema.Finite,
+  cache: Schema.Struct({
+    read: Schema.Finite,
+    write: Schema.Finite,
+  }),
+})
 const PromptFields = {
   ...Base,
   inputID: SessionMessage.ID,
@@ -83,6 +92,16 @@ export const Renamed = Event.durable({
   },
 })
 export type Renamed = typeof Renamed.Type
+
+export const UsageUpdated = Event.ephemeral({
+  type: "session.usage.updated",
+  schema: {
+    ...Base,
+    cost: Schema.Finite,
+    tokens: Tokens,
+  },
+})
+export type UsageUpdated = typeof UsageUpdated.Type
 
 export const Deleted = Event.durable({
   type: "session.deleted",
@@ -224,15 +243,7 @@ export namespace Step {
       assistantMessageID: SessionMessage.ID,
       finish: FinishReason,
       cost: Schema.Finite,
-      tokens: Schema.Struct({
-        input: Schema.Finite,
-        output: Schema.Finite,
-        reasoning: Schema.Finite,
-        cache: Schema.Struct({
-          read: Schema.Finite,
-          write: Schema.Finite,
-        }),
-      }),
+      tokens: Tokens,
       snapshot: Schema.String.pipe(optional),
       files: Schema.Array(RelativePath).pipe(optional),
     },
@@ -246,6 +257,8 @@ export namespace Step {
       ...Base,
       assistantMessageID: SessionMessage.ID,
       error: SessionError.Error,
+      cost: Schema.Finite.pipe(optional),
+      tokens: Tokens.pipe(optional),
     },
   })
   export type Failed = typeof Failed.Type
@@ -504,6 +517,7 @@ export const Definitions = Event.inventory(
   ModelSelected,
   Moved,
   Renamed,
+  UsageUpdated,
   Deleted,
   Forked,
   PromptPromoted,

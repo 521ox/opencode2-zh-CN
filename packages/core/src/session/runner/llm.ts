@@ -17,6 +17,7 @@ import { Config } from "../../config"
 import { Database } from "../../database/database"
 import { EventV2 } from "../../event"
 import { Location } from "../../location"
+import { ModelV2 } from "../../model"
 import { PermissionV2 } from "../../permission"
 import { Instructions } from "../../instructions/index"
 import { InstructionBuiltIns } from "../../instructions/builtins"
@@ -49,6 +50,30 @@ import { llmClient } from "../../effect/app-node-platform"
 import { StepFailedError, UserInterruptedError } from "../error"
 import { toSessionError } from "../to-session-error"
 import { SessionRunnerRetry } from "./retry"
+
+type StepTokens = {
+  readonly input: number
+  readonly output: number
+  readonly reasoning: number
+  readonly cache: { readonly read: number; readonly write: number }
+}
+
+// TODO(#35765): Use Copilot's reported billed amount once billing has a dedicated typed runtime contract.
+export function calculateCost(costs: ModelV2.Info["cost"], tokens: StepTokens) {
+  const context = tokens.input + tokens.cache.read + tokens.cache.write
+  const tier = costs
+    .filter((cost) => cost.tier?.type === "context" && context > cost.tier.size)
+    .toSorted((a, b) => (b.tier?.size ?? 0) - (a.tier?.size ?? 0))[0]
+  const cost = tier ?? costs.find((cost) => cost.tier === undefined)
+  if (!cost) return 0
+  return (
+    (tokens.input * cost.input +
+      (tokens.output + tokens.reasoning) * cost.output +
+      tokens.cache.read * cost.cache.read +
+      tokens.cache.write * cost.cache.write) /
+    1_000_000
+  )
+}
 
 /**
  * Runs one durable coding-agent Session until it settles.
@@ -312,6 +337,11 @@ const layer = Layer.effect(
         Effect.ensuring(serialized(publisher.flush())),
       )
 
+      const stepUsage = (settlement: NonNullable<ReturnType<typeof publisher.stepSettlement>>) => ({
+        cost: calculateCost(resolved.cost, settlement.tokens),
+        tokens: settlement.tokens,
+      })
+
       // Captures the end snapshot, diffs it against the step's start, and durably ends the
       // assistant step.
       const publishStepEnd = (settlement: NonNullable<ReturnType<typeof publisher.stepSettlement>>) =>
@@ -328,8 +358,7 @@ const layer = Layer.effect(
               sessionID: session.id,
               assistantMessageID: yield* publisher.startAssistant(),
               finish: settlement.finish,
-              cost: 0,
-              tokens: settlement.tokens,
+              ...stepUsage(settlement),
               snapshot: endSnapshot,
               files,
             }),
@@ -452,7 +481,8 @@ const layer = Layer.effect(
           const stepEndedCleanly =
             !streamInterrupted && !toolsInterrupted && infraError === undefined && !providerFailed && !stepFailure
           if (stepSettlement && stepEndedCleanly) yield* publishStepEnd(stepSettlement)
-          if (stepFailure) yield* serialized(publisher.publishStepFailure())
+          if (stepFailure)
+            yield* serialized(publisher.publishStepFailure(stepSettlement ? stepUsage(stepSettlement) : undefined))
 
           if (stream._tag === "Failure") return yield* Effect.failCause(stream.cause)
           if (userDeclined) return yield* Effect.interrupt
