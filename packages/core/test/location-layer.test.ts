@@ -12,6 +12,7 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { LocationServiceMap } from "@opencode-ai/core/location-services"
 import { Location } from "@opencode-ai/core/location"
 import { PluginV2 } from "@opencode-ai/core/plugin"
+import { SdkPlugins } from "@opencode-ai/core/plugin/sdk"
 import { PluginSupervisor } from "@opencode-ai/core/plugin/supervisor"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProjectV2 } from "@opencode-ai/core/project"
@@ -28,8 +29,43 @@ import { Reference } from "../src/reference"
 import { ToolRegistry } from "../src/tool/registry"
 
 const it = testEffect(AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node, LocationServiceMap.node])))
+const itWithSdk = testEffect(
+  AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node, SdkPlugins.node, LocationServiceMap.node])),
+)
 
 describe("LocationServiceMap", () => {
+  itWithSdk.live("preserves embedded SDK plugins after Location eviction", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          const sdk = yield* SdkPlugins.Service
+          const locations = yield* LocationServiceMap.Service
+          const id = AgentV2.ID.make("persistent-sdk-agent")
+          const plugin = define({
+            id: "persistent-sdk-plugin",
+            effect: (ctx) => ctx.agent.transform((agents) => agents.update(id, () => {})),
+          })
+          yield* sdk.register(plugin)
+
+          const ref = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
+          const read = Effect.gen(function* () {
+            const supervisor = yield* PluginSupervisor.Service
+            yield* supervisor.ready
+            const agents = yield* AgentV2.Service
+            return yield* agents.get(id)
+          })
+
+          expect(yield* read.pipe(Effect.scoped, Effect.provide(locations.get(ref)))).toBeDefined()
+          yield* locations.invalidate(ref)
+          expect(yield* read.pipe(Effect.scoped, Effect.provide(locations.get(ref)))).toBeDefined()
+        }),
+      ),
+    ),
+  )
+
   it.live("applies ordered plugin config operations during boot", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
