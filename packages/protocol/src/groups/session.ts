@@ -305,13 +305,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
           resume: Schema.Boolean.pipe(Schema.optional),
         }),
         success: Schema.Struct({ data: SessionInput.Admitted }),
-        error: [
-          ConflictError,
-          InvalidRequestError,
-          SessionNotFoundError,
-          CommandNotFoundError,
-          CommandEvaluationError,
-        ],
+        error: [ConflictError, InvalidRequestError, SessionNotFoundError, CommandNotFoundError, CommandEvaluationError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
@@ -386,15 +380,16 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
     .add(
       HttpApiEndpoint.post("session.compact", "/api/session/:sessionID/compact", {
         params: { sessionID: Session.ID },
-        success: HttpApiSchema.NoContent,
-        error: [SessionNotFoundError, SessionBusyError, ServiceUnavailableError, UnknownError],
+        payload: Schema.Struct({ id: SessionMessage.ID.pipe(Schema.optional) }),
+        success: Schema.Struct({ data: SessionInput.Compaction }),
+        error: [ConflictError, SessionNotFoundError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
           OpenApi.annotations({
             identifier: "v2.session.compact",
             summary: "Compact session",
-            description: "Compact a session conversation.",
+            description: "Queue a durable session compaction request.",
           }),
         ),
     )

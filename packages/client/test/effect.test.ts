@@ -140,6 +140,9 @@ test("session methods retain decoded Effect inputs and outputs", async () => {
     if (url.includes("/prompt")) {
       return Effect.succeed(HttpClientResponse.fromWeb(request, Response.json(admission)))
     }
+    if (url.endsWith("/compact")) {
+      return Effect.succeed(HttpClientResponse.fromWeb(request, Response.json(compactionAdmission)))
+    }
     if (url.includes("/context")) {
       return Effect.succeed(HttpClientResponse.fromWeb(request, Response.json({ data: [] })))
     }
@@ -148,10 +151,7 @@ test("session methods retain decoded Effect inputs and outputs", async () => {
     }
     if (url.endsWith("/api/session/active")) {
       return Effect.succeed(
-        HttpClientResponse.fromWeb(
-          request,
-          Response.json({ data: { ses_test: { type: "running" } } }),
-        ),
+        HttpClientResponse.fromWeb(request, Response.json({ data: { ses_test: { type: "running" } } })),
       )
     }
     if (request.method === "POST" && url.endsWith("/api/session")) {
@@ -161,10 +161,7 @@ test("session methods retain decoded Effect inputs and outputs", async () => {
       return Effect.succeed(HttpClientResponse.fromWeb(request, new Response(null, { status: 204 })))
     }
     return Effect.succeed(
-      HttpClientResponse.fromWeb(
-        request,
-        Response.json({ data: [session.data], cursor: { next: "next" } }),
-      ),
+      HttpClientResponse.fromWeb(request, Response.json({ data: [session.data], cursor: { next: "next" } })),
     )
   })
   const result = await Effect.gen(function* () {
@@ -264,6 +261,16 @@ const admission = {
     sessionID: "ses_test",
     prompt: { text: "Hello" },
     delivery: "steer",
+    timeCreated: 1_717_171_717_000,
+  },
+}
+
+const compactionAdmission = {
+  data: {
+    type: "compaction",
+    admittedSeq: 1,
+    id: "msg_compaction",
+    sessionID: "ses_test",
     timeCreated: 1_717_171_717_000,
   },
 }

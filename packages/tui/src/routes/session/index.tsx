@@ -21,7 +21,7 @@ import { useProject } from "../../context/project"
 import { useData } from "../../context/data"
 import { SplitBorder } from "../../ui/border"
 import { useTuiPaths, useTuiTerminalEnvironment } from "../../context/runtime"
-import { Spinner } from "../../component/spinner"
+import { Spinner, SPINNER_FRAMES } from "../../component/spinner"
 import { createSyntaxStyleMemo, generateSubtleSyntax, useTheme } from "../../context/theme"
 import { BoxRenderable, ScrollBoxRenderable, addDefaultParsers, TextAttributes, RGBA } from "@opentui/core"
 import { Prompt, type PromptRef } from "../../component/prompt"
@@ -172,6 +172,16 @@ export function Session() {
   })
   onCleanup(() => setEpilogue())
   const messages = sessionMessages
+  const transientCompaction = createMemo(() => {
+    if (
+      messages().some(
+        (message) => message.type === "compaction" && (message.status === "queued" || message.status === "running"),
+      )
+    )
+      return
+    const text = data.session.compaction(route.sessionID)
+    return text === undefined ? undefined : { text }
+  })
   const descendantSessionIDs = createMemo(() => {
     if (session()?.parentID) return []
     return data.session.family(route.sessionID).filter((id) => id !== route.sessionID)
@@ -926,8 +936,8 @@ export function Session() {
                     />
                   )}
                 </For>
-                <Show when={data.session.compaction(route.sessionID)}>
-                  {(text) => <CompactionMessage text={text()} />}
+                <Show when={transientCompaction()}>
+                  {(compaction) => <CompactionMessage status="running" text={compaction().text} />}
                 </Show>
                 <BackgroundToolHint messages={messages()} />
                 <Show when={session()?.revert?.messageID}>
@@ -1100,7 +1110,7 @@ function SessionMessageView(props: { message: SessionMessage }) {
         </Show>
       </Match>
       <Match when={props.message.type === "compaction"}>
-        <CompactionMessage />
+        <CompactionMessage message={props.message as Extract<SessionMessage, { type: "compaction" }>} />
       </Match>
     </Switch>
   )
@@ -1285,12 +1295,56 @@ function SessionSkillMessage(props: { message: Extract<SessionMessage, { type: "
   )
 }
 
-function CompactionMessage(props: { text?: string }) {
-  const { theme } = useTheme()
+function CompactionMessage(props: {
+  message?: Extract<SessionMessage, { type: "compaction" }>
+  status?: "running"
+  text?: string
+}) {
+  const ctx = use()
+  const kv = useKV()
+  const { theme, syntax } = useTheme()
+  const status = () => props.message?.status ?? props.status
+  const text = () => props.message?.summary ?? props.text ?? ""
+  const color = () => (status() === "failed" ? theme.error : status() === "completed" ? theme.success : theme.textMuted)
+  const border = () => (status() === "queued" ? theme.border : color())
   return (
-    <box border={["top"]} title=" Compaction " titleAlignment="center" borderColor={theme.borderActive}>
-      <Show when={props.text}>
-        <text fg={theme.textMuted}>{props.text}</text>
+    <box>
+      <box flexDirection="row" alignItems="center">
+        <box border={["top"]} borderColor={border()} flexGrow={1} />
+        <box flexDirection="row" gap={1} paddingLeft={1} paddingRight={1}>
+          <Switch>
+            <Match when={status() === "running"}>
+              <Show when={kv.get("animations_enabled", true)} fallback={<text fg={color()}>⋯</text>}>
+                <spinner frames={SPINNER_FRAMES} interval={80} color={color()} />
+              </Show>
+            </Match>
+            <Match when={status() === "completed"}>
+              <text fg={color()}>✓</text>
+            </Match>
+            <Match when={status() === "failed"}>
+              <text fg={color()}>✗</text>
+            </Match>
+            <Match when={status() === "queued"}>
+              <text fg={color()}>◇</text>
+            </Match>
+          </Switch>
+          <text fg={color()}>{status() === "queued" ? "Compaction queued" : "Compaction"}</text>
+        </box>
+        <box border={["top"]} borderColor={border()} flexGrow={1} />
+      </box>
+      <Show when={text().trim()}>
+        <box paddingTop={1} paddingLeft={3}>
+          <markdown
+            syntaxStyle={syntax()}
+            streaming={status() === "running"}
+            internalBlockMode="top-level"
+            content={text().trim()}
+            tableOptions={{ style: "grid" }}
+            conceal={ctx.conceal()}
+            fg={theme.markdownText}
+            bg={theme.background}
+          />
+        </box>
       </Show>
     </box>
   )
