@@ -205,9 +205,9 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
               },
             } satisfies CliRendererConfig
 
-            if (!!process.env.OPENCODE_SIMULATION) {
-              const { Simulation } = await import("@opencode-ai/simulation/frontend")
-              return Simulation.createSimulation(options)
+            if (process.env.OPENCODE_DRIVE) {
+              const { Drive } = await import("@opencode-ai/simulation/frontend")
+              return Drive.create(options)
             }
 
             return createCliRenderer(options)

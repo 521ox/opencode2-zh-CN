@@ -12,8 +12,8 @@ const setups = new WeakMap<CliRenderer, TestRendererSetup>()
 export async function create(options: CliRendererConfig): Promise<CliRenderer> {
   const setup = await createTestRenderer({
     ...options,
-    width: Number(process.env.OPENCODE_SIMULATION_TUI_WIDTH) || 100,
-    height: Number(process.env.OPENCODE_SIMULATION_TUI_HEIGHT) || 40,
+    width: 100,
+    height: 40,
   })
   setups.set(setup.renderer, setup)
   return setup.renderer

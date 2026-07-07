@@ -70,15 +70,17 @@ function makeRoutes<AuthError, AuthServices>(
     [PluginRuntime.providerNode, PluginRuntime.providerNodeWithCell(pluginRuntimeCell)],
     ...(sdkPlugins ? [[SdkPlugins.node, SdkPlugins.layerWithStore(sdkPlugins)] as const] : []),
   ]
-  // Simulation replacements are loaded via dynamic import so the simulation
-  // module is never eagerly loaded. Layer.unwrap defers both the import and
-  // the app-node build to layer-build time; when simulation is off the branch
-  // is byte-for-byte identical to a plain AppNodeBuilder.build call.
-  const serviceLayer = simulationEnabled()
+  const serviceLayer = simulateEnabled()
     ? Layer.unwrap(
         Effect.gen(function* () {
-          const { simulationReplacements } = yield* Effect.promise(() => import("@opencode-ai/simulation/backend"))
-          return AppNodeBuilder.build(applicationServices, [...replacements, ...simulationReplacements])
+          const { simulationReplacements, startDriveServer } = yield* Effect.promise(() =>
+            import("@opencode-ai/simulation/backend"),
+          )
+          if (driveEnabled()) startDriveServer()
+          return AppNodeBuilder.build(applicationServices, [
+            ...replacements,
+            ...(simulateEnabled() ? simulationReplacements : []),
+          ])
         }),
       )
     : AppNodeBuilder.build(applicationServices, replacements)
@@ -96,8 +98,12 @@ function makeRoutes<AuthError, AuthServices>(
   )
 }
 
-function simulationEnabled() {
-  return !!process.env.OPENCODE_SIMULATION
+function simulateEnabled() {
+  return !!process.env.OPENCODE_SIMULATE
+}
+
+function driveEnabled() {
+  return !!process.env.OPENCODE_DRIVE
 }
 
 export const routes = createRoutes()

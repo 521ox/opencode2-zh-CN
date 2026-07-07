@@ -2,21 +2,9 @@ import { SimulationProtocol } from "../protocol"
 import { SimulationActions, type Harness } from "./actions"
 import { SimulationTrace } from "./trace"
 
-const DefaultPort = 40900
-const MaxPortAttempts = 100
-
 export interface Server {
   readonly url: string
   readonly stop: () => void
-}
-
-function isEnabled() {
-  return process.env.OPENCODE_SIMULATION === "1" || process.env.OPENCODE_SIMULATION === "true"
-}
-
-function isPortUnavailable(error: unknown) {
-  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase()
-  return message.includes("eaddrinuse") || message.includes("address already in use") || message.includes(" in use")
 }
 
 function actionParam(params: unknown) {
@@ -53,54 +41,40 @@ async function handle(harness: Harness, request: SimulationProtocol.JsonRpc.Requ
   throw new Error(`Unknown simulation method: ${request.method}`)
 }
 
-function serve(
-  harness: Harness,
-  port = DefaultPort,
-  attempts = MaxPortAttempts,
-): Bun.Server<{ readonly simulation: true }> {
-  try {
-    return Bun.serve<{ readonly simulation: true }>({
-      hostname: "127.0.0.1",
-      port,
-      fetch(request, server) {
-        if (server.upgrade(request, { data: { simulation: true } })) return undefined
-        return new Response("opencode simulation websocket", { status: 426 })
+export function start(harness: Harness, endpoint: string): Server {
+  const url = new URL(endpoint)
+  const server = Bun.serve<{ readonly drive: true }>({
+    hostname: url.hostname,
+    port: Number(url.port),
+    fetch(request, server) {
+      if (server.upgrade(request, { data: { drive: true } })) return undefined
+      return new Response("opencode drive ui websocket", { status: 426 })
+    },
+    websocket: {
+      open() {
+        SimulationTrace.add("control.connect")
       },
-      websocket: {
-        open() {
-          SimulationTrace.add("control.connect")
-        },
-        close() {
-          SimulationTrace.add("control.disconnect")
-        },
-        async message(socket, message) {
-          let request: SimulationProtocol.JsonRpc.Request | undefined
-          try {
-            request = parseRequest(message)
-            const result = await handle(harness, request)
-            const next = SimulationProtocol.JsonRpc.success(request.id, result)
-            if (next) socket.send(JSON.stringify(next))
-          } catch (error) {
-            socket.send(JSON.stringify(SimulationProtocol.JsonRpc.failure(request?.id, error)))
-          }
-        },
+      close() {
+        SimulationTrace.add("control.disconnect")
       },
-    })
-  } catch (error) {
-    if (!isPortUnavailable(error) || attempts <= 1 || port >= 65535) throw error
-    return serve(harness, port + 1, attempts - 1)
-  }
-}
-
-export function start(harness: Harness): Server | undefined {
-  if (!isEnabled()) return
-  const server = serve(harness)
-  const url = `ws://${server.hostname}:${server.port}`
-  SimulationTrace.add("control.start", { url })
+      async message(socket, message) {
+        let request: SimulationProtocol.JsonRpc.Request | undefined
+        try {
+          request = parseRequest(message)
+          const result = await handle(harness, request)
+          const next = SimulationProtocol.JsonRpc.success(request.id, result)
+          if (next) socket.send(JSON.stringify(next))
+        } catch (error) {
+          socket.send(JSON.stringify(SimulationProtocol.JsonRpc.failure(request?.id, error)))
+        }
+      },
+    },
+  })
+  SimulationTrace.add("control.start", { url: endpoint })
   return {
-    url,
+    url: endpoint,
     stop: () => {
-      SimulationTrace.add("control.stop", { url })
+      SimulationTrace.add("control.stop", { url: endpoint })
       server.stop(true)
     },
   }
