@@ -1064,6 +1064,16 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             )
             for (const session of response.data) registerSession(session.id)
           }),
+        sdk.api.permission.listRequests({ location: locationQuery(defaultLocation()) }).then((response) => {
+          const permissions = mutable(response.data).reduce<Record<string, PermissionV2Request[]>>(
+            (result, request) => ({
+              ...result,
+              [request.sessionID]: [...(result[request.sessionID] ?? []), request],
+            }),
+            {},
+          )
+          setStore("session", "permission", reconcile(permissions))
+        }),
         result.location.refresh(),
         result.location.agent.refresh(),
         result.location.integration.refresh(),
