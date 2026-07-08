@@ -14,7 +14,7 @@ type Input = {
   readonly sessionID: SessionSchema.ID
   readonly agent: AgentV2.ID
   readonly model: ModelV2.Ref
-  readonly provider: string
+  readonly providerMetadataKey: string
   readonly snapshot?: Snapshot.ID
   readonly assistantMessageID?: SessionMessage.ID
 }
@@ -87,7 +87,9 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
     assistantMessageID ??= SessionMessage.ID.create()
     stepStarted = true
     yield* events.publish(SessionEvent.Step.Started, {
-      ...input,
+      sessionID: input.sessionID,
+      agent: input.agent,
+      model: input.model,
       assistantMessageID,
       snapshot: input.snapshot,
     })
@@ -97,8 +99,7 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
     assistantMessageID === undefined
       ? Effect.die(new Error("Tool event before assistant step start"))
       : Effect.succeed(assistantMessageID)
-  const providerState = (metadata: ProviderMetadata | undefined) => metadata?.[input.provider]
-
+  const providerState = (metadata: ProviderMetadata | undefined) => metadata?.[input.providerMetadataKey]
   const fragments = (
     name: string,
     ended: (id: string, value: string, ordinal: number, state?: Record<string, unknown>) => Effect.Effect<void>,
@@ -352,14 +353,13 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
         if (tool.called) return yield* Effect.die(new Error(`Duplicate tool call: ${event.id}`))
         tool.called = true
         tool.providerExecuted = event.providerExecuted === true
-        const state = providerState(event.providerMetadata)
         yield* events.publish(SessionEvent.Tool.Called, {
           sessionID: input.sessionID,
           assistantMessageID: tool.assistantMessageID,
           callID: event.id,
           input: record(event.input),
           executed: tool.providerExecuted,
-          state,
+          state: providerState(event.providerMetadata),
         })
         return
       }

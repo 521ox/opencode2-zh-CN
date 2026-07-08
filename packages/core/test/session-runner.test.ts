@@ -1674,7 +1674,7 @@ describe("SessionRunnerLLM", () => {
           name: "web_search",
           input: { query: "hello" },
           providerExecuted: true,
-          providerMetadata: { fake: { source: "provider" } },
+          providerMetadata: { openai: { source: "provider" } },
         }),
         LLMEvent.toolResult({
           id: "call-provider",
@@ -1687,7 +1687,7 @@ describe("SessionRunnerLLM", () => {
             ],
           },
           providerExecuted: true,
-          providerMetadata: { fake: { source: "provider" } },
+          providerMetadata: { openai: { source: "provider" } },
         }),
         LLMEvent.stepFinish({
           index: 0,
@@ -1834,21 +1834,21 @@ describe("SessionRunnerLLM", () => {
         LLMEvent.reasoningDelta({ id: "reasoning-anthropic", text: "Signed thought" }),
         LLMEvent.reasoningEnd({
           id: "reasoning-anthropic",
-          providerMetadata: { fake: { signature: "sig_1" }, anthropic: { ignored: true } },
+          providerMetadata: { openai: { signature: "sig_1" }, anthropic: { ignored: true } },
         }),
         LLMEvent.reasoningStart({
           id: "reasoning-openai",
           providerMetadata: {
-            fake: { itemId: "rs_1", reasoningEncryptedContent: null },
-            openai: { ignored: true },
+            openai: { itemId: "rs_1", reasoningEncryptedContent: null },
+            anthropic: { ignored: true },
           },
         }),
         LLMEvent.reasoningDelta({ id: "reasoning-openai", text: "Encrypted thought" }),
         LLMEvent.reasoningEnd({
           id: "reasoning-openai",
           providerMetadata: {
-            fake: { itemId: "rs_1", reasoningEncryptedContent: "encrypted-state" },
-            openai: { ignored: true },
+            openai: { itemId: "rs_1", reasoningEncryptedContent: "encrypted-state" },
+            anthropic: { ignored: true },
           },
         }),
         LLMEvent.stepFinish({ index: 0, reason: "stop" }),
@@ -1862,7 +1862,11 @@ describe("SessionRunnerLLM", () => {
         {
           type: "assistant",
           content: [
-            { type: "reasoning", text: "Signed thought", state: { signature: "sig_1" } },
+            {
+              type: "reasoning",
+              text: "Signed thought",
+              state: { signature: "sig_1" },
+            },
             {
               type: "reasoning",
               text: "Encrypted thought",
@@ -1877,11 +1881,15 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests[1]?.messages[1]?.content).toEqual([
-        { type: "reasoning", text: "Signed thought", providerMetadata: { fake: { signature: "sig_1" } } },
+        {
+          type: "reasoning",
+          text: "Signed thought",
+          providerMetadata: { openai: { signature: "sig_1" } },
+        },
         {
           type: "reasoning",
           text: "Encrypted thought",
-          providerMetadata: { fake: { itemId: "rs_1", reasoningEncryptedContent: "encrypted-state" } },
+          providerMetadata: { openai: { itemId: "rs_1", reasoningEncryptedContent: "encrypted-state" } },
         },
       ])
     }),
@@ -1899,14 +1907,14 @@ describe("SessionRunnerLLM", () => {
           name: "web_search",
           input: { query: "Effect" },
           providerExecuted: true,
-          providerMetadata: { fake: { itemId: "hosted-search" }, openai: { ignored: true } },
+          providerMetadata: { openai: { itemId: "hosted-search" }, fake: { ignored: true } },
         }),
         LLMEvent.toolResult({
           id: "hosted-search",
           name: "web_search",
           result: { type: "json", value: [{ title: "Effect" }] },
           providerExecuted: true,
-          providerMetadata: { fake: { blockType: "web_search_tool_result" }, anthropic: { ignored: true } },
+          providerMetadata: { openai: { blockType: "web_search_tool_result" }, anthropic: { ignored: true } },
         }),
         LLMEvent.stepFinish({ index: 0, reason: "stop" }),
         LLMEvent.finish({ reason: "stop" }),
@@ -1926,7 +1934,7 @@ describe("SessionRunnerLLM", () => {
           name: "web_search",
           input: { query: "Effect" },
           providerExecuted: true,
-          providerMetadata: { fake: { itemId: "hosted-search" } },
+          providerMetadata: { openai: { itemId: "hosted-search" } },
         },
         {
           type: "tool-result",
@@ -1934,7 +1942,7 @@ describe("SessionRunnerLLM", () => {
           name: "web_search",
           result: { type: "json", value: [{ title: "Effect" }] },
           providerExecuted: true,
-          providerMetadata: { fake: { blockType: "web_search_tool_result" } },
+          providerMetadata: { openai: { blockType: "web_search_tool_result" } },
         },
       ])
     }),
@@ -2469,7 +2477,7 @@ describe("SessionRunnerLLM", () => {
           type: "tool-call",
           id: "call-hosted-interrupted",
           providerExecuted: true,
-          providerMetadata: { fake: { itemId: "call-hosted-interrupted" } },
+          providerMetadata: { openai: { itemId: "call-hosted-interrupted" } },
         },
         { type: "tool-result", id: "call-hosted-interrupted", providerExecuted: true, result: { type: "error" } },
       ])
@@ -2670,7 +2678,10 @@ describe("SessionRunnerLLM", () => {
             {
               type: "tool",
               id: "call-missing",
-              state: { status: "error", error: { message: "Unknown tool: missing" } },
+              state: {
+                status: "error",
+                error: { type: "tool.unknown", message: "Unknown tool: missing" },
+              },
             },
           ],
         },

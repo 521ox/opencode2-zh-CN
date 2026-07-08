@@ -454,6 +454,34 @@ Recent work
     ])
   })
 
+  test("replays flat state under an OpenCode hosted model's route key", () => {
+    const opencode = ModelV2.Ref.make({ id: ModelV2.ID.make("claude-fable-5"), providerID: ProviderV2.ID.opencode })
+    const messages = toLLMMessages(
+      [
+        SessionMessage.Assistant.make({
+          id: id("assistant-opencode-reasoning"),
+          type: "assistant",
+          agent: build,
+          model: opencode,
+          content: [
+            SessionMessage.AssistantReasoning.make({
+              type: "reasoning",
+              text: "Think",
+              state: { signature: "signed" },
+            }),
+          ],
+          time: { created, completed: created },
+        }),
+      ],
+      opencode,
+      "anthropic",
+    )
+
+    expect(messages[0]?.content).toEqual([
+      { type: "reasoning", text: "Think", providerMetadata: { anthropic: { signature: "signed" } } },
+    ])
+  })
+
   test("lowers failed assistant reasoning to text", () => {
     const messages = toLLMMessages(
       [
