@@ -207,31 +207,25 @@ test("renders a footer for a pre-output retry assistant after replay", () => {
   expect(reduceSessionRows([message])).toEqual([{ type: "assistant-footer", messageID: "assistant-retry" }])
 })
 
-test("places a running compaction barrier before every queued user message", () => {
-  const queued = (id: string, text: string, created: number): SessionMessageInfo => ({
-    type: "user",
-    id,
-    text,
-    time: { created },
-  })
+test("history reduce keeps chronological order without pending reordering", () => {
   const messages: SessionMessageInfo[] = [
-    queued("user-before", "Before", 1),
+    { type: "user", id: "user-1", text: "Before", time: { created: 1 } },
     {
       type: "compaction",
       id: "compaction",
-      status: "running",
+      status: "completed",
       reason: "manual",
-      summary: "",
+      summary: "done",
       recent: "",
       time: { created: 2 },
     },
-    queued("user-after", "After", 3),
+    { type: "user", id: "user-2", text: "After", time: { created: 3 } },
   ]
 
-  expect(reduceSessionRows(messages, new Set(["user-before", "user-after"]))).toEqual([
+  expect(reduceSessionRows(messages)).toEqual([
+    { type: "message", messageID: "user-1" },
     { type: "message", messageID: "compaction" },
-    { type: "message", messageID: "user-before" },
-    { type: "message", messageID: "user-after" },
+    { type: "message", messageID: "user-2" },
   ])
 })
 
