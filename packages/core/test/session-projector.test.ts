@@ -1,7 +1,8 @@
 import { describe, expect } from "bun:test"
 import { DateTime, Effect, Fiber, Option, Schema, Stream } from "effect"
-import { asc, eq } from "drizzle-orm"
+import { asc, eq, sql } from "drizzle-orm"
 import { Database } from "@opencode-ai/core/database/database"
+import { AgentV2 } from "@opencode-ai/core/agent"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { EventV2 } from "@opencode-ai/core/event"
@@ -15,9 +16,11 @@ import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionEvent } from "@opencode-ai/core/session/event"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { Prompt } from "@opencode-ai/schema/prompt"
+import { Money } from "@opencode-ai/schema/money"
 import { SessionMessageUpdater } from "@opencode-ai/core/session/message-updater"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
+import { fromRow } from "@opencode-ai/core/session/info"
 import { SessionInput } from "@opencode-ai/core/session/input"
 import { Shell } from "@opencode-ai/schema/shell"
 import {
@@ -35,7 +38,8 @@ const sessionID = SessionV2.ID.make("ses_projector_test")
 const created = DateTime.makeUnsafe(0)
 const model = { id: ModelV2.ID.make("model"), providerID: ProviderV2.ID.make("provider") }
 const previousModel = { ...model, variant: ModelV2.VariantID.make("medium") }
-const encodeMessage = Schema.encodeSync(SessionMessage.Message)
+const encodeMessage = Schema.encodeSync(SessionMessage.Info)
+const build = AgentV2.defaultID
 
 const assistantRow = (
   id: SessionMessage.ID,
@@ -48,12 +52,108 @@ const assistantRow = (
     type,
     ...data
   } = encodeMessage(
-    SessionMessage.Assistant.make({ id, type: "assistant", agent: "build", model, content: [], time, ...usage }),
+    SessionMessage.Assistant.make({ id, type: "assistant", agent: build, model, content: [], time, ...usage }),
   )
   return { id, session_id: sessionID, type, seq, time_created: DateTime.toEpochMillis(time.created), data }
 }
 
 describe("SessionProjector", () => {
+  it.effect("does not settle a pending manual compaction on an auto failure", () =>
+    Effect.gen(function* () {
+      const db = (yield* Database.Service).db
+      yield* db
+        .insert(ProjectTable)
+        .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+        .run()
+      yield* db
+        .insert(SessionTable)
+        .values({
+          id: sessionID,
+          project_id: Project.ID.global,
+          slug: "test",
+          directory: "/project",
+          title: "test",
+          version: "test",
+        })
+        .run()
+      const events = yield* EventV2.Service
+      const inputID = SessionMessage.ID.make("msg_manual_compaction")
+      yield* SessionInput.admitCompaction(db, events, { id: inputID, sessionID })
+
+      yield* events.publish(SessionEvent.Compaction.Failed, {
+        sessionID,
+        reason: "auto",
+        error: { type: "compaction.failed", message: "Auto compaction failed" },
+      })
+
+      expect(yield* SessionInput.pendingCompaction(db, sessionID)).toMatchObject({ id: inputID })
+    }),
+  )
+
+  it.effect("loads legacy revert storage into canonical state", () =>
+    Effect.gen(function* () {
+      const db = (yield* Database.Service).db
+      yield* db
+        .insert(ProjectTable)
+        .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+        .run()
+      yield* db
+        .insert(SessionTable)
+        .values({
+          id: sessionID,
+          project_id: Project.ID.global,
+          slug: "test",
+          directory: "/project",
+          title: "test",
+          version: "test",
+        })
+        .run()
+      const legacy = JSON.stringify({
+        messageID: "msg_boundary",
+        snapshot: "tree",
+        diff: "legacy patch",
+        files: [{ path: "src/old.ts", status: "modified", additions: 1, deletions: 0, patch: "@@" }],
+      })
+      yield* db.run(sql`update session set revert = ${legacy} where id = ${sessionID}`)
+      const stored = yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get()
+      if (!stored) return yield* Effect.die("Session row missing")
+      const storedRevert = fromRow(stored).revert
+      expect(String(storedRevert?.messageID)).toBe("msg_boundary")
+      expect(String(storedRevert?.snapshot)).toBe("tree")
+      expect(storedRevert?.files).toEqual([
+        { file: "src/old.ts", status: "modified", additions: 1, deletions: 0, patch: "@@" },
+      ])
+    }),
+  )
+
+  it.effect("folds live compaction deltas into running memory state", () =>
+    Effect.gen(function* () {
+      const state = {
+        messages: [
+          SessionMessage.CompactionRunning.make({
+            id: SessionMessage.ID.make("msg_compaction"),
+            type: "compaction",
+            status: "running",
+            reason: "manual",
+            summary: "partial ",
+            recent: "recent",
+            time: { created },
+          }),
+        ],
+      }
+      yield* SessionMessageUpdater.update(
+        SessionMessageUpdater.memory(state),
+        SessionEvent.Compaction.Delta.make({
+          id: EventV2.ID.make("evt_delta"),
+          type: "session.compaction.delta",
+          created,
+          data: { sessionID, text: "summary" },
+        }),
+      )
+      expect(state.messages[0]).toMatchObject({ status: "running", summary: "partial summary", recent: "recent" })
+    }),
+  )
+
   it.effect("projects staged, cleared, and committed reverts", () =>
     Effect.gen(function* () {
       const db = (yield* Database.Service).db
@@ -89,7 +189,7 @@ describe("SessionProjector", () => {
             1,
             { created },
             {
-              cost: 0.5,
+              cost: Money.USD.make(0.5),
               tokens: { input: 4, output: 1, reasoning: 1, cache: { read: 1, write: 0 } },
             },
           ),
@@ -98,7 +198,7 @@ describe("SessionProjector", () => {
             2,
             { created },
             {
-              cost: 0.75,
+              cost: Money.USD.make(0.75),
               tokens: { input: 6, output: 3, reasoning: 1, cache: { read: 2, write: 1 } },
             },
           ),
@@ -111,7 +211,7 @@ describe("SessionProjector", () => {
       const events = yield* EventV2.Service
       yield* events.publish(SessionEvent.RevertEvent.Staged, {
         sessionID,
-        revert: { messageID: boundary, snapshot: Snapshot.ID.make("tree"), diff: "patch", files: [] },
+        revert: { messageID: boundary, snapshot: Snapshot.ID.make("tree"), files: [] },
       })
       expect((yield* db.select({ revert: SessionTable.revert }).from(SessionTable).get())?.revert).toMatchObject({
         messageID: boundary,
@@ -132,7 +232,7 @@ describe("SessionProjector", () => {
         (yield* db.select({ id: SessionMessageTable.id }).from(SessionMessageTable).all()).map((row) => row.id),
       ).toEqual([earlier])
       expect(yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get()).toMatchObject({
-        cost: 1.25,
+        cost: Money.USD.make(1.25),
         tokens_input: 10,
         tokens_output: 4,
         tokens_reasoning: 2,
@@ -285,7 +385,7 @@ describe("SessionProjector", () => {
 
       yield* events.publish(SessionEvent.AgentSelected, {
         sessionID,
-        agent: "build",
+        agent: build,
       })
       yield* events.publish(SessionEvent.ModelSelected, {
         sessionID,
@@ -327,6 +427,7 @@ describe("SessionProjector", () => {
       yield* events.publish(SessionEvent.Compaction.Started, {
         sessionID,
         reason: "manual",
+        recent: "recent context",
       })
       yield* events.publish(SessionEvent.Compaction.Delta, {
         sessionID,
@@ -336,18 +437,18 @@ describe("SessionProjector", () => {
         yield* db
           .select({ id: EventTable.id })
           .from(EventTable)
-          .where(eq(EventTable.type, SessionEvent.Compaction.Delta.type))
+          .where(sql`${EventTable.type} like 'session.compaction.delta.%'`)
           .all()
           .pipe(Effect.orDie),
-      ).toEqual([])
+      ).toHaveLength(0)
       expect(
         yield* db
-          .select({ id: SessionMessageTable.id })
+          .select({ data: SessionMessageTable.data })
           .from(SessionMessageTable)
           .where(eq(SessionMessageTable.type, "compaction"))
           .all()
           .pipe(Effect.orDie),
-      ).toEqual([])
+      ).toEqual([{ data: expect.objectContaining({ status: "running", summary: "", recent: "recent context" }) }])
       yield* events.publish(SessionEvent.Compaction.Ended, {
         sessionID,
         reason: "manual",
@@ -363,7 +464,7 @@ describe("SessionProjector", () => {
         .all()
         .pipe(Effect.orDie)
       const messages = rows.map((row) =>
-        Schema.decodeUnknownSync(SessionMessage.Message)({ ...row.data, id: row.id, type: row.type }),
+        Schema.decodeUnknownSync(SessionMessage.Info)({ ...row.data, id: row.id, type: row.type }),
       )
 
       expect(messages.map((message) => message.type)).toEqual([
@@ -379,7 +480,9 @@ describe("SessionProjector", () => {
       })
       expect(messages.find((message) => message.type === "model-switched")).toMatchObject({ previous: previousModel })
       expect(messages.find((message) => message.type === "shell")).toMatchObject({
-        shell: { command: "pwd", status: "exited", exit: 0 },
+        command: "pwd",
+        status: "exited",
+        exit: 0,
         output: { output: "/project", truncated: false },
         time: { completed: DateTime.makeUnsafe(0) },
       })
@@ -419,11 +522,7 @@ describe("SessionProjector", () => {
         .pipe(Effect.orDie)
       const events = yield* EventV2.Service
       const id = SessionMessage.ID.make("msg_creator_collision")
-      const {
-        id: _,
-        type,
-        ...data
-      } = encodeMessage({ id, sessionID, type: "synthetic", text: "existing", time: { created } })
+      const { id: _, type, ...data } = encodeMessage({ id, type: "synthetic", text: "existing", time: { created } })
       yield* db
         .insert(SessionMessageTable)
         .values({ id, session_id: sessionID, type, seq: 0, time_created: 0, data })
@@ -433,7 +532,7 @@ describe("SessionProjector", () => {
         .publish(SessionEvent.Step.Started, {
           sessionID,
           assistantMessageID: id,
-          agent: "build",
+          agent: build,
           model,
         })
         .pipe(Effect.exit)
@@ -450,7 +549,7 @@ describe("SessionProjector", () => {
       const stale = SessionMessage.Assistant.make({
         id: SessionMessage.ID.make("msg_assistant_stale"),
         type: "assistant",
-        agent: "build",
+        agent: build,
         model,
         content: [],
         time: { created },
@@ -458,7 +557,7 @@ describe("SessionProjector", () => {
       const completed = SessionMessage.Assistant.make({
         id: SessionMessage.ID.make("msg_assistant_completed"),
         type: "assistant",
-        agent: "build",
+        agent: build,
         model,
         content: [],
         time: { created: DateTime.makeUnsafe(1), completed: DateTime.makeUnsafe(2) },
@@ -493,7 +592,7 @@ describe("SessionProjector", () => {
       const events = yield* EventV2.Service
       const first = SessionMessage.ID.make("msg_retry_first")
       const second = SessionMessage.ID.make("msg_retry_second")
-      yield* events.publish(SessionEvent.Step.Started, { sessionID, assistantMessageID: first, agent: "build", model })
+      yield* events.publish(SessionEvent.Step.Started, { sessionID, assistantMessageID: first, agent: build, model })
       yield* events.publish(SessionEvent.RetryScheduled, {
         sessionID,
         assistantMessageID: first,
@@ -503,7 +602,7 @@ describe("SessionProjector", () => {
       })
 
       const decode = (row: typeof SessionMessageTable.$inferSelect) =>
-        Schema.decodeUnknownSync(SessionMessage.Message)({ ...row.data, id: row.id, type: row.type })
+        Schema.decodeUnknownSync(SessionMessage.Info)({ ...row.data, id: row.id, type: row.type })
       const firstRow = yield* db
         .select()
         .from(SessionMessageTable)
@@ -515,7 +614,7 @@ describe("SessionProjector", () => {
         retry: { attempt: 2, at: DateTime.makeUnsafe(2_000), error: { type: "provider.transport" } },
       })
 
-      yield* events.publish(SessionEvent.Step.Started, { sessionID, assistantMessageID: second, agent: "build", model })
+      yield* events.publish(SessionEvent.Step.Started, { sessionID, assistantMessageID: second, agent: build, model })
       yield* events.publish(SessionEvent.RetryScheduled, {
         sessionID,
         assistantMessageID: second,
@@ -574,7 +673,7 @@ describe("SessionProjector", () => {
         sessionID,
         assistantMessageID: SessionMessage.ID.make("msg_assistant_2"),
         finish: "stop",
-        cost: 1.25,
+        cost: Money.USD.make(1.25),
         tokens: { input: 10, output: 4, reasoning: 2, cache: { read: 3, write: 1 } },
       })
 
@@ -586,13 +685,13 @@ describe("SessionProjector", () => {
         .all()
         .pipe(Effect.orDie)
       const messages = rows.map((row) =>
-        Schema.decodeUnknownSync(SessionMessage.Message)({ ...row.data, id: row.id, type: row.type }),
+        Schema.decodeUnknownSync(SessionMessage.Info)({ ...row.data, id: row.id, type: row.type }),
       )
       expect(messages[0]).not.toHaveProperty("time.completed")
       expect(messages[1]).toMatchObject({
         type: "assistant",
         finish: "stop",
-        cost: 1.25,
+        cost: Money.USD.make(1.25),
         tokens: { input: 10, output: 4, reasoning: 2, cache: { read: 3, write: 1 } },
         time: { completed: DateTime.makeUnsafe(0) },
       })
@@ -608,7 +707,7 @@ describe("SessionProjector", () => {
       })
       expect(Option.getOrThrow(yield* Fiber.join(usageUpdated)).data).toEqual({
         sessionID,
-        cost: 1.25,
+        cost: Money.USD.make(1.25),
         tokens: { input: 10, output: 4, reasoning: 2, cache: { read: 3, write: 1 } },
       })
     }),
@@ -661,13 +760,13 @@ describe("SessionProjector", () => {
         .all()
         .pipe(Effect.orDie)
       const messages = rows.map((row) =>
-        Schema.decodeUnknownSync(SessionMessage.Message)({ ...row.data, id: row.id, type: row.type }),
+        Schema.decodeUnknownSync(SessionMessage.Info)({ ...row.data, id: row.id, type: row.type }),
       )
       expect(messages).toEqual([
         SessionMessage.Assistant.make({
           id: SessionMessage.ID.make("msg_assistant_completed"),
           type: "assistant",
-          agent: "build",
+          agent: build,
           model,
           content: [SessionMessage.AssistantText.make({ type: "text", text: "" })],
           time: { created: DateTime.makeUnsafe(1), completed: DateTime.makeUnsafe(2) },
@@ -675,7 +774,7 @@ describe("SessionProjector", () => {
         SessionMessage.Assistant.make({
           id: SessionMessage.ID.make("msg_assistant_stale"),
           type: "assistant",
-          agent: "build",
+          agent: build,
           model,
           content: [],
           time: { created },

@@ -30,6 +30,7 @@ import { SessionEvent } from "@opencode-ai/core/session/event"
 import { SessionInput } from "@opencode-ai/core/session/input"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { PromptInput } from "@opencode-ai/schema/prompt-input"
+import { Money } from "@opencode-ai/schema/money"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { SessionRunCoordinator } from "@opencode-ai/core/session/run-coordinator"
@@ -135,8 +136,23 @@ test("calculates step cost using the matching context tier", () => {
   expect(
     SessionRunnerLLM.calculateCost(
       [
-        { input: 1, output: 2, cache: { read: 0.1, write: 0.5 } },
-        { tier: { type: "context", size: 100 }, input: 3, output: 4, cache: { read: 0.2, write: 0.6 } },
+        {
+          input: Money.USDPerMillionTokens.make(1),
+          output: Money.USDPerMillionTokens.make(2),
+          cache: {
+            read: Money.USDPerMillionTokens.make(0.1),
+            write: Money.USDPerMillionTokens.make(0.5),
+          },
+        },
+        {
+          tier: { type: "context", size: 100 },
+          input: Money.USDPerMillionTokens.make(3),
+          output: Money.USDPerMillionTokens.make(4),
+          cache: {
+            read: Money.USDPerMillionTokens.make(0.2),
+            write: Money.USDPerMillionTokens.make(0.6),
+          },
+        },
       ],
       { input: 80, output: 10, reasoning: 2, cache: { read: 20, write: 1 } },
     ),
@@ -146,10 +162,20 @@ test("calculates step cost using the matching context tier", () => {
 test("does not apply an ineligible tier without base pricing", () => {
   expect(
     SessionRunnerLLM.calculateCost(
-      [{ tier: { type: "context", size: 100 }, input: 3, output: 4, cache: { read: 0.2, write: 0.6 } }],
+      [
+        {
+          tier: { type: "context", size: 100 },
+          input: Money.USDPerMillionTokens.make(3),
+          output: Money.USDPerMillionTokens.make(4),
+          cache: {
+            read: Money.USDPerMillionTokens.make(0.2),
+            write: Money.USDPerMillionTokens.make(0.6),
+          },
+        },
+      ],
       { input: 80, output: 10, reasoning: 2, cache: { read: 20, write: 0 } },
     ),
-  ).toBe(0)
+  ).toBe(Money.USD.zero)
 })
 
 const authorizations: Tool.Context[] = []
@@ -485,7 +511,7 @@ const recordedStepSettlementEvents = (id: SessionV2.ID, assistantMessageID: Sess
 const hostedCall = (id: string, query: string) =>
   LLMEvent.toolCall({ id, name: "web_search", input: { query }, providerExecuted: true })
 
-const requireAssistant = (messages: readonly SessionMessage.Message[]) => {
+const requireAssistant = (messages: readonly SessionMessage.Info[]) => {
   const assistant = messages.find((message) => message.type === "assistant")
   if (!assistant) throw new Error("Assistant message missing")
   return assistant
@@ -581,7 +607,7 @@ const fragmentFixture = (kind: FragmentKind, id: string, chunks: readonly string
         LLMEvent.toolInputStart({ id, name: "echo" }),
         ...chunks.map((text) => LLMEvent.toolInputDelta({ id, name: "echo", text })),
       ]
-      const expectedContent = { type: "tool", id, state: { status: "pending", input: text } }
+      const expectedContent = { type: "tool", id, state: { status: "streaming", input: text } }
       return {
         delta: SessionEvent.Tool.Input.Delta,
         partialEvents,
@@ -1056,7 +1082,7 @@ describe("SessionRunnerLLM", () => {
       skillBaselines.set(AgentV2.ID.make("reviewer"), "Reviewer skills")
       yield* events.publish(SessionEvent.AgentSelected, {
         sessionID,
-        agent: "reviewer",
+        agent: AgentV2.ID.make("reviewer"),
       })
       yield* admit(session, "Second")
       yield* session.resume(sessionID)
@@ -1082,7 +1108,7 @@ describe("SessionRunnerLLM", () => {
         return events
           .publish(SessionEvent.AgentSelected, {
             sessionID,
-            agent: "reviewer",
+            agent: AgentV2.ID.make("reviewer"),
           })
           .pipe(Effect.asVoid)
       })
@@ -1265,6 +1291,7 @@ describe("SessionRunnerLLM", () => {
       yield* events.publish(SessionEvent.Compaction.Started, {
         sessionID,
         reason: "manual",
+        recent: "",
       })
       yield* events.publish(SessionEvent.Compaction.Ended, {
         sessionID,
@@ -1308,10 +1335,7 @@ describe("SessionRunnerLLM", () => {
       expect(yield* SessionInput.pendingCompaction((yield* Database.Service).db, sessionID)).toMatchObject({
         id: first.id,
       })
-      expect((yield* session.messages({ sessionID })).find((message) => message.id === first.id)).toMatchObject({
-        type: "compaction",
-        status: "queued",
-      })
+      expect((yield* session.messages({ sessionID })).find((message) => message.id === first.id)).toBeUndefined()
 
       yield* admit(session, "Steer after compaction")
       yield* session.prompt({
@@ -1370,6 +1394,57 @@ describe("SessionRunnerLLM", () => {
         type: "compaction",
         status: "failed",
       })
+      expect(
+        (yield* recordedEventTypes(sessionID)).filter(
+          (type) => type === EventV2.versionedType(SessionEvent.Compaction.Failed.type, 1),
+        ),
+      ).toHaveLength(1)
+    }),
+  )
+
+  it.effect("settles an admitted manual compaction that cannot start", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const compaction = yield* session.compact({ sessionID })
+
+      yield* session.resume(sessionID)
+
+      expect(yield* SessionInput.pendingCompaction((yield* Database.Service).db, sessionID)).toBeUndefined()
+      expect((yield* session.messages({ sessionID })).find((message) => message.id === compaction.id)).toMatchObject({
+        type: "compaction",
+        status: "failed",
+        reason: "manual",
+        error: { message: "Compaction could not start" },
+      })
+      expect(
+        (yield* recordedEventTypes(sessionID)).filter(
+          (type) => type === EventV2.versionedType(SessionEvent.Compaction.Failed.type, 1),
+        ),
+      ).toHaveLength(1)
+    }),
+  )
+
+  it.effect("settles an admitted manual compaction when pre-start resolution throws", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const compaction = yield* session.compact({ sessionID })
+      modelResolveHook = Effect.die("model resolution failed")
+
+      expect(yield* Effect.exit(session.resume(sessionID))).toMatchObject({ _tag: "Failure" })
+
+      expect(yield* SessionInput.pendingCompaction((yield* Database.Service).db, sessionID)).toBeUndefined()
+      expect((yield* session.messages({ sessionID })).find((message) => message.id === compaction.id)).toMatchObject({
+        type: "compaction",
+        status: "failed",
+        reason: "manual",
+      })
+      expect(
+        (yield* recordedEventTypes(sessionID)).filter(
+          (type) => type === EventV2.versionedType(SessionEvent.Compaction.Failed.type, 1),
+        ),
+      ).toHaveLength(1)
     }),
   )
 
@@ -1511,9 +1586,10 @@ describe("SessionRunnerLLM", () => {
 
       expect(requests).toHaveLength(2)
       const context = yield* session.context(sessionID)
-      expect(context.some((message) => message.type === "compaction")).toBe(false)
-      expect(context.slice(-2)).toMatchObject([
+      expect(context).toContainEqual(expect.objectContaining({ type: "compaction", status: "failed", reason: "auto" }))
+      expect(context.slice(-3)).toMatchObject([
         { type: "user", text: "Continue" },
+        { type: "compaction", status: "failed", reason: "auto" },
         { type: "assistant", finish: "error", error: { message: "prompt too long" } },
       ])
     }),
@@ -1540,7 +1616,9 @@ describe("SessionRunnerLLM", () => {
       expect(yield* Fiber.await(run)).toMatchObject({ _tag: "Failure" })
       streamGate = undefined
       expect(requests).toHaveLength(2)
-      expect((yield* session.context(sessionID)).some((message) => message.type === "compaction")).toBe(false)
+      expect(yield* session.context(sessionID)).toContainEqual(
+        expect.objectContaining({ type: "compaction", status: "failed", reason: "auto" }),
+      )
     }),
   )
 
@@ -1557,6 +1635,7 @@ describe("SessionRunnerLLM", () => {
       yield* events.publish(SessionEvent.Compaction.Started, {
         sessionID,
         reason: "manual",
+        recent: "",
       })
       yield* events.publish(SessionEvent.Compaction.Ended, {
         sessionID,
@@ -2299,7 +2378,7 @@ describe("SessionRunnerLLM", () => {
       yield* events.publish(SessionEvent.Step.Started, {
         sessionID,
         assistantMessageID,
-        agent: "build",
+        agent: AgentV2.ID.make("build"),
         model: { id: ModelV2.ID.make("fake-model"), providerID: ProviderV2.ID.make("fake") },
       })
       yield* events.publish(SessionEvent.Tool.Input.Started, {
@@ -2356,7 +2435,7 @@ describe("SessionRunnerLLM", () => {
       yield* events.publish(SessionEvent.Step.Started, {
         sessionID,
         assistantMessageID,
-        agent: "build",
+        agent: AgentV2.ID.make("build"),
         model: { id: ModelV2.ID.make("fake-model"), providerID: ProviderV2.ID.make("fake") },
       })
       yield* events.publish(SessionEvent.Tool.Input.Started, {
@@ -2407,7 +2486,7 @@ describe("SessionRunnerLLM", () => {
       yield* events.publish(SessionEvent.Step.Started, {
         sessionID,
         assistantMessageID,
-        agent: "build",
+        agent: AgentV2.ID.make("build"),
         model: { id: ModelV2.ID.make("fake-model"), providerID: ProviderV2.ID.make("fake") },
       })
       yield* events.publish(SessionEvent.Tool.Input.Started, {

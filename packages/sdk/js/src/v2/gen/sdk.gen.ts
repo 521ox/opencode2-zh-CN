@@ -5185,86 +5185,6 @@ export class Plugin extends HeyApiClient {
   }
 }
 
-export class Switch extends HeyApiClient {
-  /**
-   * Switch session agent
-   *
-   * Switch the agent used by subsequent provider turns.
-   */
-  public agent<ThrowOnError extends boolean = false>(
-    parameters: {
-      sessionID: string
-      agent?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "path", key: "sessionID" },
-            { in: "body", key: "agent" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<
-      V2SessionSwitchAgentResponses,
-      V2SessionSwitchAgentErrors,
-      ThrowOnError
-    >({
-      url: "/api/session/{sessionID}/agent",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
-    })
-  }
-
-  /**
-   * Switch session model
-   *
-   * Switch the model used by subsequent provider turns.
-   */
-  public model<ThrowOnError extends boolean = false>(
-    parameters: {
-      sessionID: string
-      model?: ModelRef
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "path", key: "sessionID" },
-            { in: "body", key: "model" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<
-      V2SessionSwitchModelResponses,
-      V2SessionSwitchModelErrors,
-      ThrowOnError
-    >({
-      url: "/api/session/{sessionID}/model",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
-    })
-  }
-}
-
 export class Revert extends HeyApiClient {
   /**
    * Stage session revert
@@ -6069,6 +5989,84 @@ export class Session3 extends HeyApiClient {
   }
 
   /**
+   * Switch session agent
+   *
+   * Switch the agent used by subsequent provider turns.
+   */
+  public switchAgent<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      agent?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "body", key: "agent" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      V2SessionSwitchAgentResponses,
+      V2SessionSwitchAgentErrors,
+      ThrowOnError
+    >({
+      url: "/api/session/{sessionID}/agent",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Switch session model
+   *
+   * Switch the model used by subsequent provider turns.
+   */
+  public switchModel<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      model?: ModelRef
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "body", key: "model" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      V2SessionSwitchModelResponses,
+      V2SessionSwitchModelErrors,
+      ThrowOnError
+    >({
+      url: "/api/session/{sessionID}/model",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
    * Rename session
    *
    * Update the session title.
@@ -6526,11 +6524,6 @@ export class Session3 extends HeyApiClient {
       ...options,
       ...params,
     })
-  }
-
-  private _switch?: Switch
-  get switch(): Switch {
-    return (this._switch ??= new Switch({ client: this.client }))
   }
 
   private _revert?: Revert

@@ -145,8 +145,15 @@ describe("public event manifest", () => {
       SessionEvent.Definitions.filter((definition) => definition.durability === "durable"),
     )
     expect(SessionEvent.UsageUpdated.durability).toBe("ephemeral")
+    expect(SessionEvent.Compaction.Delta.durability).toBe("ephemeral")
+    expect(EventManifest.Durable.has("session.compaction.delta.1")).toBe(false)
     expect(EventManifest.ServerDefinitions).toContain(SessionEvent.UsageUpdated)
     expect(EventManifest.Definitions.every((definition) => definition.durability !== undefined)).toBe(true)
+  })
+
+  test("uses the current Session skill event as durable version 1", () => {
+    expect(EventManifest.Durable.get("session.skill.activated.1")).toBe(SessionEvent.Skill.Activated)
+    expect(EventManifest.Latest.get("session.skill.activated")).toBe(SessionEvent.Skill.Activated)
   })
 
   test("keeps simplified session fragment and tool payloads on durable version 1", () => {

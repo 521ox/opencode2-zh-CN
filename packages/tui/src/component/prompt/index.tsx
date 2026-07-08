@@ -37,7 +37,7 @@ import { usePromptStash } from "../../prompt/stash"
 import { DialogStash } from "../dialog-stash"
 import { type AutocompleteRef, Autocomplete } from "./autocomplete"
 import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
-import type { SessionV2Info, UserMessage } from "@opencode-ai/sdk/v2"
+import type { SessionInfo, UserMessage } from "@opencode-ai/sdk/v2"
 import { Locale } from "../../util/locale"
 import { errorMessage } from "../../util/error"
 import { createColors, createFrames } from "../../ui/spinner"
@@ -165,9 +165,9 @@ export function Prompt(props: PromptProps) {
   const status = createMemo(() => data.session.status(props.sessionID ?? ""))
   const activeSubagents = createMemo(() => {
     if (!props.sessionID) return 0
-    return data.session.family(props.sessionID).filter(
-      (id) => id !== props.sessionID && data.session.status(id) === "running",
-    ).length
+    return data.session
+      .family(props.sessionID)
+      .filter((id) => id !== props.sessionID && data.session.status(id) === "running").length
   })
   const runningShells = createMemo(
     () => data.shell.list(currentLocation()).filter((shell) => shell.metadata.sessionID === props.sessionID).length,
@@ -1028,7 +1028,7 @@ export function Prompt(props: PromptProps) {
 
       sessionID = created.id
       // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- generated client output is readonly; prompt state still uses legacy mutable session types.
-      session = structuredClone(created) as SessionV2Info
+      session = structuredClone(created) as SessionInfo
     }
 
     const inputText = expandTrackedPastedText(
@@ -1099,7 +1099,7 @@ export function Prompt(props: PromptProps) {
     } else if (
       inputText.startsWith("/") &&
       (data.location.skill.list(currentLocation()) ?? []).some(
-        (skill) => skill.slash === true && skill.name === inputText.split("\n")[0].split(" ")[0].slice(1),
+        (skill) => skill.slash === true && skill.id === inputText.split("\n")[0].split(" ")[0].slice(1),
       )
     ) {
       move.startSubmit()

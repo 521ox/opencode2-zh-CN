@@ -5,7 +5,7 @@ import { ProjectTable } from "../project/sql"
 import type { SessionMessage } from "./message"
 import type { Prompt } from "@opencode-ai/schema/prompt"
 import type { SessionInput } from "./input"
-import type { Snapshot } from "../snapshot"
+import type { FileDiff } from "@opencode-ai/schema/file-diff"
 import { PermissionV1 } from "../v1/permission"
 import { ProjectV2 } from "../project"
 import type { SessionSchema } from "./schema"
@@ -13,10 +13,11 @@ import type { MessageID, PartID, SessionV1 } from "../v1/session"
 import { WorkspaceV2 } from "../workspace"
 import { Timestamps } from "../database/schema.sql"
 import type { Instructions } from "../instructions/index"
-import type { Revert } from "@opencode-ai/schema/revert"
+import type { Session } from "@opencode-ai/schema/session"
+import type { RevertV1 } from "@opencode-ai/schema/session-revert"
 import type { Schema } from "effect"
 
-type SessionMessageData = Omit<(typeof SessionMessage.Message)["Encoded"], "type" | "id">
+type SessionMessageData = Omit<(typeof SessionMessage.Info)["Encoded"], "type" | "id">
 type V1MessageData = Omit<SessionV1.Info, "id" | "sessionID">
 type V1PartData = Omit<SessionV1.Part, "id" | "sessionID" | "messageID">
 
@@ -41,7 +42,7 @@ export const SessionTable = sqliteTable(
     summary_additions: integer(),
     summary_deletions: integer(),
     summary_files: integer(),
-    summary_diffs: text({ mode: "json" }).$type<Snapshot.LegacyFileDiff[]>(),
+    summary_diffs: text({ mode: "json" }).$type<FileDiff.LegacyInfo[]>(),
     metadata: text({ mode: "json" }).$type<Record<string, unknown>>(),
     cost: real().notNull().default(0),
     tokens_input: integer().notNull().default(0),
@@ -49,7 +50,7 @@ export const SessionTable = sqliteTable(
     tokens_reasoning: integer().notNull().default(0),
     tokens_cache_read: integer().notNull().default(0),
     tokens_cache_write: integer().notNull().default(0),
-    revert: text({ mode: "json" }).$type<Revert.State>(),
+    revert: text({ mode: "json" }).$type<Session.Revert | RevertV1>(),
     permission: text({ mode: "json" }).$type<PermissionV1.Ruleset>(),
     agent: text(),
     model: text({ mode: "json" }).$type<{
@@ -148,7 +149,7 @@ export const SessionInputTable = sqliteTable(
       .$type<SessionSchema.ID>()
       .notNull()
       .references(() => SessionTable.id, { onDelete: "cascade" }),
-    type: text().$type<SessionInput.Entry["type"]>().notNull(),
+    type: text().$type<SessionInput.Info["type"]>().notNull(),
     prompt: text({ mode: "json" }).$type<Prompt>(),
     delivery: text().$type<SessionInput.Delivery>(),
     admitted_seq: integer().notNull(),
