@@ -3,7 +3,7 @@ import { useTerminalDimensions } from "@opentui/solid"
 import { createMemo, createSignal } from "solid-js"
 import { Keymap } from "../context/keymap"
 import { useTheme } from "../context/theme"
-import { useDialog } from "../ui/dialog"
+import { DialogCloseButton, useDialog } from "../ui/dialog"
 import { useI18n } from "../context/i18n"
 
 type ImagePreviewItem = Readonly<{
@@ -44,9 +44,7 @@ export function DialogImagePreview(props: { images: readonly ImagePreviewItem[];
         <text attributes={TextAttributes.BOLD} fg={theme.text.default}>
           {t("dialog.imagePreview.title", { index: index() + 1, count: props.images.length })}
         </text>
-        <text fg={theme.text.subdued} onMouseUp={() => dialog.clear()}>
-          esc
-        </text>
+        <DialogCloseButton />
       </box>
       <image
         id="prompt-image-viewer-image"

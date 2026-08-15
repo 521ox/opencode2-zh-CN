@@ -3,7 +3,7 @@ import { Slug } from "@opencode-ai/core/util/slug"
 import { createSignal, onMount } from "solid-js"
 import { Keymap } from "../context/keymap"
 import { useTheme } from "../context/theme"
-import { useDialog, type DialogContext } from "../ui/dialog"
+import { DialogCloseButton, useDialog, type DialogContext } from "../ui/dialog"
 import { useConfig } from "../config"
 import { useI18n } from "../context/i18n"
 
@@ -54,9 +54,7 @@ export function DialogWorktreeName(props: { onConfirm: (name: string) => void })
         <text attributes={TextAttributes.BOLD} fg={theme.text.default}>
           {t("dialog.worktreeName.title")}
         </text>
-        <text fg={theme.text.subdued} onMouseUp={() => dialog.clear()}>
-          esc
-        </text>
+        <DialogCloseButton />
       </box>
       <input
         cursorStyle={config.cursor}

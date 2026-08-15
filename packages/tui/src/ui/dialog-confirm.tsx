@@ -2,7 +2,7 @@ import { TextAttributes } from "@opentui/core"
 import { Keymap } from "../context/keymap"
 import { useI18n } from "../context/i18n"
 import { useTheme } from "../context/theme"
-import { useDialog } from "./dialog"
+import { DialogCloseButton, useDialog } from "./dialog"
 import { createStore } from "solid-js/store"
 import { For } from "solid-js"
 
@@ -62,9 +62,7 @@ export function DialogConfirm(props: DialogConfirmProps) {
         <text attributes={TextAttributes.BOLD} fg={theme.text.default}>
           {props.title}
         </text>
-        <text fg={theme.text.subdued} onMouseUp={() => dialog.clear()}>
-          esc
-        </text>
+        <DialogCloseButton />
       </box>
       <box paddingBottom={1}>
         <text fg={theme.text.subdued}>{props.message}</text>

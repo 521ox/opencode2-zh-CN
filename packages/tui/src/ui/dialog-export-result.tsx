@@ -2,7 +2,7 @@ import { TextAttributes } from "@opentui/core"
 import { Keymap } from "../context/keymap"
 import { useI18n } from "../context/i18n"
 import { useTheme } from "../context/theme"
-import { useDialog, type DialogContext } from "./dialog"
+import { CloseButton, useDialog, type DialogContext } from "./dialog"
 
 export function DialogExportResult(props: { path: string; onClose?: () => void }) {
   const dialog = useDialog()
@@ -32,9 +32,7 @@ export function DialogExportResult(props: { path: string; onClose?: () => void }
         <text attributes={TextAttributes.BOLD} fg={theme.text.default}>
           {t("ui.dialog.export.sessionExported")}
         </text>
-        <text fg={theme.text.subdued} onMouseUp={close}>
-          esc
-        </text>
+        <CloseButton onClose={close} />
       </box>
       <box>
         <text fg={theme.text.default}>{props.path}</text>

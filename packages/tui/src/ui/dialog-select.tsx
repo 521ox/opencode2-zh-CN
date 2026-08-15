@@ -8,7 +8,7 @@ import { createStore } from "solid-js/store"
 import { useRenderer, useTerminalDimensions } from "@opentui/solid"
 import * as fuzzysort from "fuzzysort"
 import { isDeepEqual } from "remeda"
-import { useDialog, type DialogContext } from "./dialog"
+import { DialogCloseButton, useDialog, type DialogContext } from "./dialog"
 import { Locale } from "../util/locale"
 import { getScrollAcceleration } from "../util/scroll"
 import { useConfig } from "../config"
@@ -102,8 +102,8 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
   type FooterHint = NonNullable<DialogSelectProps<T>["footerHints"]>[number]
   type VisibleAction = (Action & { label: string }) | FooterHint
 
-  const dialog = useDialog()
   const { t } = useI18n()
+  const dialog = useDialog()
   const themes = useThemes()
   const theme = useTheme("elevated")
   const mode = themes.mode
@@ -621,9 +621,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
               {props.title}
             </text>
           )}
-          <text fg={theme.text.subdued} onMouseUp={() => dialog.clear()}>
-            esc
-          </text>
+          <DialogCloseButton />
         </box>
         <Show when={props.renderFilter !== false}>
           <box paddingTop={1}>

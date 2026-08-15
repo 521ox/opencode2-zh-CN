@@ -17,7 +17,7 @@ import { useData } from "../context/data"
 import { useClient } from "../context/client"
 import { Keymap } from "../context/keymap"
 import { useTheme } from "../context/theme"
-import { useDialog } from "../ui/dialog"
+import { DialogCloseButton, useDialog } from "../ui/dialog"
 import { DialogPrompt } from "../ui/dialog-prompt"
 import { DialogSelect } from "../ui/dialog-select"
 import { Link } from "../ui/link"
@@ -347,9 +347,7 @@ function CommandView(props: { title: string; output: string; message: string }) 
         <text attributes={TextAttributes.BOLD} fg={theme.text.default}>
           {props.title}
         </text>
-        <text fg={theme.text.subdued} onMouseUp={() => dialog.clear()}>
-          esc {t("dialog.integration.close")}
-        </text>
+        <DialogCloseButton />
       </box>
       <box
         backgroundColor={overlayTheme.background.default}
@@ -635,9 +633,7 @@ function OAuthView(props: {
         <text attributes={TextAttributes.BOLD} fg={theme.text.default}>
           {props.title}
         </text>
-        <text fg={theme.text.subdued} onMouseUp={() => dialog.clear()}>
-          esc
-        </text>
+        <DialogCloseButton />
       </box>
       <Show when={props.url}>
         {(url) => (

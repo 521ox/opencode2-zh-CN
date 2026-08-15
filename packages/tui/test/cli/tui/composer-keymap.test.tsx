@@ -187,6 +187,23 @@ test("configured composer bindings work with a focused textarea", async () => {
   }
 })
 
+test("renders the shared close icon instead of an esc label", async () => {
+  const composer = await renderComposer("subagents", {})
+  try {
+    const frame = composer.app.captureCharFrame()
+    const lines = frame.split("\n")
+    const y = lines.findIndex((line) => line.includes("×"))
+    expect(y).toBeGreaterThanOrEqual(0)
+    const header = lines[y] ?? ""
+    const x = header.indexOf("×")
+    expect(x).toBeGreaterThanOrEqual(2)
+    expect(header.slice(x - 2, x + 1)).toBe("  ×")
+    expect(header).not.toContain("esc")
+  } finally {
+    composer.app.renderer.destroy()
+  }
+})
+
 function session(id: string, title: string, parentID?: string) {
   return {
     id,

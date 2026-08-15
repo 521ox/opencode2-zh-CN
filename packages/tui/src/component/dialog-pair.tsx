@@ -4,7 +4,7 @@ import { createMemo, createResource, createSignal, For, Show } from "solid-js"
 import { renderUnicodeCompact } from "uqr"
 import { useClient } from "../context/client"
 import { useTheme } from "../context/theme"
-import { useDialog } from "../ui/dialog"
+import { DialogCloseButton, useDialog } from "../ui/dialog"
 import { errorMessage } from "../util/error"
 import { useI18n } from "../context/i18n"
 
@@ -103,9 +103,7 @@ export function DialogPair(props: { credentials?: DialogPairCredentials }) {
         <text fg={theme.text.default} attributes={TextAttributes.BOLD}>
           {t("dialog.pair.title")}
         </text>
-        <text fg={theme.text.subdued} onMouseUp={() => dialog.clear()}>
-          esc
-        </text>
+        <DialogCloseButton />
       </box>
       <Show
         when={loadError()}

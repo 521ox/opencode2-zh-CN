@@ -2,7 +2,7 @@ import { TextAttributes } from "@opentui/core"
 import { Keymap } from "../context/keymap"
 import { useI18n } from "../context/i18n"
 import { useTheme } from "../context/theme"
-import { useDialog, type DialogContext } from "./dialog"
+import { DialogCloseButton, useDialog, type DialogContext } from "./dialog"
 import { createStore } from "solid-js/store"
 import { For, Show } from "solid-js"
 
@@ -86,9 +86,7 @@ export function DialogExportOptions(props: DialogExportOptionsProps) {
         <text attributes={TextAttributes.BOLD} fg={theme.text.default}>
           {t("ui.dialog.export.title")}
         </text>
-        <text fg={theme.text.subdued} onMouseUp={() => dialog.clear()}>
-          esc
-        </text>
+        <DialogCloseButton />
       </box>
       <box flexDirection="row" gap={1}>
         <text fg={theme.text.default}>{t("ui.dialog.export.as")}</text>

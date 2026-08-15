@@ -433,6 +433,28 @@ test("shows no-match and still closes after a flat filter goes empty", async () 
   }
 })
 
+test("renders a clickable close icon", async () => {
+  await using tmp = await tmpdir()
+  const select = await mountSelect(tmp.path, [{ title: "first", value: "first" }])
+
+  try {
+    const frame = select.app.captureCharFrame()
+    const lines = frame.split("\n")
+    const y = lines.findIndex((line) => line.includes("Mutable options") && line.includes("×"))
+    expect(y).toBeGreaterThanOrEqual(0)
+    const header = lines[y] ?? ""
+    const x = header.indexOf("×")
+    expect(x).toBeGreaterThanOrEqual(0)
+    expect(header.slice(x - 2, x + 1)).toBe("  ×")
+    expect(header).not.toContain("esc")
+
+    await select.app.mockMouse.click(x - 2, y)
+    await select.app.waitForFrame((next) => !next.includes("Mutable options"))
+  } finally {
+    select.app.renderer.destroy()
+  }
+})
+
 test("keeps the first row selected when current is only a marker", async () => {
   await using tmp = await tmpdir()
   const project = { title: "project", value: "project" }

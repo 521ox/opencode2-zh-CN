@@ -1,6 +1,6 @@
 import { TextAttributes } from "@opentui/core"
 import { useTheme } from "../context/theme"
-import { useDialog } from "../ui/dialog"
+import { DialogCloseButton } from "../ui/dialog"
 import { useData } from "../context/data"
 import { For, Match, Switch, Show, createMemo } from "solid-js"
 import { useI18n } from "../context/i18n"
@@ -8,7 +8,6 @@ import { useI18n } from "../context/i18n"
 export function DialogStatus() {
   const data = useData()
   const theme = useTheme("elevated")
-  const dialog = useDialog()
   const { t } = useI18n()
 
   const mcp = createMemo(() => data.location.mcp.server.list() ?? [])
@@ -24,9 +23,7 @@ export function DialogStatus() {
         <text fg={theme.text.default} attributes={TextAttributes.BOLD}>
           {t("dialog.status.title")}
         </text>
-        <text fg={theme.text.subdued} onMouseUp={() => dialog.clear()}>
-          esc
-        </text>
+        <DialogCloseButton />
       </box>
       <Show when={mcp().length > 0} fallback={<text fg={theme.text.default}>{t("dialog.status.empty")}</text>}>
         <box>

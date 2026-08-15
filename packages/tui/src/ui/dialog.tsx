@@ -256,3 +256,17 @@ export function useDialog() {
   }
   return value
 }
+
+export function CloseButton(props: { onClose: () => void }) {
+  const theme = useTheme("elevated")
+  return (
+    <text fg={theme.text.subdued} selectable={false} onMouseUp={props.onClose}>
+      {"  ×"}
+    </text>
+  )
+}
+
+export function DialogCloseButton() {
+  const dialog = useDialog()
+  return <CloseButton onClose={() => dialog.clear()} />
+}

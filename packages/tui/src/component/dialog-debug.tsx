@@ -2,7 +2,7 @@ import { TextAttributes } from "@opentui/core"
 import { createMemo, createSignal, For } from "solid-js"
 import { Keymap } from "../context/keymap"
 import { useTheme } from "../context/theme"
-import { useDialog } from "../ui/dialog"
+import { DialogCloseButton, useDialog } from "../ui/dialog"
 import { useRoute } from "../context/route"
 import { useLocal } from "../context/local"
 import { useClipboard } from "../context/clipboard"
@@ -60,9 +60,7 @@ export function DialogDebug() {
         <text fg={theme.text.default} attributes={TextAttributes.BOLD}>
           {t("dialog.debug.title")}
         </text>
-        <text fg={theme.text.subdued} onMouseUp={() => dialog.clear()}>
-          esc
-        </text>
+        <DialogCloseButton />
       </box>
       {/* No click-to-copy here: releasing a mouse selection must trigger the
           global copy-on-select so users can copy a single value, e.g. the session id. */}

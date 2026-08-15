@@ -6,7 +6,7 @@ import { createStore } from "solid-js/store"
 import { FilePath } from "../ui/file-path"
 import { useTheme } from "../context/theme"
 import { useConfig } from "../config"
-import { useDialog, type DialogContext } from "../ui/dialog"
+import { DialogCloseButton, useDialog, type DialogContext } from "../ui/dialog"
 import { getScrollAcceleration } from "../util/scroll"
 import { useI18n } from "../context/i18n"
 
@@ -77,9 +77,7 @@ export function DialogWorkspaceFileChanges(props: {
         <text attributes={TextAttributes.BOLD} fg={theme.text.default}>
           {props.title ?? t("dialog.workspaceFileChanges.title")}
         </text>
-        <text fg={theme.text.subdued} onMouseUp={() => dialog.clear()}>
-          esc
-        </text>
+        <DialogCloseButton />
       </box>
       <box paddingLeft={2} paddingRight={2}>
         <text fg={theme.text.subdued} wrapMode="word">

@@ -2,7 +2,7 @@ import { TextAttributes } from "@opentui/core"
 import { Keymap } from "../context/keymap"
 import { useI18n } from "../context/i18n"
 import { useTheme } from "../context/theme"
-import { useDialog } from "./dialog"
+import { DialogCloseButton, useDialog } from "./dialog"
 
 export function DialogHelp() {
   const dialog = useDialog()
@@ -24,9 +24,7 @@ export function DialogHelp() {
         <text attributes={TextAttributes.BOLD} fg={theme.text.default}>
           {t("ui.dialog.help.title")}
         </text>
-        <text fg={theme.text.subdued} onMouseUp={() => dialog.clear()}>
-          esc/enter
-        </text>
+        <DialogCloseButton />
       </box>
       <box paddingBottom={1}>
         <text fg={theme.text.subdued}>

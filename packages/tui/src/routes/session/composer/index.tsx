@@ -7,6 +7,7 @@ import { Keymap } from "../../../context/keymap"
 import { SubagentsTab } from "./subagents-tab"
 import { ShellTab } from "./shell-tab"
 import { useI18n } from "../../../context/i18n"
+import { CloseButton } from "../../../ui/dialog"
 
 export interface ComposerHint {
   label: string
@@ -158,9 +159,7 @@ export function Composer(props: ComposerProps) {
                   </For>
                 </box>
               </Show>
-              <text fg={theme.text.subdued} onMouseUp={close}>
-                esc
-              </text>
+              <CloseButton onClose={close} />
             </box>
             <SubagentsTab sessionID={props.sessionID} />
             <ShellTab sessionID={props.sessionID} />
