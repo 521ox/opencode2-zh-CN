@@ -51,6 +51,9 @@ accepted.
 11. The V2 `subagent` tool may continue an existing Session only when the
     supplied `sessionID` identifies a direct child of the caller and the child
     uses the requested agent. Cross-parent and cross-agent reuse are rejected.
+    Foreground completion exposes the Core-owned child Session ID in both
+    structured metadata and model-visible content so a later call can continue
+    the same child even when a tool adapter does not surface metadata.
     Nested delegation remains disabled by default and requires both an explicit
     depth increase and agent permission.
 12. When `compaction.prune` is enabled, the upstream request projection bounds

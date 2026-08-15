@@ -248,16 +248,17 @@ describe("SubagentTool", () => {
             },
           })
 
+          const childID = outputSessionID(settled.metadata)
           expect(settled).toMatchObject({
             status: "completed",
             metadata: { status: "completed" },
             content: [{ type: "text", text: childText }],
           })
           expect(settled.metadata).toEqual({
-            sessionID: outputSessionID(settled.metadata),
+            sessionID: childID,
             status: "completed",
           })
-          expect((yield* sessions.get(outputSessionID(settled.metadata))).parentID).toBe(parent.id)
+          expect((yield* sessions.get(childID)).parentID).toBe(parent.id)
         }),
       ),
     ),
@@ -290,12 +291,13 @@ describe("SubagentTool", () => {
             },
           })
 
+          const childID = outputSessionID(settled.metadata)
           expect(settled).toMatchObject({
             status: "completed",
             metadata: { status: "completed" },
             content: [{ type: "text", text: childText }],
           })
-          const child = yield* sessions.get(outputSessionID(settled.metadata))
+          const child = yield* sessions.get(childID)
           expect(settled.metadata).toEqual({ sessionID: child.id, status: "completed" })
           expect(progress[0]?.metadata).toEqual({ sessionID: child.id, status: "running" })
           expect(child).toMatchObject({
@@ -367,6 +369,7 @@ describe("SubagentTool", () => {
           })
 
           expect(outputSessionID(continued.metadata)).toBe(childID)
+          expect(continued.content).toEqual([{ type: "text", text: childText }])
           expect((yield* sessions.list({ parentID: parent.id })).data).toHaveLength(1)
           expect((yield* sessions.inbox(childID)).filter((message) => message.type === "user").at(-1)?.payload.text).toBe(
             "now inspect the tests",
@@ -590,7 +593,16 @@ describe("SubagentTool", () => {
             status: "running",
           })
           expect(settled.metadata).toEqual({ sessionID: childID, status: "running" })
-          expect(settled.content).toEqual([{ type: "text", text: expect.stringContaining(`id: ${childID}`) }])
+          expect(settled.content).toEqual([
+            {
+              type: "text",
+              text: [
+                `The subagent is working in the background (id: ${childID}). You will be notified automatically when it finishes.`,
+                "DO NOT sleep, poll for progress, ask the subagent for status, or duplicate this subagent's work; avoid working with the same files or topics it is using.",
+                "Work on non-overlapping tasks, or briefly tell the user what you launched and end your response.",
+              ].join("\n"),
+            },
+          ])
 
           const admission = Array.from(yield* Fiber.join(admitted))[0]
           expect(admission?.data.item.type).toBe("synthetic")

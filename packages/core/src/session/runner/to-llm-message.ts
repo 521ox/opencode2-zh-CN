@@ -271,12 +271,23 @@ const toolResult = (
   if (tool.state.status === "completed") {
     // TODO: Materialize remote and managed URIs before provider-history lowering.
     const content = contentOverride ?? tool.state.content
+    const subagentSessionID =
+      tool.name === "subagent" &&
+      tool.state.metadata?.status === "completed" &&
+      typeof tool.state.metadata.sessionID === "string"
+        ? tool.state.metadata.sessionID
+        : undefined
     const single = content.length === 1 ? content[0] : undefined
     return ToolResultPart.make({
       id: tool.id,
       name: tool.name,
       result:
-        single?.type === "text"
+        subagentSessionID !== undefined
+          ? {
+              type: "text" as const,
+              value: JSON.stringify({ sessionID: subagentSessionID, output: content }),
+            }
+          : single?.type === "text"
           ? { type: "text" as const, value: single.text }
           : { type: "content" as const, value: content },
       providerExecuted: tool.executed,

@@ -441,12 +441,18 @@ provide all of these exact OpenAI-specific failure and prevention semantics.
   a duplicate child.
 - New prompt input is durably admitted before joining the already-running child
   Job, so the child cannot finish without observing the continuation input.
+- Foreground completion includes the Core-owned child Session ID in both
+  structured metadata and a JSON model-result envelope produced after tool
+  output truncation. The visible ID is generated from the validated tool
+  result, never parsed from child output, while child content is JSON-escaped
+  inside the envelope's `output` field.
 - Nested delegation remains disabled by default. Increasing depth does not
   override the selected Agent's `subagent` permission.
 
 ### Owners
 
 - `packages/core/src/tool/plugin/subagent.ts`
+- `packages/core/src/session/runner/to-llm-message.ts`
 - `packages/core/src/plugin/runtime.ts`
 
 ### Acceptance evidence
@@ -454,8 +460,12 @@ provide all of these exact OpenAI-specific failure and prevention semantics.
 - New child creation and same-child continuation both pass.
 - Foreign-parent, cross-Agent, missing, and nested-denied cases fail.
 - Running-child tests prove prompt admission occurs before Job join.
-- The returned child Session ID remains reusable by a later call.
+- New and continued foreground results expose the same reusable child Session
+  ID without consuming the child-output truncation budget. Adversarial markers
+  remain nested in the escaped `output` field, and background results retain
+  their exact existing ID-bearing status text.
 - `packages/core/test/tool-subagent.test.ts` passes.
+- `packages/core/test/session-runner-message.test.ts` passes.
 
 ## `CUST-RULES-001`: Protected Session Rules Location Context
 
