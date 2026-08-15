@@ -2,14 +2,14 @@ export * as SessionCompaction from "./compaction.js"
 
 import { LLM, LLMClient, AIError, LLMEvent, Message, type LLMRequest, type LanguageModel } from "@opencode-ai/ai"
 import * as OpenAIResponses from "@opencode-ai/ai/protocols/openai-responses"
-import { RequestExecutor, type StreamOptions } from "@opencode-ai/ai/route"
+import type { StreamOptions } from "@opencode-ai/ai/route"
 import { SessionError } from "@opencode-ai/schema/session-error"
 import { Document, type Entry } from "@opencode-ai/schema/config"
 import { Context, Effect, Layer, Stream } from "effect"
 import { Config } from "../config.js"
 import { Bus } from "../bus.js"
 import { makeLocationNode } from "@opencode-ai/util/effect/app-node"
-import { llmClient, requestExecutor } from "../effect/app-node-platform.js"
+import { llmClient } from "../effect/app-node-platform.js"
 import { SessionEvent } from "./event.js"
 import type { SessionMessage } from "./message.js"
 import { SessionModelHeaders } from "./model-headers.js"
@@ -78,7 +78,6 @@ type Dependencies = {
   readonly llm: {
     readonly stream: (request: LLMRequest, options?: StreamOptions) => Stream.Stream<LLMEvent, AIError>
   }
-  readonly http: RequestExecutor.Interface
   readonly models: SessionRunnerModel.Interface
   readonly config: Settings
   readonly hooks: PluginHooks.Interface
@@ -383,9 +382,9 @@ const make = (dependencies: Dependencies) => {
         inputID: plan.inputID,
       })
 
-    const compacted = yield* OpenAIResponses.compact(
+    const compacted = yield* OpenAIResponses.compactV2(
       SessionModelRequest.withoutSessionRules(plan.request),
-      dependencies.http.execute,
+      dependencies.llm.stream,
       plan.options,
     ).pipe(
       Effect.map((output) => ({ output }) as const),
@@ -558,17 +557,16 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const bus = yield* Bus.Service
     const llm = yield* LLMClient.Service
-    const http = yield* RequestExecutor.Service
     const config = yield* Config.Service
     const models = yield* SessionRunnerModel.Service
     const app = yield* App.Metadata
     const hooks = yield* PluginHooks.Service
-    return make({ bus, llm, http, models, config: settings(yield* config.entries()), app, hooks })
+    return make({ bus, llm, models, config: settings(yield* config.entries()), app, hooks })
   }),
 )
 
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [Bus.node, llmClient, requestExecutor, Config.node, SessionRunnerModel.node, App.node, PluginHooks.node],
+  deps: [Bus.node, llmClient, Config.node, SessionRunnerModel.node, App.node, PluginHooks.node],
 })

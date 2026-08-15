@@ -15,7 +15,6 @@ import {
 } from "@opencode-ai/ai"
 import * as OpenAIChat from "@opencode-ai/ai/protocols/openai-chat"
 import * as OpenAIResponses from "@opencode-ai/ai/protocols/openai-responses"
-import { RequestExecutor } from "@opencode-ai/ai/route"
 import { TestLLM } from "@opencode-ai/ai/testing"
 import { Catalog } from "@opencode-ai/core/catalog"
 import { Database } from "@opencode-ai/core/database/database"
@@ -75,7 +74,6 @@ import { ID } from "@opencode-ai/core/model"
 import { Location } from "@opencode-ai/core/location"
 import { Provider } from "@opencode-ai/core/provider"
 import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema, Scope, Stream } from "effect"
-import { HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { TestClock } from "effect/testing"
 import { asc, desc, eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
@@ -86,9 +84,6 @@ import { CodeModeInstructions } from "@opencode-ai/core/codemode/instructions"
 
 let requests: LLMRequest[] = []
 let preserveRulesContext = false
-let compactRequests: Array<{ readonly url: string; readonly body: unknown }> = []
-let compactFailure: AIError | undefined
-let compactOutput: Array<Record<string, unknown>> = []
 const emptyCodeMode = `\n\n${CodeModeInstructions.render({ total: 0, shown: 0, namespaces: [] })}`
 type ToolBarrier = {
   readonly count: number
@@ -175,22 +170,6 @@ const nativeAutomaticCompactionModel = LanguageModel.make({
   id: "gpt-5.2-auto-compaction",
   provider: "openai",
   route: OpenAIResponses.route.with({ limits: { context: 400_000, input: 380_000, output: 128_000 } }),
-})
-
-const compactHttp = Layer.mock(RequestExecutor.Service)({
-  execute: (request) =>
-    Effect.gen(function* () {
-      const web = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie)
-      const text = yield* Effect.promise(() => web.text())
-      compactRequests.push({ url: web.url, body: JSON.parse(text) })
-      if (compactFailure) return yield* Effect.fail(compactFailure)
-      return HttpClientResponse.fromWeb(
-        request,
-        new Response(JSON.stringify({ object: "response.compaction", output: compactOutput }), {
-          headers: { "content-type": "application/json" },
-        }),
-      )
-    }),
 })
 
 test("calculates step cost using the matching context tier", () => {
@@ -406,7 +385,6 @@ const promptCatalog = Layer.mock(Catalog.Service, {
 const runnerLayer = AppNodeBuilder.build(SessionRunnerLLM.node, [
   [Snapshot.node, Snapshot.noopLayer],
   [LayerNodePlatform.llmClient, client],
-  [LayerNodePlatform.requestExecutor, compactHttp],
   [SessionRunnerModel.node, models],
   [InstructionBuiltIns.node, systemContext],
   [InstructionDiscovery.node, instructionContext],
@@ -477,7 +455,6 @@ const it = testEffect(
     [
       [Bus.node, Bus.configured({ persist: true })],
       [LayerNodePlatform.llmClient, client],
-      [LayerNodePlatform.requestExecutor, compactHttp],
       [Permission.node, permission],
       [Catalog.node, promptCatalog],
       [SessionRunnerModel.node, models],
@@ -535,16 +512,6 @@ const setup = Effect.gen(function* () {
     discard: true,
   })
   requests = (yield* TestLLM.Service).requests
-  compactRequests = []
-  compactFailure = undefined
-  compactOutput = [
-    {
-      type: "message",
-      role: "user",
-      content: [{ type: "input_text", text: "Retain the latest user turn." }],
-    },
-    { type: "compaction", id: "cmp_explicit", encrypted_content: "opaque-explicit" },
-  ]
   authorizations.length = 0
   executions.length = 0
   systemBaseline = "Initial context"
@@ -2276,21 +2243,29 @@ describe("SessionRunnerLLM", () => {
       yield* runPrompt(session, "Earlier exact question")
       currentModel = nativeResponsesModel
       requests.length = 0
+      const checkpoint = { type: "compaction", id: "cmp_explicit", encrypted_content: "opaque-explicit" }
+      yield* TestLLM.push([
+        LLMEvent.providerCompactionStart({}),
+        LLMEvent.providerCheckpoint({ reset: true, item: checkpoint }),
+      ])
 
       const compaction = yield* session.compact({ sessionID })
       yield* session.resume(sessionID)
 
-      expect(requests).toHaveLength(0)
-      expect(compactRequests).toHaveLength(1)
-      expect(compactRequests[0]?.url).toBe("https://api.openai.com/v1/responses/compact")
-      expect(JSON.stringify(compactRequests[0]?.body)).toContain("Earlier exact question")
-      expect(JSON.stringify(compactRequests[0]?.body)).toContain("Earlier answer")
-      expect(JSON.stringify(compactRequests[0]?.body)).not.toContain(SessionRulesLocation.Header)
+      expect(requests).toHaveLength(1)
+      expect(requests[0]?.tools).toEqual([])
+      expect(requests[0]?.providerOptions).toMatchObject({
+        "opencode-internal": { responsesCompactionTrigger: true },
+      })
+      expect(requests[0]?.providerOptions?.openai).not.toHaveProperty("compactThreshold")
+      expect(JSON.stringify(requests[0]?.messages)).toContain("Earlier exact question")
+      expect(JSON.stringify(requests[0]?.messages)).toContain("Earlier answer")
+      expect(JSON.stringify(requests[0]?.system)).not.toContain(SessionRulesLocation.Header)
       expect((yield* session.messages({ sessionID })).find((message) => message.id === compaction.id)).toMatchObject({
         type: "compaction",
         status: "completed",
         reason: "manual",
-        remote: compactOutput,
+        remote: [checkpoint],
       })
     }),
   )
@@ -2427,7 +2402,8 @@ describe("SessionRunnerLLM", () => {
 
       expect(requests).toHaveLength(1)
       expect(requests[0]?.providerOptions).toEqual({ openai: { compactThreshold: 368_000 } })
-      expect(compactRequests).toHaveLength(0)
+      expect(requests[0]?.providerOptions?.openai).not.toHaveProperty("compactionTrigger")
+      expect(requests[0]?.providerOptions).not.toHaveProperty("opencode-internal")
     }),
   )
 
@@ -2594,7 +2570,8 @@ describe("SessionRunnerLLM", () => {
 
       expect(requests).toHaveLength(1)
       expect(requests[0]?.providerOptions).toEqual({ openai: { compactThreshold: 368_000 } })
-      expect(compactRequests).toHaveLength(0)
+      expect(requests[0]?.providerOptions?.openai).not.toHaveProperty("compactionTrigger")
+      expect(requests[0]?.providerOptions).not.toHaveProperty("opencode-internal")
       expect((yield* session.context(sessionID)).some((message) => message.type === "compaction")).toBeFalse()
     }),
   )

@@ -1,4 +1,4 @@
-import { Effect, Encoding, Schema } from "effect"
+import { Effect, Encoding, Schema, Stream } from "effect"
 import type { HttpClientResponse } from "effect/unstable/http"
 import { Route, resolveRequest, type StreamOptions } from "../route/client.js"
 import { Auth } from "../route/auth.js"
@@ -13,6 +13,7 @@ import {
   LLMEvent,
   LLMRequest,
   mergeJsonRecords,
+  mergeProviderOptions,
   type JsonSchema,
   type LanguageModel,
   type ToolDefinition,
@@ -22,6 +23,7 @@ import { optionalArray, ProviderShared } from "./shared.js"
 import { Lifecycle } from "./utils/lifecycle.js"
 import { OpenAIImage } from "./utils/openai-image.js"
 import { OpenAICompaction } from "./utils/openai-compaction.js"
+import { OpenResponsesOptions } from "./utils/open-responses-options.js"
 import { ToolSchemaProjection } from "./utils/tool-schema.js"
 
 const ADAPTER = "openai-responses"
@@ -152,7 +154,8 @@ const extension = {
   },
   lowerProviderExecutedTool: ({ part, providerMetadataKey }) => {
     const metadata = part.providerMetadata?.[providerMetadataKey]
-    if (!ProviderShared.isRecord(metadata) || !Schema.is(OpenResponses.StreamItem)(metadata.hostedItem)) return undefined
+    if (!ProviderShared.isRecord(metadata) || !Schema.is(OpenResponses.StreamItem)(metadata.hostedItem))
+      return undefined
     if (!isHostedToolItem(metadata.hostedItem) || metadata.hostedItem.id !== part.id) return undefined
     return structuredClone(metadata.hostedItem)
   },
@@ -219,25 +222,29 @@ const lowerToolChoice = (toolChoice: NonNullable<LLMRequest["toolChoice"]>, tool
   })
 
 const fromRequest = Effect.fn("OpenAIResponses.fromRequest")(function* (request: LLMRequest) {
+  const compactionTrigger = OpenResponsesOptions.compactionTrigger(request)
   const body = yield* OpenResponses.fromRequestWithExtension(
     LLMRequest.update(request, { tools: [], toolChoice: undefined }),
     extension,
   )
-  if (body.input.length > INPUT_ITEM_LIMIT)
+  const input = compactionTrigger ? [...body.input, { type: "compaction_trigger" as const }] : body.input
+  if (input.length > INPUT_ITEM_LIMIT)
     return yield* ProviderShared.invalidRequest(
-      `OpenAI Responses input contains ${body.input.length} items; maximum is ${INPUT_ITEM_LIMIT}`,
+      `OpenAI Responses input contains ${input.length} items; maximum is ${INPUT_ITEM_LIMIT}`,
       { parameter: "input", classification: "context-overflow" },
     )
   const toolSchemaCompatibility = request.model.compatibility?.toolSchema
   return {
     ...body,
+    input,
     tools:
-      request.tools.length === 0
+      compactionTrigger || request.tools.length === 0
         ? undefined
         : yield* Effect.forEach(request.tools, (tool) =>
             lowerTool(tool, ToolSchemaProjection.modelCompatibility(tool.inputSchema, toolSchemaCompatibility)),
           ),
-    tool_choice: request.toolChoice ? yield* lowerToolChoice(request.toolChoice, request.tools) : undefined,
+    tool_choice:
+      !compactionTrigger && request.toolChoice ? yield* lowerToolChoice(request.toolChoice, request.tools) : undefined,
   } satisfies OpenAIResponsesBody
 })
 
@@ -287,6 +294,7 @@ const parseCompactResponse = Effect.fn("OpenAIResponses.parseCompactResponse")(f
   return structuredClone(decoded.output)
 })
 
+/** Legacy low-level JSON endpoint retained for compatibility. Core manual compaction uses compactV2. */
 export const compact = Effect.fn("OpenAIResponses.compact")(function* (
   source: LLMRequest,
   execute: RequestExecutor.Interface["execute"],
@@ -320,6 +328,112 @@ export const compact = Effect.fn("OpenAIResponses.compact")(function* (
     options?.http,
   )
   return yield* parseCompactResponse(response)
+})
+
+const COMPACTION_BODY_KEYS = new Set([
+  "context_management",
+  "input",
+  "parallel_tool_calls",
+  "previous_response_id",
+  "store",
+  "stream",
+  "tool_choice",
+  "tools",
+])
+
+const withoutCompactionBodyOverrides = (body: unknown) => {
+  if (body === null || typeof body !== "object" || Array.isArray(body)) return undefined
+  return Object.fromEntries(Object.entries(body).filter(([key]) => !COMPACTION_BODY_KEYS.has(key)))
+}
+
+const withCompactionTrigger = (request: LLMRequest) => {
+  const provider = request.model.route.providerMetadataKey ?? "openresponses"
+  return LLMRequest.update(request, {
+    tools: [],
+    toolChoice: undefined,
+    http: request.http
+      ? new HttpOptions({
+          body: withoutCompactionBodyOverrides(request.http.body),
+          headers: request.http.headers,
+          query: request.http.query,
+        })
+      : undefined,
+    providerOptions: mergeProviderOptions(request.providerOptions, {
+      [provider]: { store: false },
+      "opencode-internal": { responsesCompactionTrigger: true },
+    }),
+  })
+}
+
+type StreamRequest = (request: LLMRequest, options?: StreamOptions) => Stream.Stream<LLMEvent, AIError>
+
+type CompactionStreamState = {
+  readonly checkpoints: ReadonlyArray<{ readonly reset: boolean; readonly item: unknown }>
+  readonly unexpected?: string
+  readonly providerError?: {
+    readonly message: string
+    readonly classification?: "context-overflow" | "payload-too-large"
+  }
+}
+
+const emptyCompactionStreamState = (): CompactionStreamState => ({ checkpoints: [] })
+
+/** Streams a Responses V2 compaction trigger and accepts exactly one encrypted checkpoint. */
+export const compactV2 = Effect.fn("OpenAIResponses.compactV2")(function* (
+  source: LLMRequest,
+  stream: StreamRequest,
+  options?: StreamOptions,
+) {
+  const request = resolveRequest(source)
+  if (!supportsCompaction(request.model))
+    return yield* ProviderShared.invalidRequest(
+      `OpenAI Responses V2 compaction requires the native OpenAI Responses route; received ${request.model.route.id}`,
+    )
+
+  const result = yield* stream(withCompactionTrigger(request), options).pipe(
+    Stream.runFold(emptyCompactionStreamState, (state, event) => {
+      if (event.type === "provider-checkpoint") {
+        return { ...state, checkpoints: [...state.checkpoints, { reset: event.reset, item: event.item }] }
+      }
+      if (event.type === "provider-error") {
+        return {
+          ...state,
+          providerError: { message: event.message, classification: event.classification },
+        }
+      }
+      if (
+        event.type === "provider-compaction-start" ||
+        event.type === "step-start" ||
+        event.type === "step-finish" ||
+        event.type === "finish"
+      )
+        return state
+      return { ...state, unexpected: state.unexpected ?? event.type }
+    }),
+  )
+
+  if (result.providerError)
+    return yield* ProviderShared.invalidRequest(result.providerError.message, {
+      classification: result.providerError.classification,
+    })
+  if (result.unexpected)
+    return yield* Effect.fail(
+      invalidCompactOutput(`OpenAI Responses V2 compaction emitted unexpected ${result.unexpected} output`),
+    )
+  if (result.checkpoints.length !== 1)
+    return yield* Effect.fail(
+      invalidCompactOutput(
+        `OpenAI Responses V2 compaction returned ${result.checkpoints.length} checkpoint items instead of exactly one`,
+      ),
+    )
+
+  const checkpoint = result.checkpoints[0]
+  if (!checkpoint.reset || !OpenAICompaction.isCompactionItem(checkpoint.item) || checkpoint.item.type !== "compaction")
+    return yield* Effect.fail(
+      invalidCompactOutput("OpenAI Responses V2 compaction did not return one replayable compaction item"),
+    )
+
+  return [structuredClone(checkpoint.item)]
 })
 
 type HostedToolData = OpenResponses.StreamItem & {
@@ -442,7 +556,10 @@ const step = (state: OpenResponses.ParserState, event: OpenResponses.Event) => {
     const result = isHostedToolItem(event.item)
       ? onHostedToolDone(checkpointState, event.item)
       : OpenResponses.step(checkpointState, event)
-    return Effect.map(result, ([next, events]) => [next, [...checkpointEvents, ...events]] satisfies OpenResponses.StepResult)
+    return Effect.map(
+      result,
+      ([next, events]) => [next, [...checkpointEvents, ...events]] satisfies OpenResponses.StepResult,
+    )
   }
   return OpenResponses.step(state, event)
 }
@@ -462,9 +579,7 @@ export const protocol = Protocol.make({
 })
 
 export const supportsCompaction = (model: LanguageModel) =>
-  model.route.provider === "openai" &&
-  NATIVE_ROUTE_IDS.has(model.route.id) &&
-  model.route.body === protocol.body
+  model.route.provider === "openai" && NATIVE_ROUTE_IDS.has(model.route.id) && model.route.body === protocol.body
 
 const endpoint = Endpoint.path<OpenAIResponsesBody>(PATH, { baseURL: DEFAULT_BASE_URL })
 const auth = Auth.none

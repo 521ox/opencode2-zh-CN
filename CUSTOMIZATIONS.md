@@ -73,6 +73,11 @@ accepted.
     unavailable instead of copying the source Session's start directory.
     Auxiliary title, compaction, and generate requests remain unchanged. See
     `specs/session-rules-context.md`.
+14. User-requested native remote compaction uses the normal Responses stream
+    with a final `{ "type": "compaction_trigger" }` input item. It never calls
+    or falls back to the legacy `/responses/compact` endpoint. Automatic remote
+    compaction remains the separate normal-request
+    `context_management.compaction.compact_threshold` contract.
 
 ## Porting Rules
 

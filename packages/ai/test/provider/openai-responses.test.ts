@@ -4,6 +4,7 @@ import { Headers, HttpClientRequest } from "effect/unstable/http"
 import {
   LLM,
   AIError,
+  HttpOptions,
   LLMEvent,
   LLMRequest,
   Message,
@@ -206,14 +207,136 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
+  it.effect("compacts a native OpenAI Responses request through the V2 stream trigger", () => {
+    const checkpoint = { type: "compaction", id: "cmp_v2", encrypted_content: "opaque-v2" }
+    return Effect.gen(function* () {
+      const client = yield* LLMClient.Service
+      const output = yield* OpenAIResponses.compactV2(
+        LLMRequest.update(request, {
+          providerOptions: { openai: { compactThreshold: 123, store: true } },
+          http: new HttpOptions({
+            body: {
+              context_management: [{ type: "compaction", compact_threshold: 1 }],
+              input: [{ role: "user", content: "override" }],
+              previous_response_id: "resp_previous",
+              store: true,
+              stream: false,
+              tool_choice: "required",
+              tools: [{ type: "function", name: "override" }],
+            },
+          }),
+        }),
+        client.stream,
+      )
+      expect(output).toEqual([checkpoint])
+    }).pipe(
+      Effect.provide(
+        dynamicResponse(({ request: httpRequest, text, respond }) =>
+          Effect.sync(() => {
+            const body = JSON.parse(text)
+            expect(httpRequest.url).toBe("https://api.openai.test/v1/responses")
+            expect(body.input.at(-1)).toEqual({ type: "compaction_trigger" })
+            expect(body.context_management).toBeUndefined()
+            expect(body.tools).toBeUndefined()
+            expect(body.tool_choice).toBeUndefined()
+            expect(body.previous_response_id).toBeUndefined()
+            expect(body.stream).toBe(true)
+            expect(body.store).toBe(false)
+            return respond(
+              sseEvents(
+                { type: "response.output_item.added", item: { type: "compaction", id: "cmp_v2" } },
+                { type: "response.output_item.done", item: checkpoint },
+                { type: "response.completed", response: { usage: { input_tokens: 7, output_tokens: 2 } } },
+              ),
+              { headers: { "content-type": "text/event-stream" } },
+            )
+          }),
+        ),
+      ),
+    )
+  })
+
+  it.effect("rejects multiple Responses V2 compaction checkpoints", () =>
+    OpenAIResponses.compactV2(request, () =>
+      Stream.fromIterable([
+        LLMEvent.providerCheckpoint({
+          reset: true,
+          item: { type: "compaction", id: "cmp_1", encrypted_content: "opaque-1" },
+        }),
+        LLMEvent.providerCheckpoint({
+          reset: false,
+          item: { type: "compaction", id: "cmp_2", encrypted_content: "opaque-2" },
+        }),
+      ]),
+    ).pipe(
+      Effect.flip,
+      Effect.map((error) => {
+        expect(error).toBeInstanceOf(AIError)
+        expect(error.reason._tag).toBe("InvalidProviderOutput")
+      }),
+    ),
+  )
+
+  it.effect("rejects mixed Responses V2 compaction output", () =>
+    OpenAIResponses.compactV2(request, () =>
+      Stream.fromIterable([
+        LLMEvent.textStart({ id: "text_1" }),
+        LLMEvent.providerCheckpoint({
+          reset: true,
+          item: { type: "compaction", id: "cmp_1", encrypted_content: "opaque" },
+        }),
+      ]),
+    ).pipe(
+      Effect.flip,
+      Effect.map((error) => {
+        expect(error).toBeInstanceOf(AIError)
+        expect(error.reason._tag).toBe("InvalidProviderOutput")
+      }),
+    ),
+  )
+
+  it.effect("rejects Responses V2 compaction summaries as manual checkpoints", () =>
+    OpenAIResponses.compactV2(request, () =>
+      Stream.fromIterable([
+        LLMEvent.providerCheckpoint({
+          reset: true,
+          item: { type: "compaction_summary", id: "cmp_1", encrypted_content: "opaque" },
+        }),
+      ]),
+    ).pipe(
+      Effect.flip,
+      Effect.map((error) => {
+        expect(error).toBeInstanceOf(AIError)
+        expect(error.reason._tag).toBe("InvalidProviderOutput")
+      }),
+    ),
+  )
+
+  it.effect("preserves Responses V2 provider error classification", () =>
+    OpenAIResponses.compactV2(request, () =>
+      Stream.fromIterable([
+        LLMEvent.providerError({
+          message: "input is too large",
+          classification: "context-overflow",
+        }),
+      ]),
+    ).pipe(
+      Effect.flip,
+      Effect.map((error) => {
+        expect(error).toBeInstanceOf(AIError)
+        expect(error.reason).toMatchObject({
+          _tag: "InvalidRequest",
+          classification: "context-overflow",
+        })
+      }),
+    ),
+  )
+
   it.effect("rejects a compact response without a replayable checkpoint", () =>
     Effect.gen(function* () {
       const error = yield* Effect.gen(function* () {
         const executor = yield* RequestExecutor.Service
-        return yield* OpenAIResponses.compact(
-          LLM.request({ model, prompt: "Compact this." }),
-          executor.execute,
-        )
+        return yield* OpenAIResponses.compact(LLM.request({ model, prompt: "Compact this." }), executor.execute)
       }).pipe(
         Effect.provide(
           dynamicResponse((input) =>
@@ -1961,7 +2084,10 @@ describe("OpenAI Responses route", () => {
               LLMEvent.is.toolCall(event) ||
               LLMEvent.is.toolResult(event),
           )
-          .map((event) => ({ type: event.type, ...(event.type === "provider-checkpoint" ? { reset: event.reset } : {}) })),
+          .map((event) => ({
+            type: event.type,
+            ...(event.type === "provider-checkpoint" ? { reset: event.reset } : {}),
+          })),
       ).toEqual([
         { type: "provider-compaction-start" },
         { type: "provider-checkpoint", reset: true },

@@ -66,4 +66,7 @@ export const resolve = (request: LLMRequest): Resolved => {
   }
 }
 
+export const compactionTrigger = (request: LLMRequest) =>
+  request.providerOptions?.["opencode-internal"]?.responsesCompactionTrigger === true
+
 export * as OpenResponsesOptions from "./open-responses-options.js"

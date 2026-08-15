@@ -99,23 +99,23 @@ Any unclassified path, unknown stable ID, or unknown bucket rejects the sync.
 
 ## Preservation Summary
 
-| ID                   | Capability                                                              | Decision              | Introduced by            | Primary owner                                               |
-| -------------------- | ----------------------------------------------------------------------- | --------------------- | ------------------------ | ----------------------------------------------------------- |
-| `CUST-RESP-001`      | Native OpenAI Responses route ownership and compatibility routing       | `REBASE_DELTA`        | `42c0c9b96`              | `packages/ai`, Core model resolution                        |
-| `CUST-RESP-002`      | Extended Open Responses provider options                                | `PRESERVE`            | `42c0c9b96`              | `packages/ai/src/protocols/utils/open-responses-options.ts` |
-| `CUST-RESP-003`      | Provider-hosted web search single-owner behavior                        | `REBASE_DELTA`        | `42c0c9b96`              | AI Responses lowering and `SessionModelRequest`             |
-| `CUST-RESP-004`      | Provider-hosted image generation factory and replay                     | `UPSTREAM_EQUIVALENT` | `42c0c9b96`              | Native OpenAI provider and Responses protocol               |
-| `CUST-COMP-001`      | Native automatic remote compaction checkpoints                          | `PRESERVE`            | `42c0c9b96`              | AI Responses parser and Core Session projection             |
-| `CUST-COMP-002`      | Explicit `POST /responses/compact` for user-requested manual compaction | `PRESERVE`            | `42c0c9b96`              | AI OpenAI Responses operation and Core compaction           |
-| `CUST-CONTEXT-001`   | Request-time local tool-result pruning                                  | `PRESERVE`            | `42c0c9b96`              | Core message projection                                     |
-| `CUST-TRANSPORT-001` | Incomplete-stream failure and Responses input-item limit                | `PRESERVE`            | `42c0c9b96`              | AI route and provider-error handling                        |
-| `CUST-SUBAGENT-001`  | Same-agent direct-child Session continuation                            | `PRESERVE`            | `42c0c9b96`              | Core subagent tool                                          |
-| `CUST-RULES-001`     | Protected Session rules location context                                | `PRESERVE`            | `24307f8ee`              | Core Session persistence and request preparation            |
-| `CUST-TUI-001`       | English/Simplified Chinese TUI localization                             | `PRESERVE`            | `42c0c9b96`              | `packages/tui/src/i18n`                                     |
-| `CUST-TUI-002`       | Compaction status and notification UX without transcript dividers       | `PRESERVE`            | `42c0c9b96`              | Main and Mini TUI Session projections                       |
-| `CUST-MIGRATION-001` | V1 configuration and built-in database migration compatibility          | `PRESERVE`            | `42c0c9b96`, `24307f8ee` | Core V1 normalization and migration boundary                |
-| `CUST-MIGRATION-002` | Copy-only rehearsal, native context repair, and VACUUM safety           | `OPERATIONS`          | `42c0c9b96`              | Migration scripts and handoff documents                     |
-| `CUST-OPS-001`       | Windows build, export identity, and compiled-service smoke              | `OPERATIONS`          | `42c0c9b96`              | Build wrapper and CLI service smoke                         |
+| ID                   | Capability                                                        | Decision              | Introduced by            | Primary owner                                               |
+| -------------------- | ----------------------------------------------------------------- | --------------------- | ------------------------ | ----------------------------------------------------------- |
+| `CUST-RESP-001`      | Native OpenAI Responses route ownership and compatibility routing | `REBASE_DELTA`        | `42c0c9b96`              | `packages/ai`, Core model resolution                        |
+| `CUST-RESP-002`      | Extended Open Responses provider options                          | `PRESERVE`            | `42c0c9b96`              | `packages/ai/src/protocols/utils/open-responses-options.ts` |
+| `CUST-RESP-003`      | Provider-hosted web search single-owner behavior                  | `REBASE_DELTA`        | `42c0c9b96`              | AI Responses lowering and `SessionModelRequest`             |
+| `CUST-RESP-004`      | Provider-hosted image generation factory and replay               | `UPSTREAM_EQUIVALENT` | `42c0c9b96`              | Native OpenAI provider and Responses protocol               |
+| `CUST-COMP-001`      | Native automatic remote compaction checkpoints                    | `PRESERVE`            | `42c0c9b96`              | AI Responses parser and Core Session projection             |
+| `CUST-COMP-002`      | Responses V2 trigger for user-requested manual remote compaction  | `PRESERVE`            | `42c0c9b96`              | AI OpenAI Responses operation and Core compaction           |
+| `CUST-CONTEXT-001`   | Request-time local tool-result pruning                            | `PRESERVE`            | `42c0c9b96`              | Core message projection                                     |
+| `CUST-TRANSPORT-001` | Incomplete-stream failure and Responses input-item limit          | `PRESERVE`            | `42c0c9b96`              | AI route and provider-error handling                        |
+| `CUST-SUBAGENT-001`  | Same-agent direct-child Session continuation                      | `PRESERVE`            | `42c0c9b96`              | Core subagent tool                                          |
+| `CUST-RULES-001`     | Protected Session rules location context                          | `PRESERVE`            | `24307f8ee`              | Core Session persistence and request preparation            |
+| `CUST-TUI-001`       | English/Simplified Chinese TUI localization                       | `PRESERVE`            | `42c0c9b96`              | `packages/tui/src/i18n`                                     |
+| `CUST-TUI-002`       | Compaction status and notification UX without transcript dividers | `PRESERVE`            | `42c0c9b96`              | Main and Mini TUI Session projections                       |
+| `CUST-MIGRATION-001` | V1 configuration and built-in database migration compatibility    | `PRESERVE`            | `42c0c9b96`, `24307f8ee` | Core V1 normalization and migration boundary                |
+| `CUST-MIGRATION-002` | Copy-only rehearsal, native context repair, and VACUUM safety     | `OPERATIONS`          | `42c0c9b96`              | Migration scripts and handoff documents                     |
+| `CUST-OPS-001`       | Windows build, export identity, and compiled-service smoke        | `OPERATIONS`          | `42c0c9b96`              | Build wrapper and CLI service smoke                         |
 
 ## `CUST-RESP-001`: Native Route Ownership And Compatibility Routing
 
@@ -296,29 +296,38 @@ commit introduced it first.
 - Missing checkpoints fail the boundary rather than producing an empty summary.
 - The 16,384-item overflow path reaches bounded recovery.
 
-## `CUST-COMP-002`: Explicit Manual Native Remote Compaction
+## `CUST-COMP-002`: Responses V2 Manual Native Remote Compaction
 
 ### Required behavior
 
-- A user-requested native manual compaction may call `POST /responses/compact`.
-- Automatic threshold compaction and provider overflow handling must not call
-  this endpoint.
-- The compact operation preserves configured base URL, query, authorization,
-  organization/project headers, provider options, request middleware, and
-  Session HTTP hooks.
-- The operation sends the supported compact request shape and validates opaque
-  compaction output before publishing durable remote items.
+- A user-requested native manual compaction uses the normal `POST /responses`
+  stream and appends `{ "type": "compaction_trigger" }` as the final input
+  item.
+- Manual compaction must never call or fall back to the legacy
+  `/responses/compact` endpoint.
+- Automatic threshold compaction remains a normal Responses request with
+  `context_management.compaction.compact_threshold`; the manual trigger must
+  not add, remove, or reinterpret that automatic policy.
+- The trigger operation preserves configured base URL, query, authorization,
+  organization/project headers, provider options, request middleware, Session
+  HTTP hooks, and the byte-stable prepared conversation prefix.
+- The operation omits tools and tool choice, disables automatic threshold
+  compaction for the trigger request, and validates that the provider returns
+  exactly one opaque encrypted compaction checkpoint before publishing durable
+  remote items.
 - AI SDK and generic compatibility routes continue to use local summary
   compaction.
 - Normal Agent protected context, including Session rules location context, is
-  not sent to the provider-native compact endpoint.
+  not sent to the provider-native trigger request.
 - `previous_response_id`, stored continuation, and permanent supplier binding
   remain outside this custom operation unless explicitly approved later.
 
 ### Owners
 
 - `packages/ai/src/protocols/openai-responses.ts`
+- `packages/ai/src/protocols/open-responses.ts`
 - `packages/ai/src/protocols/utils/openai-compaction.ts`
+- `packages/ai/src/protocols/utils/open-responses-options.ts`
 - `packages/ai/src/providers/openai.ts`
 - `packages/core/src/session/compaction.ts`
 - `packages/core/src/session/model-request.ts`
@@ -326,13 +335,18 @@ commit introduced it first.
 
 ### Acceptance evidence
 
-- Manual compaction issues `/responses/compact` only for the native owner.
+- Manual compaction issues `/responses` with a final `compaction_trigger` item
+  only for the native owner and issues zero `/responses/compact` requests.
 - Automatic native Responses requests carry `compactThreshold` through normal
-  provider options and issue zero explicit compact endpoint calls.
+  provider options and never gain a manual `compaction_trigger` item.
 - Native automatic overflow surfaces as provider overflow rather than invoking
-  the manual endpoint or a local-summary fallback.
+  manual trigger compaction or a local-summary fallback.
 - Compatibility routes use local summary compaction.
-- Compact HTTP body tests prove protected Session context is absent.
+- Trigger request tests prove protected Session context, tools, tool choice, and
+  automatic `context_management` are absent while the pre-trigger prefix remains
+  unchanged.
+- Missing, multiple, malformed, mixed-output, or non-encrypted compaction
+  checkpoints fail rather than mutating durable remote history.
 - HTTP/provider failures produce durable failed compaction state.
 - AI and Core compaction, runner, and provider-owner tests pass.
 

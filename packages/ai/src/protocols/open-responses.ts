@@ -533,8 +533,9 @@ const lowerMessages = Effect.fn("OpenResponses.lowerMessages")(function* (reques
           const itemID = hostedToolItemID(part, providerMetadataKey)
           if (!portableInline && itemID && !hostedToolReferences.has(itemID))
             input.push({ type: "item_reference", id: itemID })
-          const replay =
-            portableInline ? extension.lowerProviderExecutedTool?.({ part, providerMetadataKey }) : undefined
+          const replay = portableInline
+            ? extension.lowerProviderExecutedTool?.({ part, providerMetadataKey })
+            : undefined
           if (replay && itemID && !hostedToolReferences.has(itemID)) input.push(replay)
           if (!replay && portableInline && part.result.type === "content") {
             const content: ReadonlyArray<Content> = part.result.value
@@ -584,7 +585,7 @@ const lowerOptions = (request: LLMRequest) => {
     ...(options.instructions ? { instructions: options.instructions } : {}),
     ...(options.store !== undefined ? { store: options.store } : {}),
     ...(request.promptCacheKey ? { prompt_cache_key: request.promptCacheKey } : {}),
-    ...(options.compactThreshold !== undefined
+    ...(!OpenResponsesOptions.compactionTrigger(request) && options.compactThreshold !== undefined
       ? { context_management: [{ type: "compaction" as const, compact_threshold: options.compactThreshold }] }
       : {}),
     ...(options.include ? { include: options.include } : {}),
