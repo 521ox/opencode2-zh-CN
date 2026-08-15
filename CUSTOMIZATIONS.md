@@ -6,6 +6,11 @@ This worktree is the V2 successor to the historical `opencode-v1.18.9-custom`
 fork. It ports only product-specific value onto the official OpenCode V2
 architecture. It must not recreate the former mixed V1/V2 runtime.
 
+For upstream synchronization, `specs/v2/upstream-sync-preservation.md` is the
+operational preservation manifest. Every upstream merge or rebase must account
+for each stable customization ID in that document before the result can be
+accepted.
+
 ## Upstream Baseline
 
 - Upstream repository: `anomalyco/opencode`
@@ -49,13 +54,15 @@ architecture. It must not recreate the former mixed V1/V2 runtime.
     Nested delegation remains disabled by default and requires both an explicit
     depth increase and agent permission.
 12. When `compaction.prune` is enabled, the upstream request projection bounds
-    completed local tool-result text with a newest-first budget equal to 10% of
-    the model prompt capacity, clamped to 10,000-64,000 estimated tokens. The
-    durable Session history, exports, TUI transcript, managed full-output files,
-    provider-executed results, media attachments, and opaque remote compaction
-    checkpoints remain unchanged. The projection must preserve tool call/result
-    pairing and produce byte-stable output for identical Session state and
-    configuration.
+    completed local tool results in immutable chronological blocks of 32. The
+    active block shares a budget equal to 10% of model prompt capacity, clamped
+    to 10,000-64,000 estimated tokens; completed blocks retain bounded 64-token
+    head/tail previews and recovery locations. Appending within one block must
+    not change an already-sent prompt prefix. Crossing a block boundary may
+    archive the previous block once, batching cache invalidation instead of
+    moving a boundary on every result. The durable Session history, exports,
+    TUI transcript, managed full-output files, provider-executed results, media
+    attachments, and opaque remote compaction checkpoints remain unchanged.
 13. Every normal Agent request receives protected Session rules location context
     after the `session.context` hook. The directory is derived only from the
     immutable root Session `start_directory` and readable root Session ID, and
