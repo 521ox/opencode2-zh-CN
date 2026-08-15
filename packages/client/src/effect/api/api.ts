@@ -822,7 +822,21 @@ export type Endpoint5_31Output =
             readonly sessionID: Session.ID
             readonly reason: "auto" | "manual"
             readonly recent: string
+            readonly remote?: boolean | undefined
             readonly inputID?: SessionMessage.ID | undefined
+          }
+        }
+      | {
+          readonly id: Event.ID
+          readonly created: DateTime.Utc
+          readonly metadata?: { readonly [x: string]: unknown } | undefined
+          readonly type: "session.compaction.remote-item"
+          readonly durable: { readonly aggregateID: string; readonly seq: Event.Seq; readonly version: Event.Version }
+          readonly location?: Location.Ref | undefined
+          readonly data: {
+            readonly sessionID: Session.ID
+            readonly reset: boolean
+            readonly item: { readonly type: string; readonly [x: string]: Schema.Json }
           }
         }
       | {

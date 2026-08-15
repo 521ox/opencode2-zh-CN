@@ -115,6 +115,7 @@ export type SessionMessageCompactionRunning = {
   reason: "auto" | "manual"
   summary: string
   recent: string
+  remote?: Array<{ type: string; [x: string]: JsonValue }>
 }
 
 export type SessionMessageCompactionCompleted = {
@@ -126,6 +127,7 @@ export type SessionMessageCompactionCompleted = {
   reason: "auto" | "manual"
   summary: string
   recent: string
+  remote?: Array<{ type: string; [x: string]: JsonValue }>
 }
 
 export type SessionActive = { type: "running" }
@@ -644,7 +646,17 @@ export type SessionCompactionStarted = {
   type: "session.compaction.started"
   durable: { aggregateID: string; seq: number; version: 1 }
   location?: LocationRef
-  data: { sessionID: string; reason: "auto" | "manual"; recent: string; inputID?: string }
+  data: { sessionID: string; reason: "auto" | "manual"; recent: string; remote?: boolean; inputID?: string }
+}
+
+export type SessionCompactionRemoteItem = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  type: "session.compaction.remote-item"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: { sessionID: string; reset: boolean; item: { type: string; [x: string]: JsonValue } }
 }
 
 export type SessionCompactionEnded = {
@@ -1769,7 +1781,7 @@ export type ConfigEntry =
                 }
           }
         }
-        compaction?: { auto?: boolean; keep?: { tokens?: number }; buffer?: number }
+        compaction?: { auto?: boolean; prune?: boolean; keep?: { tokens?: number }; buffer?: number }
         skills?: Array<string>
         commands?: {
           [x: string]: {
@@ -1952,6 +1964,7 @@ export type SessionEventDurable =
   | SessionToolFailed
   | SessionRetryScheduled
   | SessionCompactionStarted
+  | SessionCompactionRemoteItem
   | SessionCompactionEnded
   | SessionCompactionFailed
   | SessionRevertStaged
@@ -2048,6 +2061,7 @@ export type V2Event =
   | SessionRetryScheduled
   | SessionCompactionStarted
   | SessionCompactionDelta
+  | SessionCompactionRemoteItem
   | SessionCompactionEnded
   | SessionCompactionFailed
   | SessionRevertStaged
@@ -2699,6 +2713,7 @@ export type SessionImportInput = {
               readonly reason: "auto" | "manual"
               readonly summary: string
               readonly recent: string
+              readonly remote?: ReadonlyArray<{ readonly type: string; readonly [x: string]: JsonValue }>
             }
           | {
               readonly type: "compaction"
@@ -2709,6 +2724,7 @@ export type SessionImportInput = {
               readonly reason: "auto" | "manual"
               readonly summary: string
               readonly recent: string
+              readonly remote?: ReadonlyArray<{ readonly type: string; readonly [x: string]: JsonValue }>
             }
           | {
               readonly type: "compaction"
@@ -2966,6 +2982,7 @@ export type SessionImportInput = {
               readonly reason: "auto" | "manual"
               readonly summary: string
               readonly recent: string
+              readonly remote?: ReadonlyArray<{ readonly type: string; readonly [x: string]: JsonValue }>
             }
           | {
               readonly type: "compaction"
@@ -2976,6 +2993,7 @@ export type SessionImportInput = {
               readonly reason: "auto" | "manual"
               readonly summary: string
               readonly recent: string
+              readonly remote?: ReadonlyArray<{ readonly type: string; readonly [x: string]: JsonValue }>
             }
           | {
               readonly type: "compaction"
@@ -3233,6 +3251,7 @@ export type SessionImportInput = {
               readonly reason: "auto" | "manual"
               readonly summary: string
               readonly recent: string
+              readonly remote?: ReadonlyArray<{ readonly type: string; readonly [x: string]: JsonValue }>
             }
           | {
               readonly type: "compaction"
@@ -3243,6 +3262,7 @@ export type SessionImportInput = {
               readonly reason: "auto" | "manual"
               readonly summary: string
               readonly recent: string
+              readonly remote?: ReadonlyArray<{ readonly type: string; readonly [x: string]: JsonValue }>
             }
           | {
               readonly type: "compaction"
