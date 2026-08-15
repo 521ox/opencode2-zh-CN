@@ -1,10 +1,10 @@
 import { TextAttributes } from "@opentui/core"
 import { Keymap } from "../context/keymap"
+import { useI18n } from "../context/i18n"
 import { useTheme } from "../context/theme"
 import { useDialog } from "./dialog"
 import { createStore } from "solid-js/store"
 import { For } from "solid-js"
-import { Locale } from "../util/locale"
 
 export type DialogConfirmProps = {
   title: string
@@ -19,6 +19,7 @@ export type DialogConfirmProps = {
 
 export function DialogConfirm(props: DialogConfirmProps) {
   const dialog = useDialog()
+  const { t } = useI18n()
   const theme = useTheme("elevated")
   const [store, setStore] = createStore({
     active: "confirm" as "confirm" | "cancel",
@@ -29,8 +30,8 @@ export function DialogConfirm(props: DialogConfirmProps) {
     commands: [
       {
         bind: "return",
-        title: "Confirm dialog selection",
-        group: "Dialog",
+        title: t("ui.dialog.confirm.selection"),
+        group: t("ui.group.dialog"),
         run: () => {
           if (store.active === "confirm") props.onConfirm?.()
           if (store.active === "cancel") props.onCancel?.()
@@ -39,16 +40,16 @@ export function DialogConfirm(props: DialogConfirmProps) {
       },
       {
         bind: "left",
-        title: "Previous dialog option",
-        group: "Dialog",
+        title: t("ui.dialog.confirm.previousOption"),
+        group: t("ui.group.dialog"),
         run: () => {
           setStore("active", store.active === "confirm" ? "cancel" : "confirm")
         },
       },
       {
         bind: "right",
-        title: "Next dialog option",
-        group: "Dialog",
+        title: t("ui.dialog.confirm.nextOption"),
+        group: t("ui.group.dialog"),
         run: () => {
           setStore("active", store.active === "confirm" ? "cancel" : "confirm")
         },
@@ -82,7 +83,7 @@ export function DialogConfirm(props: DialogConfirmProps) {
               }}
             >
               <text fg={key === store.active ? theme.text.action.primary.focused : theme.text.subdued}>
-                {Locale.titlecase(props.label?.[key] ?? key)}
+                {props.label?.[key] ?? (key === "confirm" ? t("ui.action.confirm") : t("ui.action.cancel"))}
               </text>
             </box>
           )}

@@ -53,9 +53,11 @@ export const resolved = (
     readonly capabilities: Capabilities
     readonly variant?: VariantID
     readonly cost: Info["cost"]
+    readonly providerPackage?: string
   },
 ): Resolved => ({
   model,
+  providerPackage: options.providerPackage ?? "@opencode-ai/ai/providers/test",
   ref: Ref.make({
     id: ID.make(model.id),
     providerID: Provider.ID.make(model.provider),

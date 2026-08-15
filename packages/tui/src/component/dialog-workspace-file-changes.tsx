@@ -8,6 +8,7 @@ import { useTheme } from "../context/theme"
 import { useConfig } from "../config"
 import { useDialog, type DialogContext } from "../ui/dialog"
 import { getScrollAcceleration } from "../util/scroll"
+import { useI18n } from "../context/i18n"
 
 const options = ["no", "yes"] as const
 
@@ -34,6 +35,7 @@ export function DialogWorkspaceFileChanges(props: {
   const theme = useTheme("elevated")
   const overlayTheme = useTheme("overlay")
   const config = useConfig().data
+  const { t } = useI18n()
   const dimensions = useTerminalDimensions()
   const scrollAcceleration = createMemo(() => getScrollAcceleration(config))
   const [store, setStore] = createStore({ active: "yes" as WorkspaceFileChangesChoice })
@@ -73,7 +75,7 @@ export function DialogWorkspaceFileChanges(props: {
     <box gap={1}>
       <box flexDirection="row" justifyContent="space-between" paddingLeft={2} paddingRight={2}>
         <text attributes={TextAttributes.BOLD} fg={theme.text.default}>
-          {props.title ?? "File Changes Found"}
+          {props.title ?? t("dialog.workspaceFileChanges.title")}
         </text>
         <text fg={theme.text.subdued} onMouseUp={() => dialog.clear()}>
           esc
@@ -81,7 +83,7 @@ export function DialogWorkspaceFileChanges(props: {
       </box>
       <box paddingLeft={2} paddingRight={2}>
         <text fg={theme.text.subdued} wrapMode="word">
-          {props.message ?? "Do you want to move these changes with the session?"}
+          {props.message ?? t("dialog.workspaceFileChanges.message")}
         </text>
       </box>
       <scrollbox
@@ -125,7 +127,9 @@ export function DialogWorkspaceFileChanges(props: {
                 dialog.clear()
               }}
             >
-              <text fg={item === store.active ? theme.text.action.primary.focused : theme.text.subdued}>{item}</text>
+              <text fg={item === store.active ? theme.text.action.primary.focused : theme.text.subdued}>
+                {t(item === "yes" ? "dialog.workspaceFileChanges.yes" : "dialog.workspaceFileChanges.no")}
+              </text>
             </box>
           )}
         </For>

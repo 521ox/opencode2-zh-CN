@@ -20,6 +20,7 @@ import { useToast } from "../../ui/toast"
 import { Keymap } from "../../context/keymap"
 import { useConfig } from "../../config"
 import { errorMessage } from "../../util/error"
+import { useI18n } from "../../context/i18n"
 import {
   formCustom,
   formDisplayValue,
@@ -57,6 +58,7 @@ export function FormPrompt(props: {
   onCancel?: () => void | Promise<void>
 }) {
   const client = useClient()
+  const i18n = useI18n()
   const themes = useThemes()
   const theme = useTheme("elevated")
   const themeMode = themes.mode
@@ -113,14 +115,17 @@ export function FormPrompt(props: {
   })
   const tabs = createMemo(() => (single() ? 1 : fields().length + 1))
   const tabbed = createMemo(() => {
-    const width = fields().reduce((sum, item) => sum + truncate(formLabel(item), 24).length + 3, "Submit".length + 3)
+    const width = fields().reduce(
+      (sum, item) => sum + truncate(formLabel(item), 24).length + 3,
+      i18n.t("session.form.submit").length + 3,
+    )
     return width <= dimensions().width - 8
   })
   const completed = (item: FormField) => {
     const value = store.answers[item.key]
     if (value === undefined) return false
     if (item.type === "external") return value === true
-    return formValidateValue(item, value) === undefined
+    return formValidateValue(item, value, i18n.t) === undefined
   }
   const answered = createMemo(() => fields().filter(completed).length)
   const field = createMemo(() => fields()[store.tab])
@@ -135,7 +140,7 @@ export function FormPrompt(props: {
   const confirm = createMemo(() => !single() && store.tab >= fields().length)
   const configuredRows = createMemo(() => {
     const current = answerField()
-    return current ? formRows(current) : []
+    return current ? formRows(current, i18n.t) : []
   })
   const rows = createMemo(() => {
     const current = answerField()
@@ -172,10 +177,10 @@ export function FormPrompt(props: {
       const minimum = typeof current.minimum === "number" ? current.minimum : undefined
       const maximum = typeof current.maximum === "number" ? current.maximum : undefined
       if (minimum !== undefined && maximum !== undefined) return `${minimum}-${maximum}`
-      if (minimum !== undefined) return `at least ${minimum}`
-      if (maximum !== undefined) return `at most ${maximum}`
+      if (minimum !== undefined) return i18n.t("session.form.minimum", { minimum })
+      if (maximum !== undefined) return i18n.t("session.form.maximum", { maximum })
     }
-    return "Type your answer"
+    return i18n.t("session.form.placeholder.answer")
   })
   const other = createMemo(() => custom() && store.selected === rows().length)
   const input = createMemo(() => store.custom[answerField()?.key ?? ""] ?? "")
@@ -188,19 +193,21 @@ export function FormPrompt(props: {
   })
   const customChecked = createMemo(() => customPicked() || (multi() && other() && store.editing))
   const actionLabel = createMemo(() => {
-    if (confirm()) return "submit"
+    if (confirm()) return i18n.t("session.form.action.submit")
     const external = externalField()
     if (external) {
-      if (store.answers[external.key] === true) return "continue"
-      return store.externalReady[external.key] ? "I finished" : "open link"
+      if (store.answers[external.key] === true) return i18n.t("session.form.action.continue")
+      return store.externalReady[external.key]
+        ? i18n.t("session.form.action.finished")
+        : i18n.t("session.form.action.openLink")
     }
     if (multi()) {
-      if (other() && store.editing) return "done"
-      if (other() && !input()) return "edit"
-      return "toggle"
+      if (other() && store.editing) return i18n.t("session.form.action.done")
+      if (other() && !input()) return i18n.t("session.form.action.edit")
+      return i18n.t("session.form.action.toggle")
     }
-    if (single()) return "submit"
-    return "confirm"
+    if (single()) return i18n.t("session.form.action.submit")
+    return i18n.t("session.form.action.confirm")
   })
 
   createEffect(() => {
@@ -277,7 +284,7 @@ export function FormPrompt(props: {
   function pick(value: FormValue, customValue?: string) {
     const current = answerField()
     if (!current) return
-    const invalid = formValidateValue(current, value)
+    const invalid = formValidateValue(current, value, i18n.t)
     if (invalid) {
       setStore("error", invalid)
       return
@@ -361,7 +368,7 @@ export function FormPrompt(props: {
           ? formSetMultiselectCustom(store.answers[current.key], store.custom[current.key], "")
           : undefined
       if (isTextual || !isMulti) {
-        const invalid = formValidateValue(current, value)
+        const invalid = formValidateValue(current, value, i18n.t)
         if (invalid) {
           setStore("error", invalid)
           return false
@@ -375,7 +382,7 @@ export function FormPrompt(props: {
 
     if (isTextual && (current.type === "number" || current.type === "integer")) {
       const value = Number(text)
-      const invalid = formValidateValue(current, value)
+      const invalid = formValidateValue(current, value, i18n.t)
       if (invalid) {
         setStore("error", invalid)
         return false
@@ -384,7 +391,7 @@ export function FormPrompt(props: {
     }
 
     if (isTextual && current.type === "string") {
-      const invalid = formValidateValue(current, text)
+      const invalid = formValidateValue(current, text, i18n.t)
       if (invalid) {
         setStore("error", invalid)
         return false
@@ -397,7 +404,7 @@ export function FormPrompt(props: {
     }
 
     if (!isTextual && !isMulti) {
-      const invalid = formValidateValue(current, text)
+      const invalid = formValidateValue(current, text, i18n.t)
       if (invalid) {
         setStore("error", invalid)
         return false
@@ -450,7 +457,7 @@ export function FormPrompt(props: {
     setStore("error", "")
     void open(current.url)
       .then(() => setStore("externalReady", { ...store.externalReady, [current.key]: true }))
-      .catch(() => setStore("error", "Could not open the browser. Copy the URL and continue manually."))
+      .catch(() => setStore("error", i18n.t("session.form.browserUnavailable")))
   }
 
   function copyExternal() {
@@ -460,7 +467,7 @@ export function FormPrompt(props: {
       .write(current.url)
       .then(() => {
         setStore("externalReady", { ...store.externalReady, [current.key]: true })
-        toast.show({ message: "Copied URL to clipboard", variant: "info" })
+        toast.show({ message: i18n.t("session.form.urlCopied"), variant: "info" })
       })
       .catch(toast.error)
   }
@@ -483,14 +490,17 @@ export function FormPrompt(props: {
   function submit() {
     const unacknowledged = fields().find((field) => field.type === "external" && store.answers[field.key] !== true)
     if (unacknowledged) {
-      setStore("error", `External action must be acknowledged: ${formLabel(unacknowledged)}`)
+      setStore("error", i18n.t("session.form.externalAcknowledgement", { field: formLabel(unacknowledged) }))
       return
     }
     const invalid = fields()
       .filter(isFormAnswerField)
-      .find((field) => formValidateValue(field, store.answers[field.key]))
+      .find((field) => formValidateValue(field, store.answers[field.key], i18n.t))
     if (invalid) {
-      setStore("error", formValidateValue(invalid, store.answers[invalid.key]) ?? "Invalid answer")
+      setStore(
+        "error",
+        formValidateValue(invalid, store.answers[invalid.key], i18n.t) ?? i18n.t("session.form.invalidAnswer"),
+      )
       return
     }
     reply(
@@ -512,8 +522,8 @@ export function FormPrompt(props: {
     commands: [
       {
         id: "prompt.clear",
-        title: "Clear answer edit",
-        group: "Form",
+        title: i18n.t("session.form.command.clearAnswer"),
+        group: i18n.t("session.group.form"),
         run() {
           const text = textarea?.plainText ?? ""
           if (!text) {
@@ -525,8 +535,8 @@ export function FormPrompt(props: {
       },
       {
         bind: "escape",
-        title: textual() ? "Dismiss form" : "Close answer edit",
-        group: "Form",
+        title: textual() ? i18n.t("session.form.command.dismiss") : i18n.t("session.form.command.closeAnswer"),
+        group: i18n.t("session.group.form"),
         run: () => {
           if (textual()) {
             cancel()
@@ -537,8 +547,8 @@ export function FormPrompt(props: {
       },
       {
         bind: "tab",
-        title: "Next field",
-        group: "Form",
+        title: i18n.t("session.form.command.nextField"),
+        group: i18n.t("session.group.form"),
         run: () => {
           const text = textarea?.plainText?.trim() ?? ""
           submitInput(text)
@@ -546,8 +556,8 @@ export function FormPrompt(props: {
       },
       {
         bind: "shift+tab",
-        title: "Previous field",
-        group: "Form",
+        title: i18n.t("session.form.command.previousField"),
+        group: i18n.t("session.group.form"),
         run: () => {
           const text = textarea?.plainText?.trim() ?? ""
           submitInput(text, -1)
@@ -555,8 +565,8 @@ export function FormPrompt(props: {
       },
       {
         bind: "up",
-        title: "Leave answer edit",
-        group: "Form",
+        title: i18n.t("session.form.command.leaveAnswer"),
+        group: i18n.t("session.group.form"),
         run: () => {
           if (textual() || !textarea || textarea.isDestroyed || store.selected === 0) return false
           if (textarea.scrollY + textarea.visualCursor.visualRow > 0) return false
@@ -566,8 +576,8 @@ export function FormPrompt(props: {
       },
       {
         bind: "return",
-        title: "Submit answer edit",
-        group: "Form",
+        title: i18n.t("session.form.command.submitAnswer"),
+        group: i18n.t("session.group.form"),
         run: () => {
           const text = textarea?.plainText?.trim() ?? ""
           const current = answerField()
@@ -599,34 +609,44 @@ export function FormPrompt(props: {
       commands: [
         {
           id: "app.exit",
-          title: "Dismiss form",
-          group: "Form",
+          title: i18n.t("session.form.command.dismiss"),
+          group: i18n.t("session.group.form"),
           run: cancel,
         },
         {
           bind: "left",
-          title: "Previous field",
-          group: "Form",
+          title: i18n.t("session.form.command.previousField"),
+          group: i18n.t("session.group.form"),
           run: () => selectTab((store.tab - 1 + tabs()) % tabs()),
         },
         {
           bind: "h",
-          title: "Previous field",
-          group: "Form",
+          title: i18n.t("session.form.command.previousField"),
+          group: i18n.t("session.group.form"),
           run: () => selectTab((store.tab - 1 + tabs()) % tabs()),
         },
-        { bind: "right", title: "Next field", group: "Form", run: () => selectTab((store.tab + 1) % tabs()) },
-        { bind: "l", title: "Next field", group: "Form", run: () => selectTab((store.tab + 1) % tabs()) },
+        {
+          bind: "right",
+          title: i18n.t("session.form.command.nextField"),
+          group: i18n.t("session.group.form"),
+          run: () => selectTab((store.tab + 1) % tabs()),
+        },
+        {
+          bind: "l",
+          title: i18n.t("session.form.command.nextField"),
+          group: i18n.t("session.group.form"),
+          run: () => selectTab((store.tab + 1) % tabs()),
+        },
         {
           bind: "tab",
-          title: "Next field",
-          group: "Form",
+          title: i18n.t("session.form.command.nextField"),
+          group: i18n.t("session.group.form"),
           run: () => selectTab((store.tab + 1) % tabs()),
         },
         {
           bind: "shift+tab",
-          title: "Previous field",
-          group: "Form",
+          title: i18n.t("session.form.command.previousField"),
+          group: i18n.t("session.group.form"),
           run: () => selectTab((store.tab - 1 + tabs()) % tabs()),
         },
         ...(external
@@ -635,40 +655,70 @@ export function FormPrompt(props: {
                 bind: "return",
                 title:
                   store.answers[external.key] === true
-                    ? "Continue"
+                    ? i18n.t("session.form.action.continue")
                     : store.externalReady[external.key]
-                      ? "Confirm completion"
-                      : "Open link",
-                group: "Form",
+                      ? i18n.t("session.form.command.confirmCompletion")
+                      : i18n.t("session.form.command.openLink"),
+                group: i18n.t("session.group.form"),
                 run: acknowledgeExternal,
               },
-              { bind: "c", title: "Copy link", group: "Form", run: copyExternal },
-              { bind: "escape", title: "Dismiss form", group: "Form", run: cancel },
+              {
+                bind: "c",
+                title: i18n.t("session.form.command.copyLink"),
+                group: i18n.t("session.group.form"),
+                run: copyExternal,
+              },
+              {
+                bind: "escape",
+                title: i18n.t("session.form.command.dismiss"),
+                group: i18n.t("session.group.form"),
+                run: cancel,
+              },
             ]
           : confirm()
             ? [
                 {
                   bind: "return",
-                  title: "Submit form",
-                  group: "Form",
+                  title: i18n.t("session.form.command.submit"),
+                  group: i18n.t("session.group.form"),
                   run: submit,
                 },
                 {
                   bind: "escape",
-                  title: "Dismiss form",
-                  group: "Form",
+                  title: i18n.t("session.form.command.dismiss"),
+                  group: i18n.t("session.group.form"),
                   run: cancel,
                 },
-                { bind: "up", title: "Scroll review", group: "Form", run: () => review?.scrollBy(-1) },
-                { bind: "k", title: "Scroll review", group: "Form", run: () => review?.scrollBy(-1) },
-                { bind: "down", title: "Scroll review", group: "Form", run: () => review?.scrollBy(1) },
-                { bind: "j", title: "Scroll review", group: "Form", run: () => review?.scrollBy(1) },
+                {
+                  bind: "up",
+                  title: i18n.t("session.form.command.scrollReview"),
+                  group: i18n.t("session.group.form"),
+                  run: () => review?.scrollBy(-1),
+                },
+                {
+                  bind: "k",
+                  title: i18n.t("session.form.command.scrollReview"),
+                  group: i18n.t("session.group.form"),
+                  run: () => review?.scrollBy(-1),
+                },
+                {
+                  bind: "down",
+                  title: i18n.t("session.form.command.scrollReview"),
+                  group: i18n.t("session.group.form"),
+                  run: () => review?.scrollBy(1),
+                },
+                {
+                  bind: "j",
+                  title: i18n.t("session.form.command.scrollReview"),
+                  group: i18n.t("session.group.form"),
+                  run: () => review?.scrollBy(1),
+                },
               ]
             : [
                 ...Array.from({ length: max }, (_, index) => ({
                   bind: String(index + 1),
-                  title: `Select answer ${index + 1}`,
-                  group: "Form",
+                  title: i18n.t("session.form.command.selectAnswer", { index: index + 1 }),
+                  group: i18n.t("session.group.form"),
                   run: () => {
                     setStore("selected", index)
                     selectOption()
@@ -676,36 +726,48 @@ export function FormPrompt(props: {
                 })),
                 {
                   bind: "up",
-                  title: "Previous answer",
-                  group: "Form",
+                  title: i18n.t("session.form.command.previousAnswer"),
+                  group: i18n.t("session.group.form"),
                   run: () => setStore("selected", (store.selected - 1 + total) % total),
                 },
                 {
                   bind: "k",
-                  title: "Previous answer",
-                  group: "Form",
+                  title: i18n.t("session.form.command.previousAnswer"),
+                  group: i18n.t("session.group.form"),
                   run: () => setStore("selected", (store.selected - 1 + total) % total),
                 },
                 {
                   bind: "down",
-                  title: "Next answer",
-                  group: "Form",
+                  title: i18n.t("session.form.command.nextAnswer"),
+                  group: i18n.t("session.group.form"),
                   run: () => setStore("selected", (store.selected + 1) % total),
                 },
                 {
                   bind: "j",
-                  title: "Next answer",
-                  group: "Form",
+                  title: i18n.t("session.form.command.nextAnswer"),
+                  group: i18n.t("session.group.form"),
                   run: () => setStore("selected", (store.selected + 1) % total),
                 },
-                { bind: "return", title: "Select answer", group: "Form", run: () => selectOption() },
+                {
+                  bind: "return",
+                  title: i18n.t("session.form.command.selectAnswerOption"),
+                  group: i18n.t("session.group.form"),
+                  run: () => selectOption(),
+                },
                 ...(multi()
-                  ? [{ bind: "space", title: "Toggle answer", group: "Form", run: () => selectOption() }]
+                  ? [
+                      {
+                        bind: "space",
+                        title: i18n.t("session.form.command.toggleAnswer"),
+                        group: i18n.t("session.group.form"),
+                        run: () => selectOption(),
+                      },
+                    ]
                   : []),
                 {
                   bind: "escape",
-                  title: "Dismiss form",
-                  group: "Form",
+                  title: i18n.t("session.form.command.dismiss"),
+                  group: i18n.t("session.group.form"),
                   run: cancel,
                 },
               ]),
@@ -732,11 +794,16 @@ export function FormPrompt(props: {
         <Show when={!single() && !tabbed()}>
           <box flexDirection="row" gap={3} paddingLeft={1}>
             <text fg={theme.text.subdued}>
-              {confirm() ? "Review" : `Field ${Math.min(store.tab, fields().length - 1) + 1} of ${fields().length}`}
+                {confirm()
+                  ? i18n.t("session.form.review")
+                  : i18n.t("session.form.fieldProgress", {
+                      current: Math.min(store.tab, fields().length - 1) + 1,
+                      total: fields().length,
+                    })}
             </text>
             <Show when={fields().length > 0}>
               <text fg={theme.text.subdued}>
-                · {answered()}/{fields().length} completed
+                · {i18n.t("session.form.completed", { count: answered(), total: fields().length })}
               </text>
             </Show>
           </box>
@@ -801,7 +868,7 @@ export function FormPrompt(props: {
                 }
                 attributes={confirm() ? TextAttributes.BOLD : undefined}
               >
-                Submit
+                {i18n.t("session.form.submit")}
               </text>
             </box>
           </box>
@@ -829,10 +896,10 @@ export function FormPrompt(props: {
                 fg={store.answers[external().key] === true ? theme.text.feedback.success.default : theme.text.subdued}
               >
                 {store.answers[external().key] === true
-                  ? "✓ Acknowledged"
+                  ? `✓ ${i18n.t("session.form.acknowledged")}`
                   : store.externalReady[external().key]
-                    ? "Complete the external action, then press enter to confirm."
-                    : "Open or copy the URL, complete the external action, then confirm."}
+                    ? i18n.t("session.form.completeExternal")
+                    : i18n.t("session.form.openExternal")}
               </text>
             </box>
           )}
@@ -856,7 +923,13 @@ export function FormPrompt(props: {
                     })
                   }}
                   initialValue={
-                    input() || formDisplayValue(answerField()!, store.answers[answerField()!.key], "(none)")
+                    input() ||
+                    formDisplayValue(
+                      answerField()!,
+                      store.answers[answerField()!.key],
+                      i18n.t("session.form.none"),
+                      i18n.t,
+                    )
                   }
                   placeholder={placeholder()}
                   placeholderColor={theme.text.subdued}
@@ -963,7 +1036,7 @@ export function FormPrompt(props: {
                           fallback={
                             <>
                               <text fg={other() ? theme.text.formfield.focused : theme.text.formfield.default}>
-                                {input() || "Type your own answer"}
+                                {input() || i18n.t("session.form.ownAnswer")}
                               </text>
                               <Show when={!multi() && customPicked()}>
                                 <text fg={theme.text.feedback.success.default}>✓</text>
@@ -984,7 +1057,7 @@ export function FormPrompt(props: {
                               })
                             }}
                             initialValue={input()}
-                            placeholder="Type your own answer"
+                            placeholder={i18n.t("session.form.ownAnswer")}
                             placeholderColor={theme.text.subdued}
                             minHeight={1}
                             maxHeight={6}
@@ -1028,16 +1101,19 @@ export function FormPrompt(props: {
                               : theme.text.feedback.error.default,
                           }}
                         >
-                          {acknowledged() ? "Acknowledged" : "(acknowledgement required)"}
+                          {acknowledged()
+                            ? i18n.t("session.form.acknowledged")
+                            : i18n.t("session.form.acknowledgementRequired")}
                         </span>
                       </text>
                     </box>
                   )
                 }
-                const value = () => formDisplayValue(item, store.answers[item.key], "(none)")
+                const value = () =>
+                  formDisplayValue(item, store.answers[item.key], i18n.t("session.form.none"), i18n.t)
                 const answered = () => store.answers[item.key] !== undefined
                 const missing = () => !answered() && item.required === true
-                const invalid = () => formValidateValue(item, store.answers[item.key])
+                const invalid = () => formValidateValue(item, store.answers[item.key], i18n.t)
                 return (
                   <box paddingLeft={1}>
                     <text>
@@ -1052,7 +1128,12 @@ export function FormPrompt(props: {
                                 : theme.text.subdued,
                         }}
                       >
-                        {invalid() ?? (answered() ? value() : missing() ? "(required)" : "(not answered)")}
+                          {invalid() ??
+                            (answered()
+                              ? value()
+                              : missing()
+                                ? i18n.t("session.form.required")
+                                : i18n.t("session.form.notAnswered"))}
                       </span>
                     </text>
                   </box>
@@ -1074,17 +1155,17 @@ export function FormPrompt(props: {
         <box flexDirection="row" gap={2}>
           <Show when={!single()}>
             <text fg={theme.text.default}>
-              {"⇆"} <span style={{ fg: theme.text.subdued }}>tab</span>
+              {"⇆"} <span style={{ fg: theme.text.subdued }}>{i18n.t("session.form.tab")}</span>
             </text>
           </Show>
           <Show when={!confirm() && !textual() && !externalField() && !store.editing}>
             <text fg={theme.text.default}>
-              {"↑↓"} <span style={{ fg: theme.text.subdued }}>select</span>
+              {"↑↓"} <span style={{ fg: theme.text.subdued }}>{i18n.t("session.form.select")}</span>
             </text>
           </Show>
           <Show when={confirm() && reviewScrollable()}>
             <text fg={theme.text.default}>
-              {"↑↓"} <span style={{ fg: theme.text.subdued }}>scroll</span>
+              {"↑↓"} <span style={{ fg: theme.text.subdued }}>{i18n.t("session.form.scroll")}</span>
             </text>
           </Show>
           <text
@@ -1099,11 +1180,14 @@ export function FormPrompt(props: {
           </text>
           <Show when={externalField()}>
             <text fg={theme.text.default} onMouseUp={copyExternal}>
-              c <span style={{ fg: theme.text.subdued }}>copy</span>
+              c <span style={{ fg: theme.text.subdued }}>{i18n.t("session.form.copy")}</span>
             </text>
           </Show>
           <text fg={theme.text.default} onMouseUp={cancel}>
-            esc <span style={{ fg: theme.text.subdued }}>{store.editing && !textual() ? "close" : "dismiss"}</span>
+            esc{" "}
+            <span style={{ fg: theme.text.subdued }}>
+              {store.editing && !textual() ? i18n.t("session.form.close") : i18n.t("session.form.dismiss")}
+            </span>
           </text>
         </box>
         <Show when={store.error}>

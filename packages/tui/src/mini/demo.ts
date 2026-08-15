@@ -16,6 +16,7 @@
 // the synthetic tool parts through the same callbacks used by the live footer.
 import path from "path"
 import type { JsonValue, SessionMessageAssistantTool } from "@opencode-ai/client/promise"
+import type { Translator } from "../i18n"
 import { parseSlashHead } from "../prompt/parse"
 import { writeSessionOutput } from "./stream"
 import { toolCommit, toolFinalPhase } from "./stream-v2.subagent"
@@ -141,6 +142,7 @@ type Permit = {
 }
 
 type State = {
+  t: Translator
   id: string
   thinking: boolean
   footer: FooterApi
@@ -155,6 +157,7 @@ type State = {
 }
 
 type Input = {
+  t: Translator
   sessionID: string
   thinking: boolean
   footer: FooterApi
@@ -265,7 +268,12 @@ function present(state: State, commits: StreamCommit[], view?: FooterView): void
         ? [
             {
               type: "stream.patch" as const,
-              patch: { status: view.type === "permission" ? "awaiting permission" : "awaiting form" },
+              patch: {
+                status:
+                  view.type === "permission"
+                    ? state.t("mini.demo.status.awaitingPermission")
+                    : state.t("mini.demo.status.awaitingForm"),
+              },
             },
             { type: "stream.view" as const, view },
           ]
@@ -320,7 +328,9 @@ async function emitReasoning(state: State, body: string, signal?: AbortSignal): 
         {
           kind: "reasoning",
           source: "reasoning",
-          text: first ? `Thinking: ${item.replace(/\[REDACTED\]/g, "")}` : item.replace(/\[REDACTED\]/g, ""),
+          text: first
+            ? `${state.t("mini.scrollback.thinking")}: ${item.replace(/\[REDACTED\]/g, "")}`
+            : item.replace(/\[REDACTED\]/g, ""),
           phase: "progress",
           messageID: msg,
           partID: part,
@@ -351,7 +361,7 @@ function startTool(state: State, ref: Ref, metadata: Record<string, JsonValue> =
     state: { status: "running" as const, input: ref.input, metadata },
     time: { created: ref.start, ran: ref.start },
   }
-  present(state, [toolCommit(part, ref.msg, "start")])
+  present(state, [toolCommit(part, ref.msg, "start", state.t)])
   return part
 }
 
@@ -400,7 +410,7 @@ function doneTool(
     },
     time: { created: ref.start, ran: ref.start, completed: Date.now() },
   }
-  present(state, [toolCommit(part, ref.msg, toolFinalPhase(part))])
+  present(state, [toolCommit(part, ref.msg, toolFinalPhase(part), state.t)])
 }
 
 function failTool(state: State, ref: Ref, error: string): void {
@@ -420,6 +430,7 @@ function failTool(state: State, ref: Ref, error: string): void {
       },
       ref.msg,
       "final",
+      state.t,
     ),
   ])
 }
@@ -544,13 +555,13 @@ function emitTask(state: State): void {
       },
       {
         kind: "reasoning",
-        text: "Thinking: tracing reducer and footer boundaries",
+        text: `${state.t("mini.scrollback.thinking")}: tracing reducer and footer boundaries`,
         phase: "progress",
         source: "reasoning",
         messageID: "sub_demo_msg_reasoning",
         partID: "sub_demo_reasoning_1",
       },
-      toolCommit(part, "sub_demo_msg_tool", "start"),
+      toolCommit(part, "sub_demo_msg_tool", "start", state.t),
       {
         kind: "assistant",
         text: "Footer updates flow through stream.ts into RunFooter",
@@ -890,24 +901,17 @@ async function emitFmt(state: State, kind: string, body: string, signal?: AbortS
 function intro(state: State): void {
   note(
     state.footer,
-    [
-      "Demo slash commands enabled for interactive mode.",
-      `- /permission [kind] (${PERMISSIONS.join(", ")})`,
-      `- /form [kind] (${FORMS.join(", ")})`,
-      `- /fmt <kind> (${KINDS.join(", ")})`,
-      "Examples:",
-      "- /permission shell",
-      "- /form question",
-      "- /form external",
-      "- /fmt markdown",
-      "- /fmt table",
-      "- /fmt text your custom text",
-    ].join("\n"),
+    state.t("mini.demo.intro", {
+      permissions: PERMISSIONS.join(", "),
+      forms: FORMS.join(", "),
+      kinds: KINDS.join(", "),
+    }),
   )
 }
 
 export function createRunDemo(input: Input) {
   const state: State = {
+    t: input.t,
     id: input.sessionID,
     thinking: input.thinking,
     footer: input.footer,
@@ -941,7 +945,7 @@ export function createRunDemo(input: Input) {
     if (cmd === "/permission") {
       const kind = permissionKind(list[0])
       if (!kind) {
-        note(state.footer, `Pick a permission kind: ${PERMISSIONS.join(", ")}`)
+        note(state.footer, state.t("mini.demo.pickPermissionKind", { kinds: PERMISSIONS.join(", ") }))
         return true
       }
 
@@ -952,7 +956,7 @@ export function createRunDemo(input: Input) {
     if (cmd === "/form") {
       const kind = formKind(list[0])
       if (!kind) {
-        note(state.footer, `Pick a form kind: ${FORMS.join(", ")}`)
+        note(state.footer, state.t("mini.demo.pickFormKind", { kinds: FORMS.join(", ") }))
         return true
       }
 
@@ -964,7 +968,7 @@ export function createRunDemo(input: Input) {
       const kind = (list[0] || "").toLowerCase()
       const body = list.slice(1).join(" ")
       if (!kind) {
-        note(state.footer, `Pick a kind: ${KINDS.join(", ")}`)
+        note(state.footer, state.t("mini.demo.pickFormatKind", { kinds: KINDS.join(", ") }))
         return true
       }
 
@@ -973,7 +977,7 @@ export function createRunDemo(input: Input) {
         return true
       }
 
-      note(state.footer, `Unknown kind "${kind}". Use: ${KINDS.join(", ")}`)
+      note(state.footer, state.t("mini.demo.unknownFormatKind", { kind, kinds: KINDS.join(", ") }))
       return true
     }
 
@@ -990,7 +994,7 @@ export function createRunDemo(input: Input) {
     clearBlocker(state)
 
     if (input.reply === "reject") {
-      failTool(state, item.ref, input.message || "permission rejected")
+      failTool(state, item.ref, input.message || state.t("mini.demo.permissionRejected"))
       return true
     }
 
@@ -1017,9 +1021,11 @@ export function createRunDemo(input: Input) {
       return true
     }
     doneTool(state, form.ref, {
-      output: `Form submitted: ${Object.entries(input.answer)
+      output: `${state.t("mini.demo.formSubmitted", {
+        answer: Object.entries(input.answer)
         .map(([key, value]) => `${key}=${Array.isArray(value) ? value.join(", ") : String(value)}`)
-        .join("; ")}\n`,
+        .join("; "),
+      })}\n`,
       metadata: { answer: input.answer },
     })
     return true
@@ -1030,7 +1036,7 @@ export function createRunDemo(input: Input) {
     if (!form || input.sessionID !== form.request.sessionID) return false
     state.forms.delete(input.formID)
     clearBlocker(state)
-    failTool(state, form.ref, "form cancelled")
+    failTool(state, form.ref, state.t("mini.demo.formCancelled"))
     return true
   }
 

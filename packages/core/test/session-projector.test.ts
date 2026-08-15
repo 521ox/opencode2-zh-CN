@@ -93,6 +93,62 @@ describe("SessionProjector", () => {
     }),
   )
 
+  it.effect("projects only the latest remote compaction checkpoint", () =>
+    Effect.gen(function* () {
+      const db = (yield* Database.Service).db
+      yield* db
+        .insert(ProjectTable)
+        .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+        .run()
+      yield* db
+        .insert(SessionTable)
+        .values({
+          id: sessionID,
+          project_id: Project.ID.global,
+          slug: "remote-compaction",
+          directory: "/project",
+          title: "remote compaction",
+          version: "test",
+        })
+        .run()
+      const bus = yield* Bus.Service
+      const first = { type: "compaction", id: "cmp_1", encrypted_content: "opaque-first" }
+      const firstMessage = { type: "message", id: "msg_first", role: "assistant", content: [] }
+      const latest = { type: "compaction", id: "cmp_2", encrypted_content: "opaque-latest" }
+      const latestMessage = { type: "message", id: "msg_latest", role: "assistant", content: [] }
+
+      yield* bus.publish(SessionEvent.Compaction.Started, {
+        sessionID,
+        reason: "auto",
+        recent: "",
+        remote: true,
+      })
+      yield* bus.publish(SessionEvent.Compaction.RemoteItem, { sessionID, reset: true, item: first })
+      yield* bus.publish(SessionEvent.Compaction.RemoteItem, { sessionID, reset: false, item: firstMessage })
+      yield* bus.publish(SessionEvent.Compaction.RemoteItem, { sessionID, reset: true, item: latest })
+      yield* bus.publish(SessionEvent.Compaction.RemoteItem, { sessionID, reset: false, item: latestMessage })
+      yield* bus.publish(SessionEvent.Compaction.Ended, {
+        sessionID,
+        reason: "auto",
+        text: "",
+        recent: "",
+      })
+
+      const row = yield* db
+        .select()
+        .from(SessionMessageTable)
+        .where(eq(SessionMessageTable.type, "compaction"))
+        .get()
+        .pipe(Effect.orDie)
+      const message = Schema.decodeUnknownSync(SessionMessage.Info)({ ...row!.data, id: row!.id, type: row!.type })
+      expect(message).toMatchObject({
+        type: "compaction",
+        status: "completed",
+        remote: [latest, latestMessage],
+      })
+    }),
+  )
+
   it.effect("loads legacy revert storage into canonical state", () =>
     Effect.gen(function* () {
       const db = (yield* Database.Service).db

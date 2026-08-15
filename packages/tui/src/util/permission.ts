@@ -1,5 +1,8 @@
 import { Locale } from "./locale"
 import { canonicalToolName, finiteNumber, webSearchProviderLabel } from "./tool-display"
+import { translate, type Translator } from "../i18n"
+
+const englishTranslator: Translator = (key, params) => translate("en", key, params)
 
 type Dict = Record<string, unknown>
 
@@ -23,6 +26,7 @@ export type PermissionPresentationInput = {
 export function permissionPresentation(
   source: PermissionPresentationInput,
   formatPath: (value: string) => string = (value) => value,
+  t: Translator = englishTranslator,
 ): PermissionPresentation {
   const action = canonicalToolName(source.action)
   const input = normalizeInput(action, source.input)
@@ -35,7 +39,7 @@ export function permissionPresentation(
     const diff = text(first.patch) || text(first.diff) || text(metadata.diff) || undefined
     return {
       icon: "→",
-      title: `Edit ${formatPath(file)}`,
+      title: t("common.permission.info.edit", { path: formatPath(file) }),
       lines: [],
       diff,
       patch: diff ? undefined : text(input.patchText) || undefined,
@@ -45,21 +49,21 @@ export function permissionPresentation(
 
   if (action === "read" || action === "list") {
     const value = text(input.path) || resources[0] || ""
-    const title = action === "read" ? "Read" : "List"
     return {
       icon: "→",
-      title: `${title} ${formatPath(value)}`,
-      lines: value ? [`Path: ${formatPath(value)}`] : [],
+      title: t(action === "read" ? "common.permission.info.read" : "common.permission.info.list", {
+        path: formatPath(value),
+      }),
+      lines: value ? [t("common.permission.info.path", { path: formatPath(value) })] : [],
     }
   }
 
   if (action === "glob" || action === "grep") {
     const pattern = text(input.pattern) || resources[0] || ""
-    const title = action === "glob" ? "Glob" : "Grep"
     return {
       icon: "✱",
-      title: `${title} "${pattern}"`,
-      lines: pattern ? [`Pattern: ${pattern}`] : [],
+      title: t(action === "glob" ? "common.permission.info.glob" : "common.permission.info.grep", { pattern }),
+      lines: pattern ? [t("common.permission.info.pattern", { pattern })] : [],
     }
   }
 
@@ -67,7 +71,7 @@ export function permissionPresentation(
     const command = text(input.command)
     return {
       icon: "#",
-      title: "Shell command",
+      title: t("common.permission.info.shellCommand"),
       lines: command ? [`$ ${command}`] : resources.map((item) => `- ${item}`),
     }
   }
@@ -77,7 +81,7 @@ export function permissionPresentation(
     const description = text(input.description)
     return {
       icon: "#",
-      title: `${Locale.titlecase(agent)} Subagent`,
+      title: t("common.permission.info.subagent", { agent: Locale.titlecase(agent) }),
       lines: description ? [`◉ ${description}`] : [],
     }
   }
@@ -86,18 +90,20 @@ export function permissionPresentation(
     const url = text(input.url) || text(metadata.url)
     return {
       icon: "%",
-      title: `WebFetch ${url}`,
-      lines: url ? [`URL: ${url}`] : [],
+      title: t("common.permission.info.webfetch", { url }).trim(),
+      lines: url ? [t("common.permission.info.url", { url })] : [],
     }
   }
 
   if (action === "websearch") {
     const query = text(input.query) || text(metadata.query)
-    const title = webSearchProviderLabel(metadata.provider)
+    const title = webSearchProviderLabel(metadata.provider, t)
     return {
       icon: "◈",
-      title: query ? `${title} "${query}"` : title,
-      lines: query ? [`Query: ${query}`] : [],
+      title: query
+        ? t("common.permission.info.websearch", { provider: title, query })
+        : t("common.permission.info.websearchProvider", { provider: title }),
+      lines: query ? [t("common.permission.info.query", { query })] : [],
     }
   }
 
@@ -107,13 +113,16 @@ export function permissionPresentation(
     const line = finiteNumber(input.line)
     const character = finiteNumber(input.character)
     const position = line !== undefined && character !== undefined ? `${line}:${character}` : undefined
+    const path = file ? `${formatPath(file)}${position ? `:${position}` : ""}` : undefined
     return {
       icon: "→",
-      title: `LSP ${operation}${file ? ` ${formatPath(file)}${position ? `:${position}` : ""}` : ""}`,
+      title: path
+        ? t("common.permission.info.lspFile", { operation, file: path })
+        : t("common.permission.info.lsp", { operation }),
       lines: [
-        ...(input.operation ? [`Operation: ${operation}`] : []),
-        ...(file ? [`Path: ${formatPath(file)}`] : []),
-        ...(position ? [`Position: ${position}`] : []),
+        ...(input.operation ? [t("common.permission.info.operation", { operation })] : []),
+        ...(file ? [t("common.permission.info.path", { path: formatPath(file) })] : []),
+        ...(position ? [t("common.permission.info.position", { position })] : []),
       ],
     }
   }
@@ -123,7 +132,7 @@ export function permissionPresentation(
     const directory = wildcardDirectory(raw)
     return {
       icon: "←",
-      title: `Access external directory ${formatPath(directory)}`,
+      title: t("common.permission.info.externalDirectory", { directory: formatPath(directory) }),
       lines: resources.map((item) => `- ${item}`),
     }
   }
@@ -131,15 +140,15 @@ export function permissionPresentation(
   if (action === "doom_loop") {
     return {
       icon: "⟳",
-      title: "Continue after repeated failures",
-      lines: ["This keeps the session running despite repeated failures."],
+      title: t("common.permission.info.doom"),
+      lines: [t("common.permission.info.doomLine")],
     }
   }
 
   return {
     icon: "⚙",
-    title: `Call tool ${source.action}`,
-    lines: [`Tool: ${source.action}`],
+    title: t("common.permission.info.callTool", { tool: source.action }),
+    lines: [t("common.permission.info.tool", { tool: source.action })],
   }
 }
 
@@ -149,22 +158,6 @@ function wildcardDirectory(value: string) {
   const prefix = value.slice(0, wildcard)
   if (/^[\\/]+$/.test(prefix) || /^[A-Za-z]:[\\/]$/.test(prefix)) return prefix
   return prefix.replace(/[\\/]+$/, "")
-}
-
-export function permissionAlwaysLines(input: { action: string; save?: ReadonlyArray<string> }): string[] {
-  const save = input.save ?? []
-  if (save.length === 1 && save[0] === "*") {
-    return [`This will allow ${input.action} until OpenCode is restarted.`]
-  }
-  return ["This will allow the following patterns until OpenCode is restarted.", ...save.map((item) => `- ${item}`)]
-}
-
-export function permissionOptionLabel(option: "once" | "always" | "reject" | "confirm" | "cancel") {
-  if (option === "once") return "Allow once"
-  if (option === "always") return "Allow always"
-  if (option === "reject") return "Reject"
-  if (option === "confirm") return "Confirm"
-  return "Cancel"
 }
 
 function normalizeInput(action: string, value: unknown): Dict {

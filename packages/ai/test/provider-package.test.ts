@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test"
-import { model } from "@opencode-ai/ai/providers/openai"
+import { LLM } from "@opencode-ai/ai"
+import { model, webSearch } from "@opencode-ai/ai/providers/openai"
+import { compileRequest } from "@opencode-ai/ai/route/client"
+import { Effect } from "effect"
 
 describe("provider package entrypoints", () => {
   test("semantic API aliases expose the same contract", async () => {
@@ -80,9 +83,36 @@ describe("provider package entrypoints", () => {
     expect(selected.route.defaults.limits).toEqual({ context: 200_000, output: 64_000 })
   })
 
+  test("lowers flat OpenAI package settings into the Responses request", async () => {
+    const selected = model("gpt-5.6-sol", {
+      apiKey: "fixture",
+      reasoningEffort: "max",
+      reasoningSummary: "auto",
+      textVerbosity: "high",
+      include: ["reasoning.encrypted_content"],
+    })
+    const prepared = await Effect.runPromise(compileRequest(LLM.request({ model: selected, prompt: "Hello" })))
+
+    expect(prepared.body).toMatchObject({
+      store: false,
+      reasoning: { effort: "max", summary: "auto" },
+      text: { verbosity: "high" },
+      include: ["reasoning.encrypted_content"],
+    })
+  })
+
   test("selects transport without changing the semantic API", () => {
     expect(model("gpt-5", { apiKey: "fixture" }).route.id).toBe("openai-responses")
     expect(model("gpt-5", { apiKey: "fixture", transport: "websocket" }).route.id).toBe("openai-responses-websocket")
+  })
+
+  test("exports the OpenAI hosted web search factory", async () => {
+    const selected = model("gpt-5", { apiKey: "fixture" })
+    const prepared = await Effect.runPromise(
+      compileRequest(LLM.request({ model: selected, prompt: "Search", tools: [webSearch()] })),
+    )
+
+    expect(prepared.body.tools).toEqual([{ type: "web_search" }])
   })
 
   test("maps OpenAI-compatible Responses settings onto the executable model", async () => {

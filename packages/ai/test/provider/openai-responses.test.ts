@@ -18,6 +18,7 @@ import { compileRequest } from "../../src/route/client.js"
 import * as Azure from "../../src/providers/azure.js"
 import * as OpenAI from "../../src/providers/openai.js"
 import * as XAI from "../../src/providers/xai.js"
+import * as OpenAICompatibleResponses from "../../src/protocols/openai-compatible-responses.js"
 import * as OpenAIResponses from "../../src/protocols/openai-responses.js"
 import * as ProviderShared from "../../src/protocols/shared.js"
 import { continuationRequest, nativeOpenAIResponsesContinuation } from "../continuation-scenarios.js"
@@ -106,14 +107,132 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
-  it.effect("lowers semantic service tier options", () =>
+  it.effect("lowers the OpenAI fast service tier", () =>
     Effect.gen(function* () {
-      const input = LLMRequest.update(request, { providerOptions: { openai: { serviceTier: "priority" } } })
-      expect(input.providerOptions).toEqual({ openai: { serviceTier: "priority" } })
+      const input = LLMRequest.update(request, { providerOptions: { openai: { serviceTier: "fast" } } })
+      expect(input.providerOptions).toEqual({ openai: { serviceTier: "fast" } })
       const prepared = yield* compileRequest(input)
 
-      expect(prepared.body).toMatchObject({ service_tier: "priority" })
+      expect(prepared.body).toMatchObject({ service_tier: "fast" })
       expect(prepared.body).not.toHaveProperty("serviceTier")
+    }),
+  )
+
+  it.effect("does not infer native compact support from public route identifiers", () =>
+    Effect.sync(() => {
+      const collision = OpenAICompatibleResponses.route
+        .with({
+          id: "openai-responses",
+          provider: "openai",
+          endpoint: { baseURL: "https://compatible.example/v1" },
+        })
+        .model({ id: "gpt-compatible" })
+
+      expect(OpenAIResponses.supportsCompaction(model)).toBe(true)
+      expect(OpenAIResponses.supportsCompaction(collision)).toBe(false)
+    }),
+  )
+
+  it.effect("compacts a native OpenAI Responses request through the JSON endpoint", () =>
+    Effect.gen(function* () {
+      const output = [
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Keep this recent turn." }],
+        },
+        { type: "compaction", id: "cmp_1", encrypted_content: "encrypted-checkpoint" },
+      ]
+      let middlewareCalled = false
+      const compacted = yield* Effect.gen(function* () {
+        const executor = yield* RequestExecutor.Service
+        return yield* OpenAIResponses.compact(
+          LLM.request({
+            model: OpenAI.configure({
+              apiKey: "compact-key",
+              baseURL: "https://api.openai.test/v1/",
+              headers: { "x-openai-test": "compact" },
+              queryParams: { "api-version": "compact-v1" },
+            }).responses("gpt-5.2"),
+            system: "Keep the project constraints.",
+            prompt: "Keep this recent turn.",
+            promptCacheKey: "session_compact_1",
+            providerOptions: {
+              openai: {
+                instructions: "Compact without losing exact identifiers.",
+                serviceTier: "fast",
+                store: false,
+              },
+            },
+            http: { body: { store: true, temperature: 0.7, unsupported_compact_field: "ignored" } },
+          }),
+          executor.execute,
+          {
+            http: (request, handler) =>
+              Effect.sync(() => {
+                middlewareCalled = true
+                return request
+              }).pipe(Effect.flatMap(handler)),
+          },
+        )
+      }).pipe(
+        Effect.provide(
+          dynamicResponse((input) =>
+            Effect.gen(function* () {
+              const web = yield* HttpClientRequest.toWeb(input.request).pipe(Effect.orDie)
+              expect(web.url).toBe("https://api.openai.test/v1/responses/compact?api-version=compact-v1")
+              expect(web.headers.get("authorization")).toBe("Bearer compact-key")
+              expect(web.headers.get("x-openai-test")).toBe("compact")
+              expect(JSON.parse(input.text)).toEqual({
+                model: "gpt-5.2",
+                input: [
+                  { role: "system", content: "Keep the project constraints." },
+                  { role: "user", content: [{ type: "input_text", text: "Keep this recent turn." }] },
+                ],
+                instructions: "Compact without losing exact identifiers.",
+                prompt_cache_key: "session_compact_1",
+                service_tier: "fast",
+              })
+              return input.respond(ProviderShared.encodeJson({ object: "response.compaction", output }), {
+                headers: { "content-type": "application/json" },
+              })
+            }),
+          ),
+        ),
+      )
+
+      expect(middlewareCalled).toBe(true)
+      expect(compacted).toEqual(output)
+    }),
+  )
+
+  it.effect("rejects a compact response without a replayable checkpoint", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.gen(function* () {
+        const executor = yield* RequestExecutor.Service
+        return yield* OpenAIResponses.compact(
+          LLM.request({ model, prompt: "Compact this." }),
+          executor.execute,
+        )
+      }).pipe(
+        Effect.provide(
+          dynamicResponse((input) =>
+            Effect.succeed(
+              input.respond(
+                ProviderShared.encodeJson({
+                  object: "response.compaction",
+                  output: [{ type: "message", role: "user", content: [] }],
+                }),
+                { headers: { "content-type": "application/json" } },
+              ),
+            ),
+          ),
+        ),
+        Effect.flip,
+      )
+
+      expect(error.reason._tag).toBe("InvalidProviderOutput")
+      expect(error.message).toContain("replayable compaction item")
     }),
   )
 
@@ -272,6 +391,7 @@ describe("OpenAI Responses route", () => {
             "gpt-4.1-mini",
           ),
           prompt: "Say hello.",
+          tools: [OpenAI.webSearch()],
         }),
       ).pipe(Effect.provide(LLMClient.layer.pipe(Layer.provide(deps))))
 
@@ -284,6 +404,7 @@ describe("OpenAI Responses route", () => {
         model: "gpt-4.1-mini",
         input: [{ role: "user", content: [{ type: "input_text", text: "Say hello." }] }],
         store: false,
+        tools: [{ type: "web_search" }],
       })
     }),
   )
@@ -685,6 +806,7 @@ describe("OpenAI Responses route", () => {
           promptCacheKey: "session_123",
           providerOptions: {
             openai: {
+              compactThreshold: 120_000,
               reasoningEffort: "high",
               reasoningSummary: "auto",
               include: ["reasoning.encrypted_content"],
@@ -694,6 +816,7 @@ describe("OpenAI Responses route", () => {
       )
 
       expect(prepared.body.store).toBe(false)
+      expect(prepared.body.context_management).toEqual([{ type: "compaction", compact_threshold: 120_000 }])
       expect(prepared.body.prompt_cache_key).toBe("session_123")
       expect(prepared.body.include).toEqual(["reasoning.encrypted_content"])
       expect(prepared.body.reasoning).toEqual({ effort: "high", summary: "auto" })
@@ -1362,6 +1485,141 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
+  it.effect("lowers the hosted OpenAI web search tool", () =>
+    Effect.gen(function* () {
+      const prepared = yield* compileRequest(
+        LLM.request({
+          model,
+          prompt: "Find the latest release notes.",
+          tools: [
+            OpenAI.webSearch({
+              filters: { allowedDomains: ["openai.com"] },
+              searchContextSize: "high",
+              userLocation: { type: "approximate", country: "US", timezone: "America/New_York" },
+            }),
+          ],
+          toolChoice: "web_search",
+        }),
+      )
+
+      expect(prepared.body.tools).toEqual([
+        {
+          type: "web_search",
+          filters: { allowed_domains: ["openai.com"] },
+          search_context_size: "high",
+          user_location: { type: "approximate", country: "US", timezone: "America/New_York" },
+        },
+      ])
+      expect(prepared.body.tool_choice).toEqual({ type: "web_search" })
+    }),
+  )
+
+  it.effect("rejects invalid hosted web search options locally", () =>
+    Effect.gen(function* () {
+      const error = yield* compileRequest(
+        LLM.request({
+          model,
+          prompt: "Search the web.",
+          tools: [OpenAI.webSearch({ searchContextSize: "wide" as "high" })],
+        }),
+      ).pipe(Effect.flip)
+
+      expect(error.reason._tag).toBe("InvalidRequest")
+      expect(error.message).toContain("web search tool options are invalid")
+    }),
+  )
+
+  it.effect("enforces the native Responses input item limit before transport", () =>
+    Effect.gen(function* () {
+      const messages = Array.from({ length: 16_385 }, () => Message.user("item"))
+      const accepted = yield* compileRequest(LLM.request({ model, messages: messages.slice(0, 16_384) }))
+      expect(accepted.body.input).toHaveLength(16_384)
+
+      const error = yield* compileRequest(LLM.request({ model, messages })).pipe(Effect.flip)
+      expect(error.reason).toMatchObject({
+        _tag: "InvalidRequest",
+        parameter: "input",
+        classification: "context-overflow",
+      })
+      expect(error.message).toContain("16385 items; maximum is 16384")
+    }),
+  )
+
+  it.effect("replays a stateless hosted tool item exactly once", () =>
+    Effect.gen(function* () {
+      const item = {
+        type: "web_search_call",
+        id: "ws_1",
+        status: "completed",
+        action: { type: "search", query: "effect 4" },
+      }
+      const metadata = { openai: { itemId: "ws_1", hostedItem: item } }
+      const prepared = yield* compileRequest(
+        LLM.request({
+          model,
+          messages: [
+            Message.assistant([
+              ToolCallPart.make({
+                id: "ws_1",
+                name: "web_search",
+                input: item.action,
+                providerExecuted: true,
+                providerMetadata: metadata,
+              }),
+              ToolResultPart.make({
+                id: "ws_1",
+                name: "web_search",
+                result: { type: "json", value: item },
+                providerExecuted: true,
+                providerMetadata: metadata,
+              }),
+            ]),
+            Message.user("Continue."),
+          ],
+          providerOptions: { openai: { store: false } },
+        }),
+      )
+
+      expect(prepared.body.input).toEqual([
+        item,
+        { role: "user", content: [{ type: "input_text", text: "Continue." }] },
+      ])
+    }),
+  )
+
+  it.effect("replays an opaque remote compaction checkpoint exactly", () =>
+    Effect.gen(function* () {
+      const output = [
+        { type: "compaction", id: "cmp_1", encrypted_content: "opaque-checkpoint" },
+        { type: "message", id: "msg_remote", role: "assistant", content: [] },
+      ]
+      const prepared = yield* compileRequest(
+        LLM.request({
+          model,
+          messages: [
+            Message.make({
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: "[OpenCode remote compaction checkpoint]",
+                  providerMetadata: { opencode: { remoteCompaction: { output } } },
+                },
+              ],
+            }),
+            Message.user("Continue."),
+          ],
+          providerOptions: { openai: { store: false } },
+        }),
+      )
+
+      expect(prepared.body.input).toEqual([
+        ...output,
+        { role: "user", content: [{ type: "input_text", text: "Continue." }] },
+      ])
+    }),
+  )
+
   it.effect("continues stateless hosted image generation with the generated image", () =>
     Effect.gen(function* () {
       const imageTool = OpenAI.imageGeneration({ action: "edit" })
@@ -1654,7 +1912,7 @@ describe("OpenAI Responses route", () => {
           name: "web_search",
           input: { type: "search", query: "effect 4" },
           providerExecuted: true,
-          providerMetadata: { openai: { itemId: "ws_1" } },
+          providerMetadata: { openai: { itemId: "ws_1", hostedItem: item } },
         },
         {
           type: "tool-result",
@@ -1662,8 +1920,54 @@ describe("OpenAI Responses route", () => {
           name: "web_search",
           result: { type: "json", value: item },
           providerExecuted: true,
-          providerMetadata: { openai: { itemId: "ws_1" } },
+          providerMetadata: { openai: { itemId: "ws_1", hostedItem: item } },
         },
+      ])
+    }),
+  )
+
+  it.effect("emits durable checkpoint items before hosted tool events", () =>
+    Effect.gen(function* () {
+      const boundary = {
+        type: "compaction",
+        id: "cmp_1",
+        encrypted_content: "opaque-checkpoint",
+      }
+      const hosted = {
+        type: "web_search_call",
+        id: "ws_1",
+        status: "completed",
+        action: { type: "search", query: "effect 4" },
+      }
+      const response = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents(
+              { type: "response.output_item.added", item: { type: "compaction", id: "cmp_1" } },
+              { type: "response.output_item.done", item: boundary },
+              { type: "response.output_item.done", item: hosted },
+              { type: "response.completed", response: { usage: { input_tokens: 5, output_tokens: 1 } } },
+            ),
+          ),
+        ),
+      )
+
+      expect(
+        response.events
+          .filter(
+            (event) =>
+              LLMEvent.is.providerCompactionStart(event) ||
+              LLMEvent.is.providerCheckpoint(event) ||
+              LLMEvent.is.toolCall(event) ||
+              LLMEvent.is.toolResult(event),
+          )
+          .map((event) => ({ type: event.type, ...(event.type === "provider-checkpoint" ? { reset: event.reset } : {}) })),
+      ).toEqual([
+        { type: "provider-compaction-start" },
+        { type: "provider-checkpoint", reset: true },
+        { type: "provider-checkpoint", reset: false },
+        { type: "tool-call" },
+        { type: "tool-result" },
       ])
     }),
   )
@@ -1744,7 +2048,7 @@ describe("OpenAI Responses route", () => {
         name: "code_interpreter",
         input: { code: "print(1+1)", container_id: "cnt_xyz" },
         providerExecuted: true,
-        providerMetadata: { openai: { itemId: "ci_1" } },
+        providerMetadata: { openai: { itemId: "ci_1", hostedItem: item } },
       })
       const toolResult = response.events.find((event) => event.type === "tool-result")
       expect(toolResult).toEqual({
@@ -1753,7 +2057,7 @@ describe("OpenAI Responses route", () => {
         name: "code_interpreter",
         result: { type: "json", value: item },
         providerExecuted: true,
-        providerMetadata: { openai: { itemId: "ci_1" } },
+        providerMetadata: { openai: { itemId: "ci_1", hostedItem: item } },
       })
     }),
   )
@@ -1966,6 +2270,33 @@ describe("OpenAI Responses route", () => {
         _tag: "InvalidRequest",
         message: "context_length_exceeded: prompt too long",
         classification: "context-overflow",
+      })
+    }),
+  )
+
+  it.effect("classifies proxy stream read errors as incomplete streams", () =>
+    Effect.gen(function* () {
+      const error = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents({
+              type: "error",
+              sequence_number: 0,
+              error: {
+                type: "upstream_error",
+                code: "stream_read_error",
+                message: "stream_read_error",
+              },
+            }),
+          ),
+        ),
+        Effect.flip,
+      )
+
+      expect(error.reason).toMatchObject({
+        _tag: "InvalidProviderOutput",
+        message: "stream_read_error",
+        classification: "incomplete-stream",
       })
     }),
   )

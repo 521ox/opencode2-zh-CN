@@ -1,14 +1,15 @@
 export * as SessionCompaction from "./compaction.js"
 
 import { LLM, LLMClient, AIError, LLMEvent, Message, type LLMRequest, type LanguageModel } from "@opencode-ai/ai"
-import type { StreamOptions } from "@opencode-ai/ai/route"
+import * as OpenAIResponses from "@opencode-ai/ai/protocols/openai-responses"
+import { RequestExecutor, type StreamOptions } from "@opencode-ai/ai/route"
 import { SessionError } from "@opencode-ai/schema/session-error"
 import { Document, type Entry } from "@opencode-ai/schema/config"
 import { Context, Effect, Layer, Stream } from "effect"
 import { Config } from "../config.js"
 import { Bus } from "../bus.js"
 import { makeLocationNode } from "@opencode-ai/util/effect/app-node"
-import { llmClient } from "../effect/app-node-platform.js"
+import { llmClient, requestExecutor } from "../effect/app-node-platform.js"
 import { SessionEvent } from "./event.js"
 import type { SessionMessage } from "./message.js"
 import { SessionModelHeaders } from "./model-headers.js"
@@ -28,6 +29,10 @@ const DEFAULT_BUFFER = 20_000
 const DEFAULT_KEEP_TOKENS = 15_000
 const OUTPUT_TOKEN_MAX = 32_000
 const TOOL_OUTPUT_MAX_CHARS = 2_000
+const NATIVE_OPENAI_RESPONSES_PACKAGES = new Set([
+  "@opencode-ai/ai/providers/openai",
+  "@opencode-ai/ai/providers/openai/responses",
+])
 const SUMMARY_TEMPLATE = `Output exactly the Markdown structure shown inside <template> and keep the section order unchanged. Do not include the <template> tags in your response.
 <template>
 ## Objective
@@ -72,17 +77,25 @@ type Dependencies = {
   readonly llm: {
     readonly stream: (request: LLMRequest, options?: StreamOptions) => Stream.Stream<LLMEvent, AIError>
   }
+  readonly http: RequestExecutor.Interface
   readonly models: SessionRunnerModel.Interface
   readonly config: Settings
   readonly hooks: PluginHooks.Interface
+}
+
+export type RemoteRequest = {
+  readonly request: LLMRequest
+  readonly options?: StreamOptions
 }
 
 export type AutoInput = {
   readonly session: SessionSchema.Info
   readonly messages: readonly SessionMessage.Info[]
   readonly model: LanguageModel
+  readonly providerPackage: string
   readonly ref: Ref
   readonly cost: Info["cost"]
+  readonly remote?: RemoteRequest
 }
 
 export type ManualInput = {
@@ -90,9 +103,13 @@ export type ManualInput = {
   readonly messages: readonly SessionMessage.Info[]
   readonly inputID: SessionMessage.ID
   readonly started?: boolean
+  readonly prepareRemote?: () => Effect.Effect<RemoteRequest, unknown>
 }
 
 type RequiredInput = Omit<AutoInput, "ref">
+
+const supportsRemoteCompaction = (input: Pick<AutoInput, "model" | "providerPackage">) =>
+  NATIVE_OPENAI_RESPONSES_PACKAGES.has(input.providerPackage) && OpenAIResponses.supportsCompaction(input.model)
 
 type Plan = {
   readonly session: SessionSchema.Info
@@ -106,12 +123,22 @@ type Plan = {
   readonly started?: boolean
 }
 
+type RemotePlan = {
+  readonly session: SessionSchema.Info
+  readonly request: LLMRequest
+  readonly options?: StreamOptions
+  readonly reason: SessionMessage.Compaction["reason"]
+  readonly inputID?: SessionMessage.ID
+  readonly started?: boolean
+}
+
 export type Outcome =
   | Pick<SessionMessage.CompactionCompleted, "status">
   | Pick<SessionMessage.CompactionFailed, "status" | "error">
 
 export interface Interface {
   readonly required: (input: RequiredInput) => boolean
+  readonly remoteThreshold: (input: RequiredInput) => number | undefined
   readonly compact: (input: AutoInput) => Effect.Effect<Outcome>
   readonly compactManual: (input: ManualInput) => Effect.Effect<Outcome>
 }
@@ -346,7 +373,71 @@ const make = (dependencies: Dependencies) => {
     })
     return { status: "completed" as const }
   })
+  const executeRemote = Effect.fn("SessionCompaction.executeRemote")(function* (plan: RemotePlan) {
+    if (!plan.started)
+      yield* dependencies.bus.publish(SessionEvent.Compaction.Started, {
+        sessionID: plan.session.id,
+        reason: plan.reason,
+        recent: "",
+        remote: true,
+        inputID: plan.inputID,
+      })
+
+    const compacted = yield* OpenAIResponses.compact(plan.request, dependencies.http.execute, plan.options).pipe(
+      Effect.map((output) => ({ output } as const)),
+      Effect.catchTag("AI.Error", (error) => Effect.succeed({ error: toSessionError(error) } as const)),
+      Effect.onInterrupt(() =>
+        plan.reason === "auto"
+          ? failed({
+              sessionID: plan.session.id,
+              reason: plan.reason,
+              error: { type: "compaction.interrupted", message: "Compaction was interrupted" },
+              inputID: plan.inputID,
+            }).pipe(Effect.asVoid)
+          : Effect.void,
+      ),
+    )
+    if ("error" in compacted)
+      return yield* failed({
+        sessionID: plan.session.id,
+        reason: plan.reason,
+        error: compacted.error,
+        inputID: plan.inputID,
+      })
+
+    yield* Effect.forEach(
+      compacted.output,
+      (item, index) =>
+        dependencies.bus.publish(SessionEvent.Compaction.RemoteItem, {
+          sessionID: plan.session.id,
+          reset: index === 0,
+          item,
+        }),
+      { discard: true },
+    )
+    yield* dependencies.bus.publish(SessionEvent.Compaction.Ended, {
+      sessionID: plan.session.id,
+      reason: plan.reason,
+      text: "",
+      recent: "",
+    })
+    return { status: "completed" as const }
+  })
   const compact = Effect.fn("SessionCompaction.compact")(function* (input: AutoInput) {
+    if (supportsRemoteCompaction(input)) {
+      if (!input.remote)
+        return yield* failed({
+          sessionID: input.session.id,
+          reason: "auto",
+          error: { type: "compaction.failed", message: "Remote compaction request was not prepared" },
+        })
+      return yield* executeRemote({
+        session: input.session,
+        request: input.remote.request,
+        options: input.remote.options,
+        reason: "auto",
+      })
+    }
     const content = planContent(input.messages, config.tokens)
     if (content)
       return yield* execute({
@@ -364,25 +455,37 @@ const make = (dependencies: Dependencies) => {
       error,
     })
   })
+  const calculatePromptCeiling = (model: LanguageModel): number | undefined => {
+    const limits = model.route.defaults.limits
+    if (!limits) return undefined
+    const context = limits.context
+    if (context === undefined || context <= 0) return undefined
+    const output = Math.min(limits.output ?? 0, OUTPUT_TOKEN_MAX)
+    const ceiling = Math.min(
+      limits.input === undefined ? Number.POSITIVE_INFINITY : limits.input - config.buffer,
+      context - Math.max(output, config.buffer),
+    )
+    return Number.isSafeInteger(ceiling) && ceiling > 0 ? ceiling : undefined
+  }
+  const remoteThreshold = (input: RequiredInput) => {
+    if (!config.auto) return undefined
+    if (!supportsRemoteCompaction(input)) return undefined
+    return calculatePromptCeiling(input.model)
+  }
   const required = (input: RequiredInput) => {
     if (!config.auto) return false
-    const context = input.model.route.defaults.limits?.context
-    if (context === undefined || context <= 0) return false
+    if (remoteThreshold(input) !== undefined) return false
+    const ceiling = calculatePromptCeiling(input.model)
+    if (ceiling === undefined) return false
     const last = input.messages.findLast(
       (message): message is SessionMessage.Assistant & { tokens: NonNullable<SessionMessage.Assistant["tokens"]> } =>
         message.type === "assistant" && message.tokens !== undefined,
     )
     if (!last) return false
-    const limits = input.model.route.defaults.limits
-    const output = Math.min(limits?.output ?? 0, OUTPUT_TOKEN_MAX)
-    const promptCeiling = Math.min(
-      limits?.input === undefined ? Number.POSITIVE_INFINITY : limits.input - config.buffer,
-      context - Math.max(output, config.buffer),
-    )
     const used =
       last.tokens.input + last.tokens.output + last.tokens.reasoning + last.tokens.cache.read + last.tokens.cache.write
     if (used <= 0) return false
-    return used >= promptCeiling
+    return used >= ceiling
   }
   const compactManual = Effect.fn("SessionCompaction.compactManual")(function* (input: ManualInput) {
     const content = planContent(input.messages, config.tokens)
@@ -404,6 +507,34 @@ const make = (dependencies: Dependencies) => {
       ),
     )
     if ("status" in resolved) return resolved
+    if (supportsRemoteCompaction(resolved)) {
+      if (!input.prepareRemote)
+        return yield* failed({
+          sessionID: input.session.id,
+          reason: "manual",
+          error: { type: "compaction.failed", message: "Remote compaction request was not prepared" },
+          inputID: input.inputID,
+        })
+      const prepared = yield* input.prepareRemote().pipe(
+        Effect.map((remote) => ({ remote } as const)),
+        Effect.catch((error) => Effect.succeed({ error: toSessionError(error) } as const)),
+      )
+      if ("error" in prepared)
+        return yield* failed({
+          sessionID: input.session.id,
+          reason: "manual",
+          error: prepared.error,
+          inputID: input.inputID,
+        })
+      return yield* executeRemote({
+        session: input.session,
+        request: prepared.remote.request,
+        options: prepared.remote.options,
+        reason: "manual",
+        inputID: input.inputID,
+        started: input.started,
+      })
+    }
     return yield* execute({
       session: input.session,
       model: resolved.model,
@@ -417,6 +548,7 @@ const make = (dependencies: Dependencies) => {
   })
   return Service.of({
     required,
+    remoteThreshold,
     compact,
     compactManual,
   })
@@ -427,16 +559,17 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const bus = yield* Bus.Service
     const llm = yield* LLMClient.Service
+    const http = yield* RequestExecutor.Service
     const config = yield* Config.Service
     const models = yield* SessionRunnerModel.Service
     const app = yield* App.Metadata
     const hooks = yield* PluginHooks.Service
-    return make({ bus, llm, models, config: settings(yield* config.entries()), app, hooks })
+    return make({ bus, llm, http, models, config: settings(yield* config.entries()), app, hooks })
   }),
 )
 
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [Bus.node, llmClient, Config.node, SessionRunnerModel.node, App.node, PluginHooks.node],
+  deps: [Bus.node, llmClient, requestExecutor, Config.node, SessionRunnerModel.node, App.node, PluginHooks.node],
 })

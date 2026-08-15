@@ -571,6 +571,56 @@ describe("Config", () => {
     }),
   )
 
+  it.effect("migrates the explicit V1 native OpenAI selector without requiring npm metadata", () =>
+    Effect.sync(() => {
+      const migrated = ConfigMigrateV1.migrate({
+        provider: {
+          mycodex: {
+            sdk: "opencode-openai",
+            npm: "@ai-sdk/openai",
+            options: {
+              apiKey: "secret",
+              baseURL: "https://example.test/v1",
+            },
+            models: {
+              inherited: {},
+              legacyMetadata: { provider: { npm: "@ai-sdk/openai" } },
+              compatibleOverride: { provider: { npm: "@ai-sdk/openai-compatible" } },
+            },
+          },
+          nativeWithoutNpm: {
+            sdk: "opencode-openai",
+            api: "https://native.example.test/v1",
+          },
+          explicitAISDK: {
+            sdk: "ai-sdk",
+            npm: "@ai-sdk/openai",
+          },
+        },
+      })
+
+      expect(migrated.providers?.mycodex).toMatchObject({
+        package: "@opencode-ai/ai/providers/openai",
+        settings: {
+          apiKey: "secret",
+          baseURL: "https://example.test/v1",
+        },
+        models: {
+          inherited: {},
+          legacyMetadata: {},
+          compatibleOverride: { package: Provider.aisdk("@ai-sdk/openai-compatible") },
+        },
+      })
+      expect(migrated.providers?.nativeWithoutNpm).toMatchObject({
+        package: "@opencode-ai/ai/providers/openai",
+        settings: { baseURL: "https://native.example.test/v1" },
+      })
+      expect(migrated.providers?.explicitAISDK).toMatchObject({
+        package: Provider.aisdk("@ai-sdk/openai"),
+      })
+    }),
+  )
+
   it.effect("renames old provider IDs while migrating v1 configuration", () =>
     Effect.sync(() => {
       const migrated = ConfigMigrateV1.migrate({
@@ -1151,6 +1201,7 @@ describe("Config", () => {
             })
             expect(documents[0]?.info.compaction).toEqual({
               auto: true,
+              prune: false,
               keep: { tokens: 2000 },
               buffer: 10000,
             })

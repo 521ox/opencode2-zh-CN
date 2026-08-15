@@ -184,6 +184,9 @@ const resolveRequestOptions = (request: LLMRequest) => {
   })
 }
 
+/** Resolve route/model/request defaults and cache policy for any route-owned operation. */
+export const resolveRequest = (request: LLMRequest) => applyCachePolicy(resolveRequestOptions(request))
+
 export interface MakeInput<Body, Frame, Event, State> {
   /** Route id used in diagnostics and prepared request metadata. */
   readonly id: string
@@ -380,7 +383,7 @@ export function make<Body, Prepared, Frame, Event, State>(
 }
 
 const compile = Effect.fn("LLM.compile")(function* (request: LLMRequest, options?: StreamOptions) {
-  const resolved = applyCachePolicy(resolveRequestOptions(request))
+  const resolved = resolveRequest(request)
   const route = resolved.model.route
 
   const body = yield* route.body

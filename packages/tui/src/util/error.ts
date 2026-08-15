@@ -1,10 +1,13 @@
 import { isRecord } from "./record"
+import { translate, type Translator } from "../i18n"
+
+const englishTranslator: Translator = (key, params) => translate("en", key, params)
 
 type ConfigIssue = { message: string; path: string[] }
 
-export function cliErrorMessage(input: unknown): string | undefined {
+export function cliErrorMessage(input: unknown, t: Translator = englishTranslator): string | undefined {
   if (input instanceof Error && isRecord(input.cause) && "body" in input.cause) {
-    const formatted = cliErrorMessage(input.cause.body)
+    const formatted = cliErrorMessage(input.cause.body, t)
     if (formatted) return formatted
   }
 
@@ -22,26 +25,33 @@ export function cliErrorMessage(input: unknown): string | undefined {
       ? model.suggestions.filter((item): item is string => typeof item === "string")
       : []
     return [
-      `Model not found: ${field(model, "providerID")}/${field(model, "modelID")}`,
-      ...(suggestions.length ? ["Did you mean: " + suggestions.join(", ")] : []),
-      "Try: `opencode models` to list available models",
-      "Or check your config (opencode.json) provider/model names",
+      t("common.error.modelNotFound", {
+        providerID: field(model, "providerID") ?? "",
+        modelID: field(model, "modelID") ?? "",
+      }),
+      ...(suggestions.length ? [t("common.error.didYouMean", { suggestions: suggestions.join(", ") })] : []),
+      t("common.error.listModels"),
+      t("common.error.checkModelConfig"),
     ].join("\n")
   }
 
   const provider = configData(input, "ProviderInitError")
   if (provider)
-    return `Failed to initialize provider "${field(provider, "providerID")}". Check credentials and configuration.`
+    return t("common.error.providerInit", { providerID: field(provider, "providerID") ?? "" })
 
   const json = configData(input, "ConfigJsonError")
   if (json) {
     const message = field(json, "message")
-    return `Config file at ${field(json, "path")} is not valid JSON(C)` + (message ? `: ${message}` : "")
+    return t("common.error.configJson", { path: field(json, "path") ?? "" }) + (message ? `: ${message}` : "")
   }
 
   const directory = configData(input, "ConfigDirectoryTypoError")
   if (directory) {
-    return `Directory "${field(directory, "dir")}" in ${field(directory, "path")} is not valid. Rename the directory to "${field(directory, "suggestion")}" or remove it. This is a common typo.`
+    return t("common.error.configDirectoryTypo", {
+      directory: field(directory, "dir") ?? "",
+      path: field(directory, "path") ?? "",
+      suggestion: field(directory, "suggestion") ?? "",
+    })
   }
 
   const frontmatter = configData(input, "ConfigFrontmatterError")
@@ -62,7 +72,9 @@ export function cliErrorMessage(input: unknown): string | undefined {
         })
       : []
     return [
-      `Configuration is invalid${path && path !== "config" ? ` at ${path}` : ""}` + (message ? `: ${message}` : ""),
+      (path && path !== "config"
+        ? t("common.error.configInvalidAt", { path })
+        : t("common.error.configInvalid")) + (message ? `: ${message}` : ""),
       ...issues.map((issue) => "↳ " + issue.message + " " + issue.path.join(".")),
     ].join("\n")
   }
@@ -70,7 +82,7 @@ export function cliErrorMessage(input: unknown): string | undefined {
   if (tagged(input, "UICancelledError") || named(input, "UICancelledError")) return ""
   if (isRecord(input) && named(input, "MCPFailed")) {
     const name = isRecord(input.data) ? field(input.data, "name") : undefined
-    return `MCP server "${name}" failed. Note, opencode does not support MCP authentication yet.`
+    return t("common.error.mcpFailed", { name: name ?? "" })
   }
   return undefined
 }

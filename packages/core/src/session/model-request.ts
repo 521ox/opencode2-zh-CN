@@ -1,12 +1,15 @@
 export * as SessionModelRequest from "./model-request.js"
 
 import { LLM, Message, SystemPart, type LLMRequest } from "@opencode-ai/ai"
+import { webSearch as openAIWebSearch } from "@opencode-ai/ai/providers/openai"
 import type { StreamOptions } from "@opencode-ai/ai/route"
+import type { Entry } from "@opencode-ai/schema/config"
 import type { Content } from "@opencode-ai/schema/tool"
 import { SessionError } from "@opencode-ai/schema/session-error"
-import { Cause, Config, Context, Effect, Layer, Result } from "effect"
+import { Cause, Config as EffectConfig, Context, Effect, Layer, Result } from "effect"
 import { makeLocationNode } from "@opencode-ai/util/effect/app-node"
 import { App } from "../app.js"
+import { Config } from "../config.js"
 import { Model } from "../model.js"
 import { Permission } from "../permission.js"
 import { PluginHooks } from "../plugin/hooks.js"
@@ -19,12 +22,25 @@ import { SessionPromptCacheKey } from "./prompt-cache-key.js"
 import { PromptCacheDiagnostics } from "./prompt-cache-diagnostics.js"
 import { MAX_STEPS_PROMPT } from "./runner/max-steps.js"
 import PROMPT_DEFAULT from "./runner/prompt/base.txt"
-import { toLLMMessages } from "./runner/to-llm-message.js"
+import { toolResultTokenBudget, toLLMMessages } from "./runner/to-llm-message.js"
 
 const IMAGE_BYTES_TRIGGER = 25 * 1024 * 1024 // 25 MiB
 const IMAGE_BYTES_TARGET = 15 * 1024 * 1024 // 15 MiB
 const IMAGE_REMOVED =
   "[This image was removed to reduce the request size and is no longer visible. Do not make claims about its contents from memory. If needed, retrieve it again with an available tool or ask the user to attach it again.]"
+const OPENAI_RESPONSES_ROUTES = new Set(["openai-responses", "openai-responses-websocket"])
+
+const pruneToolResults = (entries: readonly Entry[]) =>
+  entries
+    .filter((entry) => entry.type === "document")
+    .flatMap((entry) => (entry.info.compaction?.prune === undefined ? [] : [entry.info.compaction.prune]))
+    .at(-1) ?? false
+
+const promptLimit = (model: SessionContext.Loaded["model"]["model"]) => {
+  const limits = model.route.defaults.limits
+  const values = [limits?.context, limits?.input].filter((value): value is number => value !== undefined && value > 0)
+  return values.length ? Math.min(...values) : undefined
+}
 
 /** Failures a prepared execution can surface: infrastructure errors plus user declines resurfaced from the defect tunnel. */
 export type ExecuteError = Tool.Error | Permission.DeclinedError | QuestionTool.CancelledError
@@ -58,6 +74,7 @@ interface Prepared {
 interface PrepareInput {
   readonly context: SessionContext.Loaded
   readonly step: number
+  readonly compactThreshold?: number
 }
 
 const mimeToModality = (mime: string) => {
@@ -166,8 +183,9 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const hooks = yield* PluginHooks.Service
     const app = yield* App.Metadata
-    const diagnostics = yield* Config.boolean("OPENCODE_PROMPT_CACHE_DIAGNOSTICS").pipe(
-      Config.withDefault(false),
+    const config = yield* Config.Service
+    const diagnostics = yield* EffectConfig.boolean("OPENCODE_PROMPT_CACHE_DIAGNOSTICS").pipe(
+      EffectConfig.withDefault(false),
       Effect.orDie,
     )
     const promptCacheSnapshots = diagnostics ? new Map<string, PromptCacheDiagnostics.Snapshot>() : undefined
@@ -185,7 +203,10 @@ export const layer = Layer.effect(
       const system = [agent.info.system ? agent.info.system : PROMPT_DEFAULT, input.context.initial]
         .filter((part) => part.length > 0)
         .map(SystemPart.make)
-      const history = toLLMMessages(input.context.messages, resolved.ref, providerMetadataKey)
+      const toolResultTokens = pruneToolResults(yield* config.entries())
+        ? toolResultTokenBudget(promptLimit(model))
+        : undefined
+      const history = toLLMMessages(input.context.messages, resolved.ref, providerMetadataKey, { toolResultTokens })
       const messages = stepLimitReached ? [...history, Message.assistant(MAX_STEPS_PROMPT)] : history
       const registry = new Map(tools.definitions.map((tool) => [tool.name, tool]))
       // The definition objects we hand to hooks, mapped back to their tools. Hooks rename a
@@ -215,15 +236,33 @@ export const layer = Layer.effect(
           return [[name, { ...tool, description: definition.description, inputSchema: definition.input }] as const]
         }),
       )
+      const nativeOpenAIResponses = OPENAI_RESPONSES_ROUTES.has(model.route.id)
+      const localWebSearchEntry = nativeOpenAIResponses
+        ? Array.from(hooked).find(([, tool]) => tool.name === "websearch")
+        : undefined
+      // Provider-hosted search executes before OpenCode can ask for query-specific permission.
+      // Only advertise it when the agent grants wildcard websearch access. Native Responses
+      // never receives the local search tool, so one model request cannot expose both owners.
+      if (localWebSearchEntry) hooked.delete(localWebSearchEntry[0])
+      const hostedWebSearch =
+        localWebSearchEntry !== undefined &&
+        Permission.evaluate("websearch", "*", agent.info.permissions).effect === "allow"
+          ? openAIWebSearch()
+          : undefined
       const request = LLM.request({
         model,
+        providerOptions:
+          input.compactThreshold === undefined ? undefined : { openai: { compactThreshold: input.compactThreshold } },
         http: {
           headers: SessionModelHeaders.make(session, app),
         },
         promptCacheKey: SessionPromptCacheKey.make(session.id),
         system: context.system,
         messages: boundImages(unsupportedParts(context.messages, resolved.capabilities)),
-        tools: Array.from(hooked, ([name, tool]) => ({ ...tool, name })),
+        tools: [
+          ...Array.from(hooked, ([name, tool]) => ({ ...tool, name })),
+          ...(hostedWebSearch === undefined ? [] : [hostedWebSearch]),
+        ],
         toolChoice: stepLimitReached ? "none" : undefined,
       })
       const options: StreamOptions = {
@@ -275,5 +314,5 @@ export const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [PluginHooks.node, App.node],
+  deps: [PluginHooks.node, App.node, Config.node],
 })

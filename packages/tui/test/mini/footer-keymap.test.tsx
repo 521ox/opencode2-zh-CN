@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { testRender } from "@opentui/solid"
 import { Keymap } from "../../src/context/keymap"
+import { I18nProvider } from "../../src/context/i18n"
 import { resolve } from "../../src/config"
 import { expect, test } from "bun:test"
 import { createSignal } from "solid-js"
@@ -47,8 +48,9 @@ async function renderSubagent(interrupt: "ctrl+i" | "none") {
 
   function Harness() {
     return (
-      <Keymap.Provider config={config}>
-        <RunFooterView
+      <I18nProvider locale="en">
+        <Keymap.Provider config={config}>
+          <RunFooterView
           directory={() => "/tmp"}
           findFiles={async () => []}
           agents={() => []}
@@ -91,8 +93,9 @@ async function renderSubagent(interrupt: "ctrl+i" | "none") {
           onStatus={() => {}}
           onMiniSettingChange={() => {}}
           onSubagentInterrupt={(sessionID) => interrupted.push(sessionID)}
-        />
-      </Keymap.Provider>
+          />
+        </Keymap.Provider>
+      </I18nProvider>
     )
   }
 

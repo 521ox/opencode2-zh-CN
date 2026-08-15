@@ -6,6 +6,7 @@ import { useClient } from "../context/client"
 import { useTheme } from "../context/theme"
 import { useDialog } from "../ui/dialog"
 import { errorMessage } from "../util/error"
+import { useI18n } from "../context/i18n"
 
 export type DialogPairCredentials = {
   readonly username: string
@@ -17,6 +18,7 @@ export function DialogPair(props: { credentials?: DialogPairCredentials }) {
   const dialog = useDialog()
   const dimensions = useTerminalDimensions()
   const theme = useTheme("elevated")
+  const { t } = useI18n()
   const [loadError, setLoadError] = createSignal<unknown>()
   const [showPassword, setShowPassword] = createSignal(false)
   const [passwordHover, setPasswordHover] = createSignal(false)
@@ -54,19 +56,19 @@ export function DialogPair(props: { credentials?: DialogPairCredentials }) {
       <box flexDirection={horizontal() ? "row" : "column"} alignItems={horizontal() ? "flex-start" : "center"} gap={2}>
         <box width={horizontal() ? 29 : "100%"} flexShrink={0} gap={1}>
           <box>
-            <text fg={theme.text.subdued}>This device</text>
+            <text fg={theme.text.subdued}>{t("dialog.pair.thisDevice")}</text>
             <text fg={theme.text.default}>{localhost()}</text>
           </box>
           <box>
-            <text fg={theme.text.subdued}>URLs</text>
+            <text fg={theme.text.subdued}>{t("dialog.pair.urls")}</text>
             <For each={value.urls}>{(url) => <text fg={theme.text.default}>{url}</text>}</For>
           </box>
           <box>
-            <text fg={theme.text.subdued}>Username</text>
+            <text fg={theme.text.subdued}>{t("dialog.pair.username")}</text>
             <text fg={theme.text.default}>{value.username}</text>
           </box>
           <box>
-            <text fg={theme.text.subdued}>Password</text>
+            <text fg={theme.text.subdued}>{t("dialog.pair.password")}</text>
             <text
               fg={passwordHover() ? theme.text.default : theme.text.subdued}
               wrapMode="word"
@@ -79,7 +81,7 @@ export function DialogPair(props: { credentials?: DialogPairCredentials }) {
           </box>
           <Show when={value.urls.some((url) => ["localhost", "127.0.0.1", "[::1]"].includes(new URL(url).hostname))}>
             <text fg={theme.text.subdued} wrapMode="word">
-              Run `opencode service set hostname 0.0.0.0` to access the service remotely.
+              {t("dialog.pair.remoteAccess", { command: "opencode service set hostname 0.0.0.0" })}
             </text>
           </Show>
         </box>
@@ -99,7 +101,7 @@ export function DialogPair(props: { credentials?: DialogPairCredentials }) {
     <box paddingLeft={2} paddingRight={2} paddingBottom={1} gap={1}>
       <box flexDirection="row" justifyContent="space-between">
         <text fg={theme.text.default} attributes={TextAttributes.BOLD}>
-          Pair
+          {t("dialog.pair.title")}
         </text>
         <text fg={theme.text.subdued} onMouseUp={() => dialog.clear()}>
           esc
@@ -108,7 +110,7 @@ export function DialogPair(props: { credentials?: DialogPairCredentials }) {
       <Show
         when={loadError()}
         fallback={
-          <Show when={info()} fallback={<text fg={theme.text.subdued}>Loading server information…</text>}>
+          <Show when={info()} fallback={<text fg={theme.text.subdued}>{t("dialog.pair.loading")}</text>}>
             <Show
               when={dimensions().height >= 36}
               fallback={
@@ -128,10 +130,10 @@ export function DialogPair(props: { credentials?: DialogPairCredentials }) {
         {(error) => (
           <box>
             <text fg={theme.text.feedback.error.default} attributes={TextAttributes.BOLD}>
-              Could not load server information
+              {t("dialog.pair.loadFailed")}
             </text>
             <text fg={theme.text.subdued}>{errorMessage(error())}</text>
-            <text fg={theme.text.subdued}>Close and reopen Pair to try again.</text>
+            <text fg={theme.text.subdued}>{t("dialog.pair.reopen")}</text>
           </box>
         )}
       </Show>

@@ -1,8 +1,9 @@
 import { createMemo } from "solid-js"
+import { useI18n } from "../context/i18n"
 import { DialogSelect, type DialogSelectRef } from "../ui/dialog-select"
 import { type DialogContext } from "../ui/dialog"
 import { COMMAND_PALETTE_COMMAND, Keymap, type KeymapCommand } from "../context/keymap"
-import { DialogConfig, settingID, settings } from "./dialog-config"
+import { DialogConfig, localizeSettings, settingID } from "./dialog-config"
 
 function isSuggestedPaletteCommand(command: KeymapCommand) {
   const suggested = command.suggested
@@ -13,6 +14,7 @@ function isSuggestedPaletteCommand(command: KeymapCommand) {
 
 export function CommandPaletteDialog() {
   const commands = Keymap.useCommands()
+  const { t } = useI18n()
   const shortcuts = Keymap.useShortcuts()
   const options = createMemo(() =>
     commands().flatMap((command) => {
@@ -34,33 +36,41 @@ export function CommandPaletteDialog() {
       }
     }),
   )
-  const settingOptions = settings.map((setting) => ({
-    title: setting.title,
-    category: setting.category,
-    searchText: setting.keywords?.join(" "),
-    searchFooter: `Settings · ${setting.category}`,
-    value: `setting:${settingID(setting)}`,
-    onSelect: (dialog: DialogContext) => {
-      dialog.replace(() => <DialogConfig current={settingID(setting)} />)
-    },
-  }))
+  const settingOptions = createMemo(() =>
+    localizeSettings(t).map((setting) => ({
+      title: setting.title,
+      category: setting.category,
+      searchText: setting.keywords?.join(" "),
+      searchFooter: t("ui.commandPalette.settingsCategory", { category: setting.category }),
+      value: `setting:${settingID(setting)}`,
+      onSelect: (dialog: DialogContext) => {
+        dialog.replace(() => <DialogConfig current={settingID(setting)} />)
+      },
+    })),
+  )
 
   let ref: DialogSelectRef<string>
   const list = () => {
-    if (ref?.filter) return [...options(), ...settingOptions]
+    if (ref?.filter) return [...options(), ...settingOptions()]
     return [
       ...options()
         .filter((option) => option.suggested)
         .map((option) => ({
           ...option,
           value: `suggested:${option.value}`,
-          category: "Suggested",
+          category: t("ui.commandPalette.suggested"),
         })),
       ...options(),
     ]
   }
 
   return (
-    <DialogSelect ref={(value) => (ref = value)} title="Commands" options={list()} flat={true} filterThreshold={0.7} />
+    <DialogSelect
+      ref={(value) => (ref = value)}
+      title={t("ui.commandPalette.commands")}
+      options={list()}
+      flat={true}
+      filterThreshold={0.7}
+    />
   )
 }

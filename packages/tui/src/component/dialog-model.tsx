@@ -9,12 +9,14 @@ import { useConnected } from "./use-connected"
 import { useData } from "../context/data"
 import { modelPreferenceKey } from "../model-preference"
 import { useLocation } from "../context/location"
+import { useI18n } from "../context/i18n"
 
 export function DialogModel(props: { providerID?: string }) {
   const local = useLocal()
   const data = useData()
   const dialog = useDialog()
   const location = useLocation()
+  const { t } = useI18n()
   const [query, setQuery] = createSignal("")
   const favoritePriority = new Set(local.model.favorite().map(modelPreferenceKey))
 
@@ -46,7 +48,7 @@ export function DialogModel(props: { providerID?: string }) {
             releaseDate: model.time.released,
             description: provider?.name ?? model.providerID,
             category,
-            footer: free(model) ? "Free" : undefined,
+            footer: free(model) ? t("dialog.model.free") : undefined,
             onSelect: () => {
               onSelect(model.providerID, model.id)
             },
@@ -55,12 +57,12 @@ export function DialogModel(props: { providerID?: string }) {
       })
     }
 
-    const favoriteOptions = toOptions(favorites, "Favorites")
+    const favoriteOptions = toOptions(favorites, t("dialog.model.favorites"))
     const recentOptions = toOptions(
       recents.filter(
         (item) => !favorites.some((fav) => fav.providerID === item.providerID && fav.modelID === item.modelID),
       ),
-      "Recent",
+      t("dialog.model.recent"),
     )
 
     const modelOptions = sortModelOptions(
@@ -77,9 +79,9 @@ export function DialogModel(props: { providerID?: string }) {
             providerName: provider?.name ?? model.providerID,
             title: model.name,
             releaseDate: model.time.released,
-            description: favorite ? "(Favorite)" : undefined,
+            description: favorite ? t("dialog.model.favoriteBadge") : undefined,
             category: connected() ? (provider?.name ?? model.providerID) : undefined,
-            footer: free(model) ? "Free" : undefined,
+            footer: free(model) ? t("dialog.model.free") : undefined,
             onSelect() {
               onSelect(model.providerID, model.id)
             },
@@ -115,7 +117,7 @@ export function DialogModel(props: { providerID?: string }) {
 
   const title = createMemo(() => {
     const value = provider()
-    if (!value) return "Select model"
+    if (!value) return t("dialog.model.select")
     return value.name
   })
 
@@ -140,7 +142,7 @@ export function DialogModel(props: { providerID?: string }) {
       actions={[
         {
           command: "model.dialog.provider",
-          title: connected() ? "Connect an integration" : "View all integrations",
+          title: connected() ? t("dialog.model.connectIntegration") : t("dialog.model.viewAllIntegrations"),
           selection: "none",
           onTrigger() {
             dialog.replace(() => (
@@ -152,7 +154,7 @@ export function DialogModel(props: { providerID?: string }) {
         },
         {
           command: "model.dialog.favorite",
-          title: "Favorite",
+          title: t("dialog.model.favorite"),
           hidden: !connected(),
           onTrigger: (option) => {
             local.model.toggleFavorite(option.value as { providerID: string; modelID: string })

@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test"
+import { translate, type Translator } from "../../src/i18n"
 import { normalizeTool, toolInlineInfo, toolOutputText, toolPath, toolScroll } from "../../src/mini/tool"
 import { canonicalToolPart } from "./fixture/tool-part"
+
+const t: Translator = (key, params) => translate("en", key, params)
 
 describe("Mini tool presentation", () => {
   test("uses V2 shell output without the model-facing status", () => {
@@ -86,8 +89,8 @@ describe("Mini tool presentation", () => {
         "call-skill",
       )
 
-    expect(toolInlineInfo(skill({ name: "effect" })).title).toBe('Skill "effect"')
-    expect(toolInlineInfo(skill({})).title).toBe('Skill "tigerstyle"')
+    expect(toolInlineInfo(skill({ name: "effect" }), t).title).toBe('Skill "effect"')
+    expect(toolInlineInfo(skill({}), t).title).toBe('Skill "tigerstyle"')
     expect(
       toolScroll("start", {
         directory: "/work/project",
@@ -100,7 +103,7 @@ describe("Mini tool presentation", () => {
         error: "",
         output: "",
         time: {},
-      }),
+      }, t),
     ).toBe('→ Skill "effect"')
   })
 
@@ -113,6 +116,7 @@ describe("Mini tool presentation", () => {
           metadata: { count: 3 },
           content: [{ type: "text", text: "" }],
         }),
+        t,
       ).description,
     ).toBe("3 matches")
     expect(
@@ -123,6 +127,7 @@ describe("Mini tool presentation", () => {
           metadata: { matches: 1 },
           content: [{ type: "text", text: "" }],
         }),
+        t,
       ).description,
     ).toBe("1 match")
   })

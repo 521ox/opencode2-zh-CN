@@ -7,6 +7,7 @@ import { readStdin } from "../util/io"
 import { ServerConnection } from "../services/server-connection"
 import { parseSessionTargetModel, resolveSessionTarget } from "../session-target"
 import { toolInlineInfo } from "@opencode-ai/tui/mini/tool"
+import { DEFAULT_LOCALE, translate, type Locale, type Translator } from "@opencode-ai/tui/i18n"
 import { runNonInteractivePrompt } from "./noninteractive"
 import { UI } from "./ui"
 
@@ -23,6 +24,7 @@ export type RunCommandInput = {
   title?: string
   thinking?: boolean
   auto?: boolean
+  locale?: Locale
 }
 
 type FilePart = {
@@ -118,6 +120,7 @@ async function execute(input: RunCommandInput, prepared: Prepared, endpoint: End
   if (!target) return
   const model = target.model ? { providerID: target.model.providerID, modelID: target.model.id } : undefined
   const variant = target.model?.variant
+  const t: Translator = (key, params) => translate(input.locale ?? DEFAULT_LOCALE, key, params)
   if (!target.resume && input.title !== undefined) {
     await client.session.rename({
       sessionID: target.session.id,
@@ -139,8 +142,8 @@ async function execute(input: RunCommandInput, prepared: Prepared, endpoint: End
     auto: input.auto ?? false,
     attached: options.attached ?? true,
     compatibility: options.compatibility,
-    renderTool: (part) => renderTool(part, target.location.directory),
-    renderToolError: (part) => renderToolError(part, target.location.directory),
+    renderTool: (part) => renderTool(part, target.location.directory, t),
+    renderToolError: (part) => renderToolError(part, target.location.directory, t),
   }).catch((error) => reportRunError(input, errorMessage(error), target.session.id))
 }
 
@@ -214,8 +217,8 @@ function isBinaryContent(bytes: Uint8Array) {
   return bytes.reduce((count, byte) => count + Number(byte < 9 || (byte > 13 && byte < 32)), 0) / bytes.length > 0.3
 }
 
-async function renderTool(part: SessionMessageAssistantTool, directory: string) {
-  const info = toolInlineInfo(part, directory)
+async function renderTool(part: SessionMessageAssistantTool, directory: string, t: Translator) {
+  const info = toolInlineInfo(part, t, directory)
   if (info.mode === "block") {
     UI.empty()
     UI.println(UI.Style.TEXT_NORMAL + info.icon, UI.Style.TEXT_NORMAL + info.title)
@@ -230,9 +233,9 @@ async function renderTool(part: SessionMessageAssistantTool, directory: string) 
   )
 }
 
-async function renderToolError(part: SessionMessageAssistantTool, directory: string) {
-  const info = toolInlineInfo(part, directory)
-  UI.println(UI.Style.TEXT_NORMAL + "✗", UI.Style.TEXT_NORMAL + `${info.title} failed`)
+async function renderToolError(part: SessionMessageAssistantTool, directory: string, t: Translator) {
+  const info = toolInlineInfo(part, t, directory)
+  UI.println(UI.Style.TEXT_NORMAL + "✗", UI.Style.TEXT_NORMAL + t("mini.tool.failed", { tool: info.title }))
 }
 
 function errorMessage(error: unknown) {

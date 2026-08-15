@@ -1,5 +1,6 @@
 import { createContext, createSignal, onCleanup, useContext, type ParentProps, Show } from "solid-js"
 import { createStore } from "solid-js/store"
+import { useI18n } from "../context/i18n"
 import { useTheme } from "../context/theme"
 import { useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { SplitBorder } from "./border"
@@ -7,6 +8,7 @@ import { TextAttributes } from "@opentui/core"
 export type ToastOptions = {
   title?: string
   message: string
+  fallback?: "unknown-error"
   variant: "info" | "success" | "warning" | "error"
   duration: number
   action?: {
@@ -22,6 +24,7 @@ function ToastSurface(props: {
   onHover?: (hovered: boolean) => void
   onActivate: () => void
 }) {
+  const { t } = useI18n()
   const theme = useTheme("overlay")
   const dimensions = useTerminalDimensions()
   const renderer = useRenderer()
@@ -41,6 +44,7 @@ function ToastSurface(props: {
       {props.toast.action ? `› ${props.toast.action.label}` : "x"}
     </text>
   )
+  const message = () => (props.toast.fallback === "unknown-error" ? t("ui.toast.unknownError") : props.toast.message)
 
   return (
     <box
@@ -73,7 +77,7 @@ function ToastSurface(props: {
           fallback={
             <box flexDirection="row" width="100%">
               <text fg={theme.text.default} wrapMode="word" flexGrow={1}>
-                {props.toast.message}
+                {message()}
               </text>
               {affordance()}
             </box>
@@ -87,12 +91,12 @@ function ToastSurface(props: {
             {affordance()}
           </box>
           <text fg={theme.text.default} wrapMode="word" width="100%">
-            {props.toast.message}
+            {message()}
           </text>
         </Show>
         <Show when={props.pending}>
           <text fg={theme.text.subdued} marginTop={1}>
-            +{props.pending} more
+            {t("ui.toast.more", { count: props.pending ?? 0 })}
           </text>
         </Show>
       </box>
@@ -172,7 +176,8 @@ function init() {
         })
       toast.show({
         variant: "error",
-        message: "An unknown error has occurred",
+        message: "",
+        fallback: "unknown-error",
       })
     },
     pause() {

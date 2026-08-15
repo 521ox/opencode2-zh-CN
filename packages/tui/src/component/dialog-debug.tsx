@@ -9,6 +9,7 @@ import { useClipboard } from "../context/clipboard"
 import { useToast } from "../ui/toast"
 import { describeOS, describeTerminal } from "../util/system"
 import { useTuiApp } from "../context/runtime"
+import { useI18n } from "../context/i18n"
 
 export function DialogDebug() {
   const theme = useTheme()
@@ -18,6 +19,7 @@ export function DialogDebug() {
   const clipboard = useClipboard()
   const toast = useToast()
   const app = useTuiApp()
+  const { t } = useI18n()
   const [copied, setCopied] = createSignal(false)
 
   dialog.setSize("large")
@@ -25,12 +27,12 @@ export function DialogDebug() {
   const entries = createMemo(() => {
     const model = local.model.current()
     return [
-      { label: "Version", value: `${app.version} (${app.channel})` },
-      { label: "Date", value: new Date().toISOString() },
-      { label: "OS", value: describeOS() },
-      { label: "Terminal", value: describeTerminal() },
-      { label: "Session ID", value: route.data.type === "session" ? route.data.sessionID : "n/a" },
-      { label: "Model", value: model ? `${model.providerID}/${model.modelID}` : "n/a" },
+      { label: t("dialog.debug.version"), value: `${app.version} (${app.channel})` },
+      { label: t("dialog.debug.date"), value: new Date().toISOString() },
+      { label: t("dialog.debug.os"), value: describeOS() },
+      { label: t("dialog.debug.terminal"), value: describeTerminal() },
+      { label: t("dialog.debug.sessionID"), value: route.data.type === "session" ? route.data.sessionID : t("dialog.debug.notAvailable") },
+      { label: t("dialog.debug.model"), value: model ? `${model.providerID}/${model.modelID}` : t("dialog.debug.notAvailable") },
     ]
   })
 
@@ -42,21 +44,21 @@ export function DialogDebug() {
       .write(text)
       .then(() => {
         setCopied(true)
-        toast.show({ message: "Debug info copied to clipboard", variant: "info" })
+        toast.show({ message: t("dialog.debug.copiedToClipboard"), variant: "info" })
       })
       .catch(toast.error)
   }
 
   Keymap.createLayer(() => ({
     mode: "modal",
-    commands: [{ bind: "return", title: "Copy debug info", group: "Dialog", run: copy }],
+    commands: [{ bind: "return", title: t("dialog.debug.copyCommand"), group: t("dialog.group"), run: copy }],
   }))
 
   return (
     <box paddingLeft={2} paddingRight={2} gap={1} paddingBottom={1}>
       <box flexDirection="row" justifyContent="space-between">
         <text fg={theme.text.default} attributes={TextAttributes.BOLD}>
-          Debug
+          {t("dialog.debug.title")}
         </text>
         <text fg={theme.text.subdued} onMouseUp={() => dialog.clear()}>
           esc
@@ -79,10 +81,10 @@ export function DialogDebug() {
         </For>
       </box>
       <box flexDirection="row" justifyContent="space-between">
-        <text fg={theme.text.subdued}>Share this when reporting an issue.</text>
+        <text fg={theme.text.subdued}>{t("dialog.debug.description")}</text>
         <text onMouseUp={copy}>
           <span style={{ fg: copied() ? theme.text.feedback.success.default : theme.text.default }}>
-            <b>{copied() ? "✓ copied" : "copy"}</b>{" "}
+            <b>{copied() ? `✓ ${t("dialog.debug.copied")}` : t("dialog.debug.copy")}</b>{" "}
           </span>
           <span style={{ fg: theme.text.subdued }}>enter</span>
         </text>

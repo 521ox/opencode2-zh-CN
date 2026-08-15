@@ -92,6 +92,8 @@ import { tuiPluginDirectories } from "./plugin/discovery"
 import { PluginRoute, Slot } from "./plugin/render"
 import { CommandPaletteDialog } from "./component/command-palette"
 import { COMMAND_PALETTE_COMMAND, Keymap, type KeymapCommand } from "./context/keymap"
+import { I18nProvider, useI18n } from "./context/i18n"
+import { translate, type Translator } from "./i18n"
 
 import { DialogVariant } from "./component/dialog-variant"
 import { win32DisableProcessedInput, win32FlushInputBuffer } from "./terminal-win32"
@@ -201,6 +203,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
   const config = Config.resolve(yield* Effect.tryPromise(() => input.config.get()), {
     terminalSuspend: process.platform !== "win32",
   })
+  const t: Translator = (key, params) => translate(config.locale, key, params)
   const options = { baseUrl: input.server.endpoint.url, headers: Service.headers(input.server.endpoint) }
   const api = OpenCode.make(options)
   const location = yield* Effect.tryPromise(() => api.file.list({ location: { directory: process.cwd() } })).pipe(
@@ -298,13 +301,14 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
               >
                 <EpilogueProvider set={(value) => (exit.epilogue = value)}>
                   <TuiAppProvider value={input.app}>
-                    <ErrorBoundary
-                      fallback={(error, reset) => (
-                        <ClipboardProvider value={clipboard}>
-                          <ErrorComponent error={error} reset={reset} mode={mode} />
-                        </ClipboardProvider>
-                      )}
-                    >
+                    <I18nProvider locale={config.locale}>
+                      <ErrorBoundary
+                        fallback={(error, reset) => (
+                          <ClipboardProvider value={clipboard}>
+                            <ErrorComponent error={error} reset={reset} mode={mode} />
+                          </ClipboardProvider>
+                        )}
+                      >
                       <TuiPathsProvider
                         value={{
                           cwd: process.cwd(),
@@ -429,7 +433,8 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                           </TuiLifecycleProvider>
                         </StorageProvider>
                       </TuiPathsProvider>
-                    </ErrorBoundary>
+                      </ErrorBoundary>
+                    </I18nProvider>
                   </TuiAppProvider>
                 </EpilogueProvider>
               </ExitProvider>
@@ -448,7 +453,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
   yield* Effect.sync(() => {
     win32FlushInputBuffer()
     if (result.reason !== undefined)
-      process.stderr.write((cliErrorMessage(result.reason) ?? errorFormat(result.reason)) + "\n")
+      process.stderr.write((cliErrorMessage(result.reason, t) ?? errorFormat(result.reason)) + "\n")
     if (result.epilogue) process.stdout.write(result.epilogue + "\n")
   })
 })
@@ -459,6 +464,7 @@ function App(props: { pair?: DialogPairCredentials }) {
   const startup = useTuiStartup()
   const paths = useTuiPaths()
   const config = useConfig()
+  const i18n = useI18n()
   const devtools = createMemo(() => config.data.debug?.devtools ?? app.channel === "local")
   const route = useRoute()
   const dimensions = useTerminalDimensions()
@@ -495,16 +501,16 @@ function App(props: { pair?: DialogPairCredentials }) {
       if (status.status === "needs_auth")
         toast.show({
           variant: "warning",
-          title: "MCP server needs authentication",
-          message: `Connect "${server.name}" to use its tools.`,
-          action: { label: "Open MCP servers", run: () => keymap.dispatch("mcp.list") },
+          title: i18n.t("app.mcp.needsAuth.title"),
+          message: i18n.t("app.mcp.needsAuth.message", { name: server.name }),
+          action: { label: i18n.t("app.mcp.needsAuth.action"), run: () => keymap.dispatch("mcp.list") },
         })
       else
         toast.show({
           variant: "error",
-          title: `MCP server failed: ${server.name}`,
-          message: "Run /mcps to view details.",
-          action: { label: "Open MCP servers", run: () => keymap.dispatch("mcp.list") },
+          title: i18n.t("app.mcp.failed.title", { name: server.name }),
+          message: i18n.t("app.mcp.failed.message"),
+          action: { label: i18n.t("app.mcp.needsAuth.action"), run: () => keymap.dispatch("mcp.list") },
         })
     }
   })
@@ -514,7 +520,7 @@ function App(props: { pair?: DialogPairCredentials }) {
     "key",
     ({ event }) => {
       if (config.data.terminal?.copy_on_select ?? process.platform !== "win32") return
-      Selection.handleSelectionKey(renderer, toast, event, clipboard)
+      Selection.handleSelectionKey(renderer, toast, event, clipboard, i18n.t("app.copy.success"))
     },
     { priority: 1 },
   )
@@ -528,7 +534,7 @@ function App(props: { pair?: DialogPairCredentials }) {
 
     await clipboard
       .write(text)
-      .then(() => toast.show({ message: "Copied to clipboard", variant: "info" }))
+      .then(() => toast.show({ message: i18n.t("app.copy.success"), variant: "info" }))
       .catch(toast.error)
 
     renderer.clearSelection()
@@ -582,7 +588,7 @@ function App(props: { pair?: DialogPairCredentials }) {
         if (!providerID || !modelID)
           return toast.show({
             variant: "warning",
-            message: `Invalid model format: ${args.model}`,
+            message: i18n.t("app.model.invalid", { model: args.model }),
             duration: 3000,
           })
         local.model.set({ providerID, modelID }, { recent: true })
@@ -641,8 +647,8 @@ function App(props: { pair?: DialogPairCredentials }) {
     [
       {
         name: COMMAND_PALETTE_COMMAND,
-        title: "Show command palette",
-        category: "System",
+        title: i18n.t("app.command.commandPalette"),
+        category: i18n.t("app.category.system"),
         palette: undefined,
         run: () => {
           dialog.replace(() => <CommandPaletteDialog />)
@@ -650,8 +656,8 @@ function App(props: { pair?: DialogPairCredentials }) {
       },
       {
         name: "session.list",
-        title: "Switch session",
-        category: "Session",
+        title: i18n.t("app.command.session.switch"),
+        category: i18n.t("app.category.session"),
         suggested: data.session.list().length > 0,
         slash: { name: "sessions", aliases: ["resume", "continue"] },
         run: () => {
@@ -660,9 +666,9 @@ function App(props: { pair?: DialogPairCredentials }) {
       },
       {
         name: "session.new",
-        title: "New session",
+        title: i18n.t("app.command.session.new"),
         suggested: route.data.type === "session",
-        category: "Session",
+        category: i18n.t("app.category.session"),
         slash: { name: "new", aliases: ["clear"] },
         run: () => {
           const current =
@@ -683,8 +689,8 @@ function App(props: { pair?: DialogPairCredentials }) {
       },
       {
         name: "open.menu",
-        title: "Open session or project",
-        category: "Session",
+        title: i18n.t("app.command.open"),
+        category: i18n.t("app.category.session"),
         slash: { name: "open", aliases: ["projects", "project"] },
         run: async () => {
           if (dialog.key === DialogOpenKey || openingOpen) return
@@ -698,71 +704,71 @@ function App(props: { pair?: DialogPairCredentials }) {
       },
       ...Array.from({ length: 9 }, (_, i) => ({
         name: `session.quick_switch.${i + 1}`,
-        title: `Switch to session in quick slot ${i + 1}`,
-        category: "Session",
+        title: i18n.t("app.command.quickSlot", { index: i + 1 }),
+        category: i18n.t("app.category.session"),
         palette: undefined,
         enabled: () => !sessionTabs.enabled(),
         run: () => local.session.quickSwitch(i + 1),
       })),
       {
         name: "session.tab.next",
-        title: "Next tab",
-        category: "Session",
+        title: i18n.t("app.command.tab.next"),
+        category: i18n.t("app.category.session"),
         palette: undefined,
         enabled: sessionTabs.enabled,
         run: () => sessionTabs.cycle(1),
       },
       {
         name: "session.tab.previous",
-        title: "Previous tab",
-        category: "Session",
+        title: i18n.t("app.command.tab.previous"),
+        category: i18n.t("app.category.session"),
         palette: undefined,
         enabled: sessionTabs.enabled,
         run: () => sessionTabs.cycle(-1),
       },
       {
         name: "session.tab.next_unread",
-        title: "Next unread tab",
-        category: "Session",
+        title: i18n.t("app.command.tab.nextUnread"),
+        category: i18n.t("app.category.session"),
         palette: undefined,
         enabled: sessionTabs.enabled,
         run: () => sessionTabs.cycleUnread(1),
       },
       {
         name: "session.tab.previous_unread",
-        title: "Previous unread tab",
-        category: "Session",
+        title: i18n.t("app.command.tab.previousUnread"),
+        category: i18n.t("app.category.session"),
         palette: undefined,
         enabled: sessionTabs.enabled,
         run: () => sessionTabs.cycleUnread(-1),
       },
       {
         name: "session.tab.close",
-        title: "Close tab",
-        category: "Session",
+        title: i18n.t("app.command.tab.close"),
+        category: i18n.t("app.category.session"),
         enabled: sessionTabs.enabled,
         run: () => sessionTabs.close(),
       },
       {
         name: "session.tab.reopen",
-        title: "Reopen closed tab",
-        category: "Session",
+        title: i18n.t("app.command.tab.reopen"),
+        category: i18n.t("app.category.session"),
         enabled: sessionTabs.enabled,
         run: () => sessionTabs.reopen(),
       },
       ...Array.from({ length: 10 }, (_, i) => ({
         name: `session.tab.select.${i + 1}`,
-        title: `Switch to tab ${i + 1}`,
-        category: "Session",
+        title: i18n.t("app.command.tab.select", { index: i + 1 }),
+        category: i18n.t("app.category.session"),
         palette: undefined,
         enabled: sessionTabs.enabled,
         run: () => sessionTabs.selectIndex(i),
       })),
       {
         name: "model.list",
-        title: "Switch model",
+        title: i18n.t("app.command.model.switch"),
         suggested: true,
-        category: "Agent",
+        category: i18n.t("app.category.agent"),
         // Bias /mo toward /models over /move without changing global fuzzy scoring.
         slash: { name: "models", aliases: ["mo"] },
         run: () => {
@@ -771,8 +777,8 @@ function App(props: { pair?: DialogPairCredentials }) {
       },
       {
         name: "model.cycle_recent",
-        title: "Model cycle",
-        category: "Agent",
+        title: i18n.t("app.command.model.cycle"),
+        category: i18n.t("app.category.agent"),
         palette: undefined,
         run: () => {
           local.model.cycle(1)
@@ -780,8 +786,8 @@ function App(props: { pair?: DialogPairCredentials }) {
       },
       {
         name: "model.cycle_recent_reverse",
-        title: "Model cycle reverse",
-        category: "Agent",
+        title: i18n.t("app.command.model.cycleReverse"),
+        category: i18n.t("app.category.agent"),
         palette: undefined,
         run: () => {
           local.model.cycle(-1)
@@ -789,8 +795,8 @@ function App(props: { pair?: DialogPairCredentials }) {
       },
       {
         name: "model.cycle_favorite",
-        title: "Favorite cycle",
-        category: "Agent",
+        title: i18n.t("app.command.favorite.cycle"),
+        category: i18n.t("app.category.agent"),
         palette: undefined,
         run: () => {
           local.model.cycleFavorite(1)
@@ -798,8 +804,8 @@ function App(props: { pair?: DialogPairCredentials }) {
       },
       {
         name: "model.cycle_favorite_reverse",
-        title: "Favorite cycle reverse",
-        category: "Agent",
+        title: i18n.t("app.command.favorite.cycleReverse"),
+        category: i18n.t("app.category.agent"),
         palette: undefined,
         run: () => {
           local.model.cycleFavorite(-1)
@@ -807,8 +813,8 @@ function App(props: { pair?: DialogPairCredentials }) {
       },
       {
         name: "agent.list",
-        title: "Switch agent",
-        category: "Agent",
+        title: i18n.t("app.command.agent.switch"),
+        category: i18n.t("app.category.agent"),
         slash: { name: "agents" },
         run: () => {
           dialog.replace(() => <DialogAgent />)
@@ -816,8 +822,8 @@ function App(props: { pair?: DialogPairCredentials }) {
       },
       {
         name: "mcp.list",
-        title: "MCP servers",
-        category: "Agent",
+        title: i18n.t("app.command.mcp.list"),
+        category: i18n.t("app.category.agent"),
         slash: { name: "mcps" },
         run: () => {
           dialog.replace(() => <DialogMcp />)
@@ -825,8 +831,8 @@ function App(props: { pair?: DialogPairCredentials }) {
       },
       {
         name: "agent.cycle",
-        title: "Agent cycle",
-        category: "Agent",
+        title: i18n.t("app.command.agent.cycle"),
+        category: i18n.t("app.category.agent"),
         palette: undefined,
         run: () => {
           local.agent.move(1)
@@ -834,23 +840,23 @@ function App(props: { pair?: DialogPairCredentials }) {
       },
       {
         name: "variant.cycle",
-        title: "Variant cycle",
-        category: "Agent",
+        title: i18n.t("app.command.variant.cycle"),
+        category: i18n.t("app.category.agent"),
         run: () => {
           local.model.variant.cycle()
         },
       },
       {
         name: "variant.list",
-        title: "Switch model variant",
-        category: "Agent",
+        title: i18n.t("app.command.variant.switch"),
+        category: i18n.t("app.category.agent"),
         palette: local.model.variant.list().length === 0 ? undefined : (true as const),
         slash: { name: "variants" },
         run: () => {
           if (local.model.variant.list().length === 0) {
             return toast.show({
-              title: "No variants available",
-              message: "The current model does not support any variants.",
+              title: i18n.t("app.variant.none.title"),
+              message: i18n.t("app.variant.none.message"),
               variant: "info",
             })
           }
@@ -859,8 +865,8 @@ function App(props: { pair?: DialogPairCredentials }) {
       },
       {
         name: "agent.cycle.reverse",
-        title: "Agent cycle reverse",
-        category: "Agent",
+        title: i18n.t("app.command.agent.cycleReverse"),
+        category: i18n.t("app.category.agent"),
         palette: undefined,
         run: () => {
           local.agent.move(-1)
@@ -868,7 +874,7 @@ function App(props: { pair?: DialogPairCredentials }) {
       },
       {
         name: "provider.connect",
-        title: "Connect an integration",
+        title: i18n.t("app.command.integration.connect"),
         suggested: !connected(),
         slash: { name: "connect" },
         run: () => {
@@ -878,126 +884,127 @@ function App(props: { pair?: DialogPairCredentials }) {
             />
           ))
         },
-        category: "Integration",
+        category: i18n.t("app.category.integration"),
       },
       {
         name: "opencode.settings",
-        title: "Open settings",
+        title: i18n.t("app.command.settings"),
         suggested: true,
         slash: { name: "settings" },
         run: () => {
           dialog.replace(() => <DialogConfig />)
         },
-        category: "System",
+        category: i18n.t("app.category.system"),
       },
       {
         name: "opencode.status",
-        title: "View status",
+        title: i18n.t("app.command.status"),
         slash: { name: "status" },
         run: () => {
           dialog.replace(() => <DialogStatus />)
         },
-        category: "System",
+        category: i18n.t("app.category.system"),
       },
       {
         name: "server.pair",
-        title: "Pair device",
+        title: i18n.t("app.command.pair"),
         slash: { name: "pair", aliases: ["web"] },
         run: () => {
           dialog.replace(() => <DialogPair credentials={props.pair} />)
         },
-        category: "System",
+        category: i18n.t("app.category.system"),
       },
       ...(client.restart
         ? [
             {
               name: "service.restart",
-              title: "Restart service",
+              title: i18n.t("app.command.service.restart"),
               slash: { name: "restart" },
               run: async () => {
                 const restart = client.restart
                 if (!restart) return
                 dialog.clear()
-                toast.show({ variant: "info", message: "Restarting service...", duration: 30000 })
+                toast.show({ variant: "info", message: i18n.t("app.service.restarting"), duration: 30000 })
                 // restart resolves once the replacement service is healthy; the
                 // event stream reattaches through the reconnect loop.
                 await restart()
-                  .then(() => toast.show({ variant: "success", message: "Service restarted" }))
+                  .then(() => toast.show({ variant: "success", message: i18n.t("app.service.restarted") }))
                   .catch(toast.error)
               },
-              category: "System",
+              category: i18n.t("app.category.system"),
             },
           ]
         : []),
       {
         name: "opencode.debug",
-        title: "View debug info",
+        title: i18n.t("app.command.debug.info"),
         slash: { name: "debug" },
         run: () => {
           dialog.replace(() => <DialogDebug />)
         },
-        category: "System",
+        category: i18n.t("app.category.system"),
       },
       {
         name: "theme.switch",
-        title: "Switch theme",
+        title: i18n.t("app.command.theme.switch"),
         slash: { name: "themes" },
         run: () => {
           dialog.replace(() => <DialogThemeList />)
         },
-        category: "System",
+        category: i18n.t("app.category.system"),
       },
       {
         name: "theme.switch_mode",
-        title: mode() === "dark" ? "Switch to light mode" : "Switch to dark mode",
+        title:
+          mode() === "dark" ? i18n.t("app.command.theme.modeLight") : i18n.t("app.command.theme.modeDark"),
         palette: undefined,
         enabled: () => supports(mode() === "dark" ? "light" : "dark"),
         run: () => {
           setMode(mode() === "dark" ? "light" : "dark")
           dialog.clear()
         },
-        category: "System",
+        category: i18n.t("app.category.system"),
       },
       {
         name: "theme.mode.lock",
-        title: locked() ? "Unlock theme mode" : "Lock theme mode",
+        title: locked() ? i18n.t("app.command.theme.unlock") : i18n.t("app.command.theme.lock"),
         palette: undefined,
         run: () => {
           if (locked()) unlock()
           else lock()
           dialog.clear()
         },
-        category: "System",
+        category: i18n.t("app.category.system"),
       },
       {
         name: "help.show",
-        title: "Help",
+        title: i18n.t("app.command.help"),
         slash: { name: "help" },
         run: () => {
           dialog.replace(() => <DialogHelp />)
         },
-        category: "System",
+        category: i18n.t("app.category.system"),
       },
       {
         name: "docs.open",
-        title: "Open docs",
+        title: i18n.t("app.command.docs.open"),
         run: () => {
           open("https://opencode.ai/docs").catch(() => {})
           dialog.clear()
         },
-        category: "System",
+        category: i18n.t("app.category.system"),
       },
       {
         name: "app.exit",
-        title: "Exit the app",
+        title: i18n.t("app.command.exit"),
         slash: { name: "exit", aliases: ["quit", "q"] },
         run: () => exit(),
-        category: "System",
+        category: i18n.t("app.category.system"),
       },
       {
         name: "app.debug",
-        title: "Toggle debug panel",
-        category: "System",
+        title: i18n.t("app.command.debug.toggle"),
+        category: i18n.t("app.category.system"),
         palette: undefined,
         run: () => {
           renderer.toggleDebugOverlay()
@@ -1006,8 +1013,8 @@ function App(props: { pair?: DialogPairCredentials }) {
       },
       {
         name: "app.console",
-        title: "Toggle console",
-        category: "System",
+        title: i18n.t("app.command.console.toggle"),
+        category: i18n.t("app.category.system"),
         run: () => {
           renderer.console.toggle()
           dialog.clear()
@@ -1015,8 +1022,8 @@ function App(props: { pair?: DialogPairCredentials }) {
       },
       {
         name: "terminal.suspend",
-        title: "Suspend terminal",
-        category: "System",
+        title: i18n.t("app.command.terminal.suspend"),
+        category: i18n.t("app.category.system"),
         palette: undefined,
         enabled: process.platform !== "win32",
         run: () => {
@@ -1027,8 +1034,10 @@ function App(props: { pair?: DialogPairCredentials }) {
       },
       {
         name: "terminal.title.toggle",
-        title: terminalTitleEnabled() ? "Disable terminal title" : "Enable terminal title",
-        category: "System",
+        title: terminalTitleEnabled()
+          ? i18n.t("app.command.terminalTitle.disable")
+          : i18n.t("app.command.terminalTitle.enable"),
+        category: i18n.t("app.category.system"),
         palette: undefined,
         run: () => {
           const next = !terminalTitleEnabled()
@@ -1043,8 +1052,10 @@ function App(props: { pair?: DialogPairCredentials }) {
       },
       {
         name: "app.toggle.animations",
-        title: (config.data.animations ?? true) ? "Disable animations" : "Enable animations",
-        category: "System",
+        title: (config.data.animations ?? true)
+          ? i18n.t("app.command.animations.disable")
+          : i18n.t("app.command.animations.enable"),
+        category: i18n.t("app.category.system"),
         palette: undefined,
         run: () => {
           void config
@@ -1057,8 +1068,10 @@ function App(props: { pair?: DialogPairCredentials }) {
       },
       {
         name: "app.toggle.file_context",
-        title: (config.data.prompt?.editor ?? true) ? "Disable file context" : "Enable file context",
-        category: "System",
+        title: (config.data.prompt?.editor ?? true)
+          ? i18n.t("app.command.fileContext.disable")
+          : i18n.t("app.command.fileContext.enable"),
+        category: i18n.t("app.category.system"),
         palette: undefined,
         run: () => {
           void config
@@ -1071,8 +1084,11 @@ function App(props: { pair?: DialogPairCredentials }) {
       },
       {
         name: "app.toggle.diffwrap",
-        title: (config.data.diffs?.wrap ?? "word") === "word" ? "Disable diff wrapping" : "Enable diff wrapping",
-        category: "System",
+        title:
+          (config.data.diffs?.wrap ?? "word") === "word"
+            ? i18n.t("app.command.diffWrap.disable")
+            : i18n.t("app.command.diffWrap.enable"),
+        category: i18n.t("app.category.system"),
         palette: undefined,
         run: () => {
           void config
@@ -1088,8 +1104,10 @@ function App(props: { pair?: DialogPairCredentials }) {
       },
       {
         name: "app.toggle.paste_summary",
-        title: pasteSummaryEnabled() ? "Disable paste summary" : "Enable paste summary",
-        category: "System",
+        title: pasteSummaryEnabled()
+          ? i18n.t("app.command.pasteSummary.disable")
+          : i18n.t("app.command.pasteSummary.enable"),
+        category: i18n.t("app.category.system"),
         palette: undefined,
         run: () => {
           void config
@@ -1103,8 +1121,10 @@ function App(props: { pair?: DialogPairCredentials }) {
       {
         name: "permission.mode",
         title:
-          local.permission.mode === "auto" ? "Disable auto-approve permissions" : "Enable auto-approve permissions",
-        category: "System",
+          local.permission.mode === "auto"
+            ? i18n.t("app.command.autoApprove.disable")
+            : i18n.t("app.command.autoApprove.enable"),
+        category: i18n.t("app.category.system"),
         run: () => {
           local.permission.toggle()
           dialog.clear()
@@ -1186,7 +1206,9 @@ function App(props: { pair?: DialogPairCredentials }) {
       route.navigate({ type: "home" })
       toast.show({
         variant: "info",
-        message: title ? `Session "${title}" was deleted` : "The current session was deleted",
+        message: title
+          ? i18n.t("app.session.deleted.named", { title })
+          : i18n.t("app.session.deleted.current"),
       })
     }
   })
@@ -1227,11 +1249,15 @@ function App(props: { pair?: DialogPairCredentials }) {
         if (copyOnSelectEnabled()) return
         if (evt.button !== MouseButton.RIGHT) return
 
-        if (!Selection.copy(renderer, toast, clipboard)) return
+        if (!Selection.copy(renderer, toast, clipboard, i18n.t("app.copy.success"))) return
         evt.preventDefault()
         evt.stopPropagation()
       }}
-      onMouseUp={copyOnSelectEnabled() ? () => Selection.copy(renderer, toast, clipboard) : undefined}
+      onMouseUp={
+        copyOnSelectEnabled()
+          ? () => Selection.copy(renderer, toast, clipboard, i18n.t("app.copy.success"))
+          : undefined
+      }
     >
       <box flexGrow={1} minHeight={0} flexDirection="row">
         <Show when={tabsVisible() && tabsVertical()}>

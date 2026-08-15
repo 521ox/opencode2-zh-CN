@@ -9,6 +9,7 @@ import { Locale } from "../../../util/locale"
 import { Keymap } from "../../../context/keymap"
 import { useComposerTab } from "./index"
 import { withTimestampedFallback } from "@opencode-ai/util/session-title-fallback"
+import { useI18n } from "../../../context/i18n"
 
 interface SubagentEntry {
   sessionID: string
@@ -26,6 +27,7 @@ export function SubagentsTab(props: { sessionID: string }) {
   const navigate = useRoute().navigate
   const composer = useComposerTab()
   const shortcuts = Keymap.useShortcuts()
+  const i18n = useI18n()
 
   const session = createMemo(() => data.session.get(props.sessionID))
   const [store, setStore] = createStore({ selected: 0, active: true })
@@ -45,7 +47,7 @@ export function SubagentsTab(props: { sessionID: string }) {
           ? Locale.titlecase(sibling.agent)
           : agentMatch
             ? Locale.titlecase(agentMatch[1])
-            : "Subagent"
+            : i18n.t("session.composer.subagent")
         const name = agentMatch ? title.replace(agentMatch[0], "").trim() || title : title
         result.push({
           sessionID: sibling.id,
@@ -64,7 +66,7 @@ export function SubagentsTab(props: { sessionID: string }) {
           ? Locale.titlecase(child.agent)
           : agentMatch
             ? Locale.titlecase(agentMatch[1])
-            : "Subagent"
+            : i18n.t("session.composer.subagent")
         const name = agentMatch ? title.replace(agentMatch[0], "").trim() || title : title
         result.push({
           sessionID: child.id,
@@ -140,15 +142,17 @@ export function SubagentsTab(props: { sessionID: string }) {
   onMount(() => {
     const cleanup = composer.register({
       id: "subagents",
-      label: "Subagents",
+      label: i18n.t("session.composer.subagents"),
       hints: () => {
         const entry = selectedEntry()
         return [
           ...(entry?.status === "running"
-            ? [{ label: "interrupt", shortcut: shortcuts.get("composer.subagent.interrupt") ?? "" }]
+            ? [{ label: i18n.t("session.composer.interrupt"), shortcut: shortcuts.get("composer.subagent.interrupt") ?? "" }]
             : []),
           {
-            label: `show ${store.active ? "inactive" : "active"}`,
+            label: i18n.t("session.composer.show", {
+              status: store.active ? i18n.t("session.composer.inactive") : i18n.t("session.composer.active"),
+            }),
             shortcut: shortcuts.get("composer.subagent.toggle-activity") ?? "",
           },
         ]
@@ -168,8 +172,8 @@ export function SubagentsTab(props: { sessionID: string }) {
     commands: [
       {
         id: "composer.subagent.up",
-        title: "Previous subagent",
-        group: "Composer",
+        title: i18n.t("session.composer.command.previousSubagent"),
+        group: i18n.t("session.group.composer"),
         run() {
           if (store.selected === 0) {
             composer.close()
@@ -180,8 +184,8 @@ export function SubagentsTab(props: { sessionID: string }) {
       },
       {
         id: "composer.subagent.down",
-        title: "Next subagent",
-        group: "Composer",
+        title: i18n.t("session.composer.command.nextSubagent"),
+        group: i18n.t("session.group.composer"),
         run() {
           const list = entries()
           if (list.length === 0) return
@@ -190,8 +194,8 @@ export function SubagentsTab(props: { sessionID: string }) {
       },
       {
         id: "composer.subagent.select",
-        title: "Navigate to subagent",
-        group: "Composer",
+        title: i18n.t("session.composer.command.navigateSubagent"),
+        group: i18n.t("session.group.composer"),
         run() {
           const entry = entries()[store.selected]
           if (entry) navigate({ type: "session", sessionID: entry.sessionID })
@@ -199,8 +203,8 @@ export function SubagentsTab(props: { sessionID: string }) {
       },
       {
         id: "composer.subagent.toggle-activity",
-        title: "Toggle active subagents",
-        group: "Composer",
+        title: i18n.t("session.composer.command.toggleActive"),
+        group: i18n.t("session.group.composer"),
         bind: "ctrl+a",
         run() {
           setStore({ selected: 0, active: !store.active })
@@ -209,8 +213,8 @@ export function SubagentsTab(props: { sessionID: string }) {
       },
       {
         id: "composer.subagent.interrupt",
-        title: "Interrupt subagent",
-        group: "Composer",
+        title: i18n.t("session.composer.command.interrupt"),
+        group: i18n.t("session.group.composer"),
         run() {
           const entry = selectedEntry()
           if (!entry || entry.status !== "running") return
@@ -225,13 +229,20 @@ export function SubagentsTab(props: { sessionID: string }) {
       <scrollbox scrollbarOptions={{ visible: false }} maxHeight={5} ref={(r: ScrollBoxRenderable) => (scroll = r)}>
         <Show
           when={entries().length > 0}
-          fallback={<text fg={theme.text.subdued}> No {store.active ? "active" : "inactive"} subagents</text>}
+          fallback={
+            <text fg={theme.text.subdued}>
+              {" "}
+              {i18n.t("session.composer.noSubagents", {
+                status: store.active ? i18n.t("session.composer.active") : i18n.t("session.composer.inactive"),
+              })}
+            </text>
+          }
         >
           <For each={entries()}>
             {(entry, index) => {
               const active = createMemo(() => index() === selected())
               const status = createMemo(() => {
-                if (entry.status === "running") return "Running"
+                if (entry.status === "running") return i18n.t("session.composer.running")
                 return ""
               })
               return (

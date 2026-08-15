@@ -13,6 +13,7 @@ import {
 } from "solid-js"
 import { Portal, useTerminalDimensions } from "@opentui/solid"
 import { useConfig } from "../config"
+import { useI18n } from "../context/i18n"
 import { useSessionTabs } from "../context/session-tabs"
 import { useData } from "../context/data"
 import { useTheme, useThemes } from "../context/theme"
@@ -70,7 +71,7 @@ export type SessionTabsController = Pick<ContextController, "tabs" | "current" |
   detail?: (sessionID: string) => string | undefined
   status(sessionID: string): SessionTabsStatus
 }
-const NEW_SESSION_TAB: SessionTab = { sessionID: "new", title: NEW_SESSION_TAB_TITLE }
+const NEW_SESSION_TAB: SessionTab = { sessionID: "new" }
 const glowTextColor = (base: RGBA, glow: RGBA, index: number, width: number, level = 1) =>
   tint(base, glow, 0.12 * unreadGlowIntensity(index, width) * level)
 
@@ -185,19 +186,20 @@ export function createTabMarquee(animations: () => boolean) {
 
 function TabContextMenu(props: { state: TabContextMenuState; tabs: SessionTabsController; onClose: () => void }) {
   const dimensions = useTerminalDimensions()
+  const { t } = useI18n()
   const theme = useTheme("elevated")
   const dialog = useDialog()
   const actions = createMemo(() => {
     const sessionID = props.state.sessionID
     return [
-      ...(props.tabs.add ? [{ title: "New tab", run: () => props.tabs.add?.() }] : []),
+      ...(props.tabs.add ? [{ title: t("ui.sessionTabs.newTab"), run: () => props.tabs.add?.() }] : []),
       ...(sessionID
         ? [
             {
-              title: "Rename",
+              title: t("ui.sessionTabs.rename"),
               run: () => DialogSessionRename.show(dialog, sessionID, props.state.title),
             },
-            { title: "Close", run: () => props.tabs.close(sessionID) },
+            { title: t("ui.sessionTabs.close"), run: () => props.tabs.close(sessionID) },
           ]
         : []),
     ]
@@ -291,6 +293,7 @@ function VerticalSessionTabs(props: { controller?: SessionTabsController; animat
   const contextTabs = useSessionTabs()
   const tabs: SessionTabsController = props.controller ?? contextTabs
   const data = useData()
+  const { t } = useI18n()
   const theme = useTheme("elevated")
   const { mode } = useThemes()
   const config = useConfig().data
@@ -391,7 +394,10 @@ function VerticalSessionTabs(props: { controller?: SessionTabsController; animat
               const restingTitleWidth = () => Math.max(1, width() - numberWidth() - 2)
               const hoveredTitleWidth = () => Math.max(1, restingTitleWidth() - 1)
               const titleWidth = () => (hovered() === tab.sessionID ? hoveredTitleWidth() : restingTitleWidth())
-              const title = () => tab.title ?? "Untitled session"
+               const title = () =>
+                 tab.title === NEW_SESSION_TAB_TITLE
+                   ? t("ui.sessionTabs.newSession")
+                   : (tab.title ?? t("ui.sessionTabs.untitled"))
               const scrolling = () => marquee.active() === tab.sessionID
               const visibleTitle = createMemo(() =>
                 scrolling()
@@ -747,7 +753,7 @@ function VerticalSessionTabs(props: { controller?: SessionTabsController; animat
                 selectable={false}
                 attributes={newTab() ? TextAttributes.BOLD : undefined}
               >
-                {NEW_SESSION_TAB_TITLE}
+                {t("ui.sessionTabs.newSession")}
               </text>
               <Show when={newTab()}>
                 <text
@@ -781,6 +787,7 @@ function VerticalSessionTabs(props: { controller?: SessionTabsController; animat
 function HorizontalSessionTabs(props: { controller?: SessionTabsController; animations?: boolean } = {}) {
   const tabs = props.controller ?? useSessionTabs()
   const dimensions = useTerminalDimensions()
+  const { t } = useI18n()
   const theme = useTheme()
   const { mode } = useThemes()
   const config = useConfig().data
@@ -974,7 +981,10 @@ function HorizontalSessionTabs(props: { controller?: SessionTabsController; anim
           }
           const glowColor = () => feedbackColor() ?? accent()
           const glows = () => !selected() && (status().attention || (!status().busy && status().unread !== undefined))
-          const title = () => tab.title ?? "Untitled session"
+           const title = () =>
+             tab === NEW_SESSION_TAB || tab.title === NEW_SESSION_TAB_TITLE
+               ? t("ui.sessionTabs.newSession")
+               : (tab.title ?? t("ui.sessionTabs.untitled"))
           const tabNumber = createMemo(() => items().findIndex((item) => item.sessionID === tab.sessionID) + 1)
           // Shortcut labels stay one cell wide: 1-9, 0 for ten, then a neutral dot.
           const numberWidth = () => 2

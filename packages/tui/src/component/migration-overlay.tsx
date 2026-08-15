@@ -1,5 +1,6 @@
 import { createSignal, onCleanup, onMount, Show } from "solid-js"
 import { useClient } from "../context/client"
+import { useI18n } from "../context/i18n"
 import { useTheme } from "../context/theme"
 import { SplitBorder } from "../ui/border"
 import { useToast } from "../ui/toast"
@@ -9,6 +10,7 @@ type Progress = { label: string; numerator?: number; denominator?: number }
 
 export function MigrationOverlay() {
   const client = useClient()
+  const { t } = useI18n()
   const toast = useToast()
   const theme = useTheme("overlay")
   const [progress, setProgress] = createSignal<Progress>()
@@ -29,7 +31,7 @@ export function MigrationOverlay() {
       setProgress(undefined)
       toast.show({
         variant: "error",
-        title: "Data migration failed",
+        title: t("ui.migration.dataFailed"),
         message: error instanceof Error ? error.message : String(error),
         duration: 10_000,
       })

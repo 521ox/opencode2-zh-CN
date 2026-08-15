@@ -10,6 +10,7 @@ import { TextAttributes } from "@opentui/core"
 import type { McpServer } from "@opencode-ai/client"
 import { useToast } from "../ui/toast"
 import { DialogErrorDetails } from "./dialog-error-details"
+import { useI18n } from "../context/i18n"
 
 function statusError(status: McpServer["status"]) {
   if (status.status === "failed") return status.error
@@ -17,19 +18,20 @@ function statusError(status: McpServer["status"]) {
 }
 
 function Status(props: { status: McpServer["status"]; loading: boolean }) {
+  const { t } = useI18n()
   if (props.loading || props.status.status === "pending") {
-    return <>Connecting …</>
+    return <>{t("dialog.mcp.status.connecting")}</>
   }
   if (props.status.status === "connected") {
-    return <span style={{ attributes: TextAttributes.BOLD }}>Connected ✓</span>
+    return <span style={{ attributes: TextAttributes.BOLD }}>{t("dialog.mcp.status.connected")} ✓</span>
   }
   if (props.status.status === "failed") {
-    return <>Failed !</>
+    return <>{t("dialog.mcp.status.failed")} !</>
   }
   if (props.status.status === "needs_auth") {
-    return <>Sign in required →</>
+    return <>{t("dialog.mcp.status.signInRequired")} →</>
   }
-  return <>Disabled ○</>
+  return <>{t("dialog.mcp.status.disabled")} ○</>
 }
 
 export function DialogMcp() {
@@ -38,6 +40,7 @@ export function DialogMcp() {
   const client = useClient()
   const toast = useToast()
   const theme = useTheme("elevated")
+  const { t } = useI18n()
   const [focused, setFocused] = createSignal<string>()
   const [detail, setDetail] = createSignal<McpServer>()
   const [loading, setLoading] = createSignal<string | null>(null)
@@ -79,10 +82,10 @@ export function DialogMcp() {
 
   const toggleTitle = createMemo(() => {
     const status = focusedServer()?.status.status
-    if (status === "connected") return "disconnect"
-    if (status === "failed") return "retry"
-    if (status === "needs_auth") return "sign in"
-    return "connect"
+    if (status === "connected") return t("dialog.mcp.action.disconnect")
+    if (status === "failed") return t("dialog.mcp.action.retry")
+    if (status === "needs_auth") return t("dialog.mcp.action.signIn")
+    return t("dialog.mcp.action.connect")
   })
 
   const focusedError = createMemo(() => {
@@ -115,7 +118,7 @@ export function DialogMcp() {
         when={detail()}
         fallback={
           <DialogSelect
-            title="MCP servers"
+            title={t("dialog.mcp.title")}
             options={options()}
             preserveSelection
             onMove={(option) => setFocused(option.value as string)}
@@ -132,7 +135,7 @@ export function DialogMcp() {
             ]}
             footer={
               <Show when={focusedError()}>
-                <text fg={theme.text.subdued}>enter to view error</text>
+                <text fg={theme.text.subdued}>{t("dialog.mcp.viewError")}</text>
               </Show>
             }
           />
@@ -140,7 +143,7 @@ export function DialogMcp() {
       >
         {(server) => (
           <DialogErrorDetails
-            title={`MCP server: ${server().name}`}
+            title={t("dialog.mcp.serverTitle", { name: server().name })}
             error={statusError(server().status) ?? "Unknown MCP connection error"}
             onBack={() => {
               setDetail()

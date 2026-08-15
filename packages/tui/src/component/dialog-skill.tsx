@@ -6,6 +6,7 @@ import { useTheme } from "../context/theme"
 import { errorMessage } from "../util/error"
 import { useData } from "../context/data"
 import type { LocationRef } from "@opencode-ai/client"
+import { useI18n } from "../context/i18n"
 
 export type DialogSkillProps = {
   location?: LocationRef
@@ -16,6 +17,7 @@ export function DialogSkill(props: DialogSkillProps) {
   const dialog = useDialog()
   const data = useData()
   const theme = useTheme()
+  const { t } = useI18n()
   dialog.setSize("large")
 
   const [loadError, setLoadError] = createSignal<unknown>()
@@ -55,7 +57,7 @@ export function DialogSkill(props: DialogSkillProps) {
 
   return (
     <DialogSelect
-      title="Skills"
+      title={t("dialog.skill.title")}
       options={options()}
       renderFilter={!showError() && !skills.loading}
       locked={showError() || skills.loading}
@@ -63,29 +65,29 @@ export function DialogSkill(props: DialogSkillProps) {
         <Switch
           fallback={
             <box paddingLeft={4} paddingRight={4}>
-              <text fg={theme.text.subdued}>No skills available</text>
+              <text fg={theme.text.subdued}>{t("dialog.skill.empty")}</text>
             </box>
           }
         >
           <Match when={showError()}>
             <box paddingLeft={4} paddingRight={4}>
               <text fg={theme.text.feedback.error.default} attributes={TextAttributes.BOLD}>
-                Could not load skills
+                {t("dialog.skill.loadFailed")}
               </text>
               <text fg={theme.text.subdued}>{errorMessage(loadError())}</text>
-              <text fg={theme.text.subdued}>Close and reopen Skills to try again.</text>
+              <text fg={theme.text.subdued}>{t("dialog.skill.reopen")}</text>
             </box>
           </Match>
           <Match when={skills.loading}>
             <box paddingLeft={4} paddingRight={4}>
-              <text fg={theme.text.subdued}>Loading skills…</text>
+              <text fg={theme.text.subdued}>{t("dialog.skill.loading")}</text>
             </box>
           </Match>
         </Switch>
       }
       noMatchView={
         <box paddingLeft={4} paddingRight={4}>
-          <text fg={theme.text.subdued}>No skills found</text>
+          <text fg={theme.text.subdued}>{t("dialog.skill.noMatch")}</text>
         </box>
       }
     />

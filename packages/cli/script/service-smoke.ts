@@ -30,6 +30,9 @@ const errors: Array<Promise<string>> = []
 let failure: unknown
 try {
   await fs.mkdir(path.join(root, ".opencode"))
+  const config = path.join(root, "config", "opencode")
+  await fs.mkdir(config, { recursive: true })
+  await fs.writeFile(path.join(config, "service.json"), JSON.stringify({ port: await availablePort() }))
   spawnService()
   spawnService()
   const registration = await waitForRegistration()
@@ -122,6 +125,14 @@ async function waitForRegistration() {
     await Bun.sleep(25)
   }
   throw new Error("Compiled service did not publish registration")
+}
+
+async function availablePort() {
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() })
+  const port = server.port
+  await server.stop(true)
+  if (port === undefined) throw new Error("Smoke port reservation did not bind")
+  return port
 }
 
 async function waitForReady(url: string, headers: HeadersInit) {

@@ -1,17 +1,21 @@
 import { Plugin } from "@opencode-ai/plugin/tui"
 import { createMemo, Show } from "solid-js"
 import { contextUsage } from "../../util/session"
-
-const money = new Intl.NumberFormat("en-US", {
-  style: "currency",
-  currency: "USD",
-})
+import { useI18n } from "../../context/i18n"
 
 export function SidebarContext(props: { context: Plugin.Context; sessionID: string }) {
+  const i18n = useI18n()
   const theme = props.context.theme
   const msg = createMemo(() => props.context.data.session.message.list(props.sessionID))
   const session = createMemo(() => props.context.data.session.get(props.sessionID))
   const cost = createMemo(() => props.context.data.session.cost(props.sessionID))
+  const money = createMemo(
+    () =>
+      new Intl.NumberFormat(i18n.locale(), {
+        style: "currency",
+        currency: "USD",
+      }),
+  )
 
   const state = createMemo(() =>
     contextUsage(msg(), props.context.data.location.model.list(session()?.location), session()?.revert?.messageID),
@@ -21,20 +25,22 @@ export function SidebarContext(props: { context: Plugin.Context; sessionID: stri
     <Show when={state() || cost() > 0}>
       <box>
         <text fg={theme.text.default}>
-          <b>Context</b>
+          <b>{i18n.t("feature.sidebar.context.title")}</b>
         </text>
         <Show when={state()}>
           {(value) => (
             <>
-              <text fg={theme.text.subdued}>{value().tokens.toLocaleString()} tokens</text>
+              <text fg={theme.text.subdued}>
+                {i18n.t("feature.sidebar.context.tokens", { count: value().tokens.toLocaleString(i18n.locale()) })}
+              </text>
               <Show when={value().percent !== undefined}>
-                <text fg={theme.text.subdued}>{value().percent}% used</text>
+                <text fg={theme.text.subdued}>{i18n.t("feature.sidebar.context.used", { percent: value().percent! })}</text>
               </Show>
             </>
           )}
         </Show>
         <Show when={cost() > 0}>
-          <text fg={theme.text.subdued}>{money.format(cost())} spent</text>
+          <text fg={theme.text.subdued}>{i18n.t("feature.sidebar.context.spent", { cost: money().format(cost()) })}</text>
         </Show>
       </box>
     </Show>

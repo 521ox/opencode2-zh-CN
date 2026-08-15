@@ -23,6 +23,7 @@ import { useRoute } from "./route"
 import { useData } from "./data"
 import { usePermission } from "./permission"
 import { useLocation } from "./location"
+import { useI18n } from "./i18n"
 
 export function parseModel(model: string) {
   const [providerID, ...rest] = model.split("/")
@@ -59,6 +60,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     const event = useEvent()
     const permission = usePermission()
     const location = useLocation()
+    const i18n = useI18n()
 
     const models = () => data.location.model.list(location.ref)
     const providers = () => data.location.provider.list(location.ref)
@@ -102,7 +104,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           if (!agents().some((agent) => agent.id === id))
             return toast.show({
               variant: "warning",
-              message: `Agent not found: ${id}`,
+              message: i18n.t("feature.local.agentNotFound", { id }),
               duration: 3000,
             })
           setAgentStore("current", id)
@@ -338,8 +340,8 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           const value = currentSelection()
           if (!value) {
             return {
-              provider: "Connect a provider",
-              model: "No provider selected",
+              provider: i18n.t("feature.local.providerConnect"),
+              model: i18n.t("feature.local.noProviderSelected"),
               reasoning: false,
             }
           }
@@ -347,7 +349,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           const info = models()?.find((item) => item.providerID === value.providerID && item.id === value.modelID)
           return {
             provider: provider?.name ?? value.providerID,
-            model: info?.name ?? `${value.modelID} (unavailable)`,
+            model: info?.name ?? i18n.t("feature.local.modelUnavailable", { model: value.modelID }),
             reasoning: (info?.variants?.length ?? 0) !== 0,
           }
         }),
@@ -368,7 +370,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           if (!favorites.length) {
             toast.show({
               variant: "info",
-              message: "Add a favorite model to use this shortcut",
+              message: i18n.t("feature.local.favoriteRequired"),
               duration: 3000,
             })
             return

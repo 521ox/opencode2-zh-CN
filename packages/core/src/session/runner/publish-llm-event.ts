@@ -104,6 +104,31 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
   let outputStarted = false
   let stepFailure: SessionError.Error | undefined
   let stepSettlement: StepRecord["finish"]
+  let remoteCompaction = false
+  let remoteCompactionSettled = false
+  let remoteCheckpointReady = false
+
+  const startRemoteCompaction = Effect.fnUntraced(function* () {
+    if (remoteCompaction) return
+    remoteCompaction = true
+    outputStarted = true
+    yield* bus.publish(SessionEvent.Compaction.Started, {
+      sessionID: input.sessionID,
+      reason: "auto",
+      recent: "",
+      remote: true,
+    })
+  })
+
+  const failRemoteCompaction = Effect.fnUntraced(function* (error: SessionError.Error) {
+    if (!remoteCompaction || remoteCompactionSettled) return
+    remoteCompactionSettled = true
+    yield* bus.publish(SessionEvent.Compaction.Failed, {
+      sessionID: input.sessionID,
+      reason: "auto",
+      error,
+    })
+  })
 
   const startAssistant = Effect.fnUntraced(function* () {
     if (stepStarted) return assistantMessageID
@@ -301,6 +326,7 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
   })
 
   const failAssistant = Effect.fnUntraced(function* (error: SessionError.Error) {
+    yield* failRemoteCompaction(error)
     yield* flush()
     yield* failTools(error, "uncalled")
     yield* startAssistant()
@@ -492,20 +518,55 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
         })
         return
       }
+      case "provider-compaction-start":
+        yield* startRemoteCompaction()
+        return
+      case "provider-checkpoint":
+        yield* startRemoteCompaction()
+        if (!event.reset && !remoteCheckpointReady)
+          return yield* Effect.die(new Error("Remote compaction checkpoint item arrived before its reset item"))
+        if (event.reset) remoteCheckpointReady = true
+        yield* bus.publish(SessionEvent.Compaction.RemoteItem, {
+          sessionID: input.sessionID,
+          reset: event.reset,
+          item: event.item,
+        })
+        return
       case "step-finish":
         yield* flush()
         if (stepSettlement) return yield* Effect.die(new Error("Duplicate step finish"))
         stepSettlement = { finish: event.reason.normalized, tokens: SessionUsage.tokens(event.usage) }
         if (event.reason.normalized === "content-filter") {
           providerFailed = true
+          yield* failRemoteCompaction({ type: "provider.content-filter", message: "Provider blocked the response" })
           yield* failAssistant({ type: "provider.content-filter", message: "Provider blocked the response" })
           return
+        }
+        if (remoteCompaction && !remoteCompactionSettled) {
+          if (!remoteCheckpointReady) {
+            providerFailed = true
+            const error = {
+              type: "provider.invalid-output",
+              message: "Provider compaction boundary ended without a replayable checkpoint",
+            }
+            yield* failRemoteCompaction(error)
+            yield* failAssistant(error)
+            return
+          }
+          remoteCompactionSettled = true
+          yield* bus.publish(SessionEvent.Compaction.Ended, {
+            sessionID: input.sessionID,
+            reason: "auto",
+            text: "",
+            recent: "",
+          })
         }
         return
       case "finish":
         return
       case "provider-error":
         providerFailed = true
+        yield* failRemoteCompaction({ type: "provider.unknown", message: event.message })
         yield* failAssistant({ type: "provider.unknown", message: event.message })
         return
     }

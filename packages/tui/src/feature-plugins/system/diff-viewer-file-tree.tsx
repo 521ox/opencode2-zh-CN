@@ -4,6 +4,7 @@ import type { Plugin } from "@opencode-ai/plugin/tui"
 import { Locale } from "../../util/locale"
 import { tint } from "../../theme/color"
 import { createEffect, createMemo, For, Match, Switch } from "solid-js"
+import { useI18n } from "../../context/i18n"
 import { buildFileTree, flattenFileTree, type FileTreeItem, type FileTreeRow } from "./diff-viewer-file-tree-utils"
 import { Panel } from "./diff-viewer-ui"
 
@@ -24,6 +25,7 @@ export type DiffViewerFileTreeProps = {
 }
 
 export function DiffViewerFileTree(props: DiffViewerFileTreeProps) {
+  const i18n = useI18n()
   const theme = props.context.theme
   const tree = createMemo(() => buildFileTree(props.files))
   const rows = createMemo(() => flattenFileTree(tree(), props.expandedNodes))
@@ -53,7 +55,7 @@ export function DiffViewerFileTree(props: DiffViewerFileTreeProps) {
             <text />
           </Match>
           <Match when={props.files.length === 0}>
-            <text fg={theme.text.default}>No files</text>
+            <text fg={theme.text.default}>{i18n.t("feature.diff.fileTree.empty")}</text>
           </Match>
           <Match when={props.files.length > 0}>
             <For each={rows()}>

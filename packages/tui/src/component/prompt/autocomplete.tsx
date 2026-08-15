@@ -6,6 +6,7 @@ import { firstBy } from "remeda"
 import { createMemo, createResource, createEffect, onMount, onCleanup, Index, Show, createSignal } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useEditorContext } from "../../context/editor"
+import { useI18n } from "../../context/i18n"
 import { useClient } from "../../context/client"
 import { useData } from "../../context/data"
 import { getScrollAcceleration } from "../../util/scroll"
@@ -77,6 +78,7 @@ export function Autocomplete(props: {
   promptPartTypeId: () => number
 }) {
   const editor = useEditorContext()
+  const { t } = useI18n()
   const client = useClient()
   const data = useData()
   const keymap = Keymap.use()
@@ -711,8 +713,8 @@ export function Autocomplete(props: {
     commands: [
       {
         id: "prompt.autocomplete.prev",
-        title: "Previous autocomplete item",
-        group: "Autocomplete",
+        title: t("ui.autocomplete.previousItem"),
+        group: t("ui.autocomplete.group"),
         run() {
           setStore("input", "keyboard")
           move(-1)
@@ -720,8 +722,8 @@ export function Autocomplete(props: {
       },
       {
         id: "prompt.autocomplete.next",
-        title: "Next autocomplete item",
-        group: "Autocomplete",
+        title: t("ui.autocomplete.nextItem"),
+        group: t("ui.autocomplete.group"),
         run() {
           setStore("input", "keyboard")
           move(1)
@@ -729,24 +731,24 @@ export function Autocomplete(props: {
       },
       {
         id: "prompt.autocomplete.hide",
-        title: "Hide autocomplete",
-        group: "Autocomplete",
+        title: t("ui.autocomplete.hide"),
+        group: t("ui.autocomplete.group"),
         run() {
           hide()
         },
       },
       {
         id: "prompt.autocomplete.select",
-        title: "Select autocomplete item",
-        group: "Autocomplete",
+        title: t("ui.autocomplete.selectItem"),
+        group: t("ui.autocomplete.group"),
         run() {
           select()
         },
       },
       {
         id: "prompt.autocomplete.complete",
-        title: "Complete autocomplete item",
-        group: "Autocomplete",
+        title: t("ui.autocomplete.completeItem"),
+        group: t("ui.autocomplete.group"),
         run() {
           const selected = options()[store.selected]
           if (selected?.isDirectory) {
@@ -759,8 +761,8 @@ export function Autocomplete(props: {
       },
       {
         id: "prompt.autocomplete.destructive",
-        title: "Confirm autocomplete action",
-        group: "Autocomplete",
+        title: t("ui.autocomplete.confirmAction"),
+        group: t("ui.autocomplete.group"),
         bind: "ctrl+d",
         run: triggerDestructive,
       },
@@ -858,15 +860,15 @@ export function Autocomplete(props: {
   const scrollAcceleration = createMemo(() => getScrollAcceleration(config))
   const emptyMessage = createMemo(() => {
     const fileSearch = visibleFiles()
-    if (store.visible === "command") return "No matching commands"
+    if (store.visible === "command") return t("ui.autocomplete.noCommands")
     if (store.visible === "directory") {
-      if (files.loading) return "Searching…"
-      if (fileSearch.failed) return "Could not search directories. Keep typing to try again."
-      return "No matching directories"
+      if (files.loading) return t("ui.autocomplete.searching")
+      if (fileSearch.failed) return t("ui.autocomplete.searchDirectoriesFailed")
+      return t("ui.autocomplete.noDirectories")
     }
-    if (files.loading) return "Searching…"
-    if (fileSearch.failed) return "Could not search files. Keep typing to try again."
-    return "No matching files, agents, or references"
+    if (files.loading) return t("ui.autocomplete.searching")
+    if (fileSearch.failed) return t("ui.autocomplete.searchFilesFailed")
+    return t("ui.autocomplete.noFiles")
   })
   const emptyError = createMemo(() => store.visible === "reference" && !files.loading && visibleFiles().failed)
 

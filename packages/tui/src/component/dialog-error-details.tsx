@@ -8,6 +8,7 @@ import { getScrollAcceleration } from "../util/scroll"
 import { useDialog } from "../ui/dialog"
 import { useTheme } from "../context/theme"
 import { useToast } from "../ui/toast"
+import { useI18n } from "../context/i18n"
 
 export function DialogErrorDetails(props: { title: string; error: string; onBack: () => void }) {
   const dialog = useDialog()
@@ -18,6 +19,7 @@ export function DialogErrorDetails(props: { title: string; error: string; onBack
   const renderer = useRenderer()
   const dimensions = useTerminalDimensions()
   const config = useConfig().data
+  const { t } = useI18n()
   const [copied, setCopied] = createSignal(false)
   const [scrollable, setScrollable] = createSignal(false)
   const height = createMemo(() => Math.max(3, Math.floor(dimensions().height / 2) - 5))
@@ -52,8 +54,8 @@ export function DialogErrorDetails(props: { title: string; error: string; onBack
   Keymap.createLayer(() => ({
     mode: "modal",
     commands: [
-      { bind: "escape", title: "Back", group: "Dialog", run: props.onBack },
-      { bind: "c", title: "Copy details", group: "Dialog", run: copy },
+      { bind: "escape", title: t("dialog.errorDetails.back"), group: t("dialog.group"), run: props.onBack },
+      { bind: "c", title: t("dialog.errorDetails.copyCommand"), group: t("dialog.group"), run: copy },
     ],
   }))
 
@@ -77,7 +79,7 @@ export function DialogErrorDetails(props: { title: string; error: string; onBack
           esc
         </text>
       </box>
-      <text fg={theme.text.feedback.error.default}>✗ Failed</text>
+      <text fg={theme.text.feedback.error.default}>{`✗ ${t("dialog.errorDetails.failed")}`}</text>
       <box
         backgroundColor={overlayTheme.background.default}
         paddingLeft={2}
@@ -101,13 +103,13 @@ export function DialogErrorDetails(props: { title: string; error: string; onBack
           <span style={{ fg: theme.text.default }}>
             <b>{scrollable() ? "↑/↓" : ""}</b>
           </span>
-          <span style={{ fg: theme.text.subdued }}>{scrollable() ? " scroll" : ""}</span>
+          <span style={{ fg: theme.text.subdued }}>{scrollable() ? ` ${t("dialog.errorDetails.scroll")}` : ""}</span>
         </text>
         <text onMouseUp={copy}>
           <span style={{ fg: copied() ? theme.text.feedback.success.default : theme.text.default }}>
-            <b>{copied() ? "✓ copied" : "c"}</b>
+            <b>{copied() ? `✓ ${t("dialog.errorDetails.copied")}` : "c"}</b>
           </span>
-          <span style={{ fg: theme.text.subdued }}>{copied() ? "" : " copy details"}</span>
+          <span style={{ fg: theme.text.subdued }}>{copied() ? "" : ` ${t("dialog.errorDetails.copy")}`}</span>
         </text>
       </box>
     </box>

@@ -521,6 +521,7 @@ export namespace Compaction {
       ...Base,
       reason: Schema.Literals(["auto", "manual"]),
       recent: Schema.String,
+      remote: Schema.Boolean.pipe(optional),
       inputID: SessionMessage.ID.pipe(optional),
     },
   })
@@ -534,6 +535,17 @@ export namespace Compaction {
     },
   })
   export type Delta = typeof Delta.Type
+
+  export const RemoteItem = Event.durable({
+    type: "session.compaction.remote-item",
+    ...options,
+    schema: {
+      ...Base,
+      reset: Schema.Boolean,
+      item: SessionMessage.RemoteCompactionItem,
+    },
+  })
+  export type RemoteItem = typeof RemoteItem.Type
 
   export const Ended = Event.durable({
     type: "session.compaction.ended",
@@ -615,6 +627,7 @@ export const Definitions = Event.inventory(
   RetryScheduled,
   Compaction.Started,
   Compaction.Delta,
+  Compaction.RemoteItem,
   Compaction.Ended,
   Compaction.Failed,
   RevertEvent.Staged,

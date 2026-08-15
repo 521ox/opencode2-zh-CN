@@ -1,10 +1,22 @@
 import { AuthOptions, type ProviderAuthOption } from "../route/auth-options.js"
 import type { Route, RouteDefaultsInput } from "../route/client.js"
 import type { ProviderPackage } from "../provider-package.js"
-import { HttpOptions, ProviderID, ToolDefinition, mergeHttpOptions, type ModelID } from "../schema/index.js"
+import {
+  HttpOptions,
+  ProviderID,
+  ToolDefinition,
+  mergeHttpOptions,
+  mergeProviderOptions,
+  type ModelID,
+} from "../schema/index.js"
 import * as OpenAIChat from "../protocols/openai-chat.js"
 import * as OpenAIResponses from "../protocols/openai-responses.js"
-import { withOpenAIOptions, type OpenAIProviderOptionsInput } from "./openai-options.js"
+import {
+  openAIProviderOptions,
+  withOpenAIOptions,
+  type OpenAIOptionsInput,
+  type OpenAIProviderOptionsInput,
+} from "./openai-options.js"
 import { OpenAIImages, type OpenAIImageString } from "../protocols/openai-images.js"
 
 export type { OpenAIOptionsInput, OpenAIResponseIncludable } from "./openai-options.js"
@@ -37,6 +49,20 @@ export interface ImageGenerationOptions {
   >
 }
 
+export interface WebSearchOptions {
+  readonly filters?: {
+    readonly allowedDomains: ReadonlyArray<string>
+  }
+  readonly searchContextSize?: "low" | "medium" | "high"
+  readonly userLocation?: {
+    readonly type: "approximate"
+    readonly city?: string
+    readonly country?: string
+    readonly region?: string
+    readonly timezone?: string
+  }
+}
+
 export const imageGeneration = (options: ImageGenerationOptions = {}) =>
   ToolDefinition.make({
     name: "image_generation",
@@ -57,7 +83,23 @@ export const imageGeneration = (options: ImageGenerationOptions = {}) =>
     },
   })
 
-export interface Settings extends ProviderPackage.Settings {
+export const webSearch = (options: WebSearchOptions = {}) =>
+  ToolDefinition.make({
+    name: "web_search",
+    description: "Search the web using OpenAI's hosted web search tool.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    native: {
+      openai: {
+        type: "web_search",
+        filters:
+          options.filters === undefined ? undefined : { allowed_domains: [...options.filters.allowedDomains] },
+        search_context_size: options.searchContextSize,
+        user_location: options.userLocation,
+      },
+    },
+  })
+
+export interface Settings extends ProviderPackage.Settings, OpenAIOptionsInput {
   readonly apiKey?: string
   readonly baseURL?: string
   readonly organization?: string
@@ -132,7 +174,7 @@ const config = (settings: Settings): Config => {
     headers: Object.keys(headers).length === 0 ? undefined : headers,
     http: settings.body === undefined ? undefined : { body: { ...settings.body } },
     limits: settings.limits,
-    providerOptions: settings.providerOptions,
+    providerOptions: mergeProviderOptions(settings.providerOptions, openAIProviderOptions(settings)),
     queryParams: settings.queryParams === undefined ? undefined : { ...settings.queryParams },
   }
 }

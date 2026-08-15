@@ -6,6 +6,7 @@ import {
   toolDisplayMetadata,
   webSearchProviderLabel,
 } from "../../src/util/tool-display"
+import { translate } from "../../src/i18n"
 
 test("normalizes shared tool primitives", () => {
   expect(["bash", "task", "apply_patch", "plugin_tool"].map(canonicalToolName)).toEqual([
@@ -24,6 +25,13 @@ describe("webSearchProviderLabel", () => {
     expect(webSearchProviderLabel("parallel")).toBe("Parallel Web Search")
     expect(webSearchProviderLabel("exa")).toBe("Exa Web Search")
     expect(webSearchProviderLabel("tavily")).toBe("Tavily Web Search")
+  })
+
+  test("localizes labels while preserving provider brands", () => {
+    const t = (key: Parameters<typeof translate>[1], params?: Parameters<typeof translate>[2]) =>
+      translate("zh", key, params)
+    expect(webSearchProviderLabel("parallel", t)).toBe("Parallel 网页搜索")
+    expect(webSearchProviderLabel(undefined, t)).toBe("网页搜索")
   })
 
   for (const [name, provider] of [

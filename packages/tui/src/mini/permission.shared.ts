@@ -1,5 +1,6 @@
 import type { MiniPermissionRequest, PermissionReply } from "./types"
-import { permissionAlwaysLines, permissionOptionLabel, permissionPresentation } from "../util/permission"
+import { permissionPresentation } from "../util/permission"
+import type { Translator } from "../i18n"
 import { toolPath } from "./tool"
 import { monoPrefix } from "./mono"
 
@@ -45,7 +46,7 @@ export function permissionOptions(stage: PermissionStage): PermissionOption[] {
   return []
 }
 
-export function permissionInfo(request: MiniPermissionRequest, directory?: string, mono = false) {
+export function permissionInfo(request: MiniPermissionRequest, t: Translator, directory?: string, mono = false) {
   const state = request.tool?.state
   const info = permissionPresentation(
     {
@@ -56,6 +57,7 @@ export function permissionInfo(request: MiniPermissionRequest, directory?: strin
       toolMetadata: state?.status === "streaming" ? undefined : state?.metadata,
     },
     (value) => toolPath(value, { home: true, directory }),
+    t,
   )
   if (!mono) return info
   return {
@@ -70,11 +72,17 @@ export function permissionInfo(request: MiniPermissionRequest, directory?: strin
   }
 }
 
-export function permissionLabel(option: PermissionOption): string {
-  return permissionOptionLabel(option)
+export function permissionLabel(option: PermissionOption, t: Translator): string {
+  return t(`mini.permission.option.${option}`)
 }
 
-export { permissionAlwaysLines }
+export function permissionAlwaysLines(input: { action: string; save?: ReadonlyArray<string> }, t: Translator): string[] {
+  const save = input.save ?? []
+  if (save.length === 1 && save[0] === "*") {
+    return [t("mini.permission.alwaysAll", { action: input.action })]
+  }
+  return [t("mini.permission.alwaysPatterns"), ...save.map((item) => `- ${item}`)]
+}
 
 function permissionReply(
   sessionID: string,

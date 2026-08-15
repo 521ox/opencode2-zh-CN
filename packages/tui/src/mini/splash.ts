@@ -18,16 +18,16 @@ import {
   type ScrollbackWriter,
 } from "@opentui/core"
 import { Locale } from "../util/locale"
+import { resolveLocale, translate } from "../i18n"
 import { go } from "../logo"
 import { monoTruncate, monoTruncateMiddle } from "./mono"
 import type { RunSplashTheme } from "./theme"
 
 const SPLASH_TITLE_LIMIT = 50
-const SPLASH_TITLE_FALLBACK = "Untitled session"
-
 type SplashInput = {
   title: string | undefined
   session_id: string
+  locale: string | undefined
   mono?: boolean
 }
 
@@ -71,9 +71,9 @@ function cells(line: string): Cell[] {
   return list
 }
 
-function title(text: string | undefined, mono = false): string {
+function title(text: string | undefined, locale: string | undefined, mono = false): string {
   if (!text) {
-    return SPLASH_TITLE_FALLBACK
+    return translate(resolveLocale(locale), "mini.splash.untitled")
   }
 
   let value = ""
@@ -93,7 +93,7 @@ function title(text: string | undefined, mono = false): string {
   }
 
   if (!value) {
-    return SPLASH_TITLE_FALLBACK
+    return translate(resolveLocale(locale), "mini.splash.untitled")
   }
 
   return mono ? monoTruncate(value, SPLASH_TITLE_LIMIT, true) : Locale.truncate(value, SPLASH_TITLE_LIMIT)
@@ -216,8 +216,8 @@ function build(input: SplashWriterInput, kind: "entry" | "exit", ctx: Scrollback
     const mark = input.mono ? ["[O]"] : go.right.slice(1)
     const top = 1
     const body_left = (mark[0]?.length ?? 0) + 2
-    const session = "Session  "
-    const label = "Continue "
+    const session = translate(resolveLocale(input.locale), "mini.splash.session")
+    const label = translate(resolveLocale(input.locale), "mini.splash.continue")
 
     for (let i = 0; i < mark.length; i += 1) {
       draw(lines, mark[i] ?? "", {
@@ -270,7 +270,7 @@ function build(input: SplashWriterInput, kind: "entry" | "exit", ctx: Scrollback
 
 export function splashMeta(input: SplashInput): SplashMeta {
   return {
-    title: title(input.title, input.mono),
+    title: title(input.title, input.locale, input.mono),
     session_id: input.session_id,
   }
 }

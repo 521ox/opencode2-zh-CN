@@ -4,6 +4,7 @@ import { RGBA } from "@opentui/core"
 import { testRender } from "@opentui/solid"
 import type { Context } from "@opencode-ai/plugin/tui/context"
 import { SidebarContext } from "../../src/feature-plugins/sidebar/context"
+import { I18nProvider } from "../../src/context/i18n"
 
 function context(options?: { cost?: number; tokens?: number }) {
   const color = RGBA.fromInts(200, 200, 200)
@@ -40,7 +41,11 @@ function context(options?: { cost?: number; tokens?: number }) {
 }
 
 test("sidebar omits context before usage is available", async () => {
-  const app = await testRender(() => <SidebarContext context={context()} sessionID="session" />, {
+  const app = await testRender(() => (
+    <I18nProvider locale="en">
+      <SidebarContext context={context()} sessionID="session" />
+    </I18nProvider>
+  ), {
     width: 42,
     height: 8,
   })
@@ -55,7 +60,11 @@ test("sidebar omits context before usage is available", async () => {
 })
 
 test("sidebar shows available context usage", async () => {
-  const app = await testRender(() => <SidebarContext context={context({ tokens: 1234 })} sessionID="session" />, {
+  const app = await testRender(() => (
+    <I18nProvider locale="en">
+      <SidebarContext context={context({ tokens: 1234 })} sessionID="session" />
+    </I18nProvider>
+  ), {
     width: 42,
     height: 8,
   })

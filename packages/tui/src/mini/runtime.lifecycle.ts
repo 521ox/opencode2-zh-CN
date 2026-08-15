@@ -11,6 +11,7 @@
 import path from "path"
 import { CliRenderEvents, createCliRenderer, type CliRenderer, type ScrollbackWriter } from "@opentui/core"
 import { isFallbackTitle } from "@opencode-ai/util/session-title-fallback"
+import { resolveLocale, translate } from "../i18n"
 import { monoSnapshot } from "./mono"
 import { entrySplash, exitSplash, splashMeta } from "./splash"
 import { resolveRunTheme } from "./theme"
@@ -192,6 +193,7 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
   const meta = splashMeta({
     title: splash.title,
     session_id: input.sessionID,
+    locale: tuiConfig.locale,
     mono,
   })
   const wrote = queueSplash(
@@ -199,8 +201,9 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
     state,
     "entry",
     miniSettings.splash === "show"
-      ? entrySplash({
+        ? entrySplash({
           ...meta,
+          locale: tuiConfig.locale,
           theme: theme.splash,
           showSession: splash.showSession,
           detail: directoryLabel(input.getDirectory(), input.host.paths.home),
@@ -221,7 +224,9 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
     agents: input.agents,
     references: input.references,
     agent: input.agent,
-    modelLabel: input.model ? formatModelLabel(input.model, input.variant) : "Default model",
+    modelLabel: input.model
+      ? formatModelLabel(input.model, input.variant)
+      : translate(resolveLocale(tuiConfig.locale), "mini.footer.defaultModel"),
     model: input.model,
     variant: input.variant,
     first: input.first,
@@ -324,8 +329,10 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
             ...splashMeta({
               title: splash.title,
               session_id: sessionID,
+              locale: tuiConfig.locale,
               mono,
             }),
+            locale: tuiConfig.locale,
             theme: footer.currentTheme().splash,
             mono,
           }),
@@ -384,8 +391,10 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
           ...splashMeta({
             title: splash.title,
             session_id: next.sessionID ?? input.getSessionID?.() ?? input.sessionID,
+            locale: tuiConfig.locale,
             mono,
           }),
+          locale: tuiConfig.locale,
           theme: footer.currentTheme().splash,
           showSession: splash.showSession,
           detail: directoryLabel(input.getDirectory(), input.host.paths.home),

@@ -1,9 +1,11 @@
 import { RGBA } from "@opentui/core"
+import { useI18n } from "../context/i18n"
 import { useTheme } from "../context/theme"
 import { Spinner } from "./spinner"
 
 export function Reconnecting() {
   const theme = useTheme("elevated")
+  const { t } = useI18n()
 
   return (
     <box
@@ -28,8 +30,8 @@ export function Reconnecting() {
         paddingRight={2}
         gap={1}
       >
-        <Spinner color={theme.text.default}>Restarting service...</Spinner>
-        <text fg={theme.text.subdued}>Your session will resume automatically.</text>
+        <Spinner color={theme.text.default}>{t("ui.reconnecting.restarting")}</Spinner>
+        <text fg={theme.text.subdued}>{t("ui.reconnecting.resume")}</text>
       </box>
     </box>
   )

@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import { formatRef, parse, switchLabel } from "../../src/util/model"
+import { translate, type Translator } from "../../src/i18n"
+
+const chinese: Translator = (key, params) => translate("zh", key, params)
 
 describe("util.model", () => {
   test("splits provider from a nested model identifier", () => {
@@ -44,6 +47,18 @@ describe("util.model", () => {
     )
     expect(switchLabel({ providerID: "anthropic", id: "sonnet", variant: "high" }, undefined, previous)).toBe(
       "Switched model to anthropic/sonnet/high",
+    )
+  })
+
+  test("localizes model and variant switch notices", () => {
+    const previous = { providerID: "openai", id: "gpt-5.5", variant: "medium" }
+
+    expect(switchLabel({ ...previous, variant: "high" }, undefined, previous, chinese)).toBe("已切换为变体 high")
+    expect(switchLabel({ providerID: "anthropic", id: "sonnet" }, undefined, undefined, chinese)).toBe(
+      "已切换为模型 anthropic/sonnet",
+    )
+    expect(switchLabel({ providerID: "openai", id: "gpt-5.5" }, undefined, previous, chinese)).toBe(
+      "已切换为变体 默认",
     )
   })
 })

@@ -13,7 +13,7 @@ export const ResponseIncludables = [
 ] as const
 export type ResponseIncludable = (typeof ResponseIncludables)[number]
 
-export const ServiceTiers = ["auto", "default", "flex", "priority"] as const
+export const ServiceTiers = ["auto", "default", "flex", "scale", "priority", "fast", "ultrafast"] as const
 export type ServiceTier = (typeof ServiceTiers)[number]
 
 const TEXT_VERBOSITY = new Set<string>(["low", "medium", "high"])
@@ -33,6 +33,7 @@ export const ServiceTierSchema = Schema.Literals(ServiceTiers)
 export interface Resolved {
   readonly instructions?: string
   readonly store?: boolean
+  readonly compactThreshold?: number
   readonly reasoningEffort?: string
   readonly reasoningSummary?: "auto" | "concise" | "detailed"
   readonly include?: ReadonlyArray<ResponseIncludable>
@@ -46,9 +47,14 @@ export const resolve = (request: LLMRequest): Resolved => {
     ? input.include.filter((entry): entry is ResponseIncludable => INCLUDABLES.has(entry))
     : []
   const reasoningSummary = input?.reasoningSummary
+  const compactThreshold = input?.compactThreshold
   return {
     instructions: typeof input?.instructions === "string" ? input.instructions : undefined,
     store: typeof input?.store === "boolean" ? input.store : undefined,
+    compactThreshold:
+      typeof compactThreshold === "number" && Number.isSafeInteger(compactThreshold) && compactThreshold > 0
+        ? compactThreshold
+        : undefined,
     reasoningEffort: typeof input?.reasoningEffort === "string" ? input.reasoningEffort : undefined,
     reasoningSummary:
       reasoningSummary === "auto" || reasoningSummary === "concise" || reasoningSummary === "detailed"

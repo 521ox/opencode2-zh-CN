@@ -16,6 +16,7 @@ import {
 import { entryBody, entryCanStream, entryDone, entryFlags } from "./entry.body"
 import { monoMarkdownRenderable, monoMarkdownTableOptions } from "./mono"
 import { entryColor, entryLook, entrySyntax } from "./scrollback.shared"
+import type { Locale } from "../i18n"
 import { turnSummaryCommit } from "./turn-summary"
 import { entryWriter, sameEntryGroup, separatorRows, spacerWriter, turnSummaryWriter } from "./scrollback.writer"
 import { type RunTheme } from "./theme"
@@ -91,6 +92,7 @@ export class RunScrollbackStream {
   private wrote: boolean
   private shellOutput: () => boolean
   private mono: boolean
+  private locale: Locale
   private pendingThemes: RunTheme[] = []
 
   constructor(
@@ -102,12 +104,14 @@ export class RunScrollbackStream {
       onThemeRelease?: (theme: RunTheme) => void
       shellOutput?: () => boolean
       mono?: boolean
+      locale?: Locale
     } = {},
   ) {
     this.treeSitterClient = options.treeSitterClient
     this.wrote = options.wrote ?? false
     this.shellOutput = options.shellOutput ?? (() => true)
     this.mono = options.mono ?? false
+    this.locale = options.locale ?? "en"
     this.onThemeRelease = options.onThemeRelease
   }
 
@@ -362,7 +366,7 @@ export class RunScrollbackStream {
       return
     }
 
-    const body = entryBody(commit, { shellOutput: this.shellOutput(), mono: this.mono })
+    const body = entryBody(commit, { shellOutput: this.shellOutput(), mono: this.mono, locale: this.locale })
     if (body.type === "none") {
       if (entryDone(commit)) {
         this.markRendered(await this.finishActive(false))
@@ -397,7 +401,7 @@ export class RunScrollbackStream {
         commit,
         body: staticBody(commit, body, spaced),
         theme: this.theme,
-        opts: { mono: this.mono },
+        opts: { mono: this.mono, locale: this.locale },
       }),
     )
     this.markRendered(commit)

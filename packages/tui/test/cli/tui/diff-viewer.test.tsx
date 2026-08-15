@@ -52,8 +52,8 @@ test("closing the diff viewer returns to the route it opened from", async () => 
 test("shows an error instead of an empty diff when loading fails", async () => {
   const viewer = await renderDiffViewer([], { fail: true })
   try {
-    await viewer.app.waitForFrame((frame) => frame.includes("Could not load diff"))
-    expect(viewer.app.captureCharFrame()).not.toContain("No changes to show")
+    await viewer.app.waitForFrame((frame) => frame.includes("无法加载差异"))
+    expect(viewer.app.captureCharFrame()).not.toContain("没有要显示的变更")
   } finally {
     viewer.app.renderer.destroy()
   }

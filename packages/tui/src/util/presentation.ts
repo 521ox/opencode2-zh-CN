@@ -1,4 +1,8 @@
 import { logo } from "../logo"
+import { translate, type Translator } from "../i18n"
+import { stringWidth } from "./string-width"
+
+const englishTranslator: Translator = (key, params) => translate("en", key, params)
 
 const reset = "\x1b[0m"
 const bold = "\x1b[1m"
@@ -23,13 +27,13 @@ function wordmark(pad = "") {
   })
 }
 
-export function sessionEpilogue(input: { title: string; sessionID?: string }) {
-  const weak = (text: string) => `${dim}${text.padEnd(10, " ")}${reset}`
+export function sessionEpilogue(input: { title: string; sessionID?: string }, t: Translator = englishTranslator) {
+  const weak = (text: string) => `${dim}${text}${" ".repeat(Math.max(0, 10 - stringWidth(text)))}${reset}`
   return [
     ...wordmark("  "),
     "",
-    `  ${weak("Session")}${bold}${input.title}${reset}`,
-    `  ${weak("Continue")}${bold}opencode2 -s ${input.sessionID}${reset}`,
+    `  ${weak(t("common.session.epilogue.session"))}${bold}${input.title}${reset}`,
+    `  ${weak(t("common.session.epilogue.continue"))}${bold}opencode2 -s ${input.sessionID}${reset}`,
     "",
   ].join("\n")
 }

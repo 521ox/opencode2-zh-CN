@@ -239,16 +239,17 @@ export function migrateProvider(sourceID: string, info: ConfigProviderV1.Info) {
 
 function migrateStandardProvider(info: ConfigProviderV1.Info) {
   const options = ConfigProviderOptionsV1.provider(info.options ?? {})
+  const nativeOpenAI = info.sdk === "opencode-openai"
   return {
     name: info.name,
     env: info.env,
-    package: info.npm ? Provider.aisdk(info.npm) : undefined,
+    package: nativeOpenAI ? "@opencode-ai/ai/providers/openai" : info.npm ? Provider.aisdk(info.npm) : undefined,
     settings: info.api ? { ...options.settings, baseURL: info.api } : info.options ? options.settings : undefined,
     headers: info.options && options.headers,
     body: info.options && options.body,
     models:
       info.models &&
-      Object.fromEntries(Object.entries(info.models).map(([name, model]) => [name, migrateModel(model)])),
+      Object.fromEntries(Object.entries(info.models).map(([name, model]) => [name, migrateModel(model, nativeOpenAI)])),
   }
 }
 
@@ -294,8 +295,9 @@ export function providerID(input: string) {
   return input
 }
 
-function migrateModel(info: typeof ConfigProviderV1.Model.Type) {
+function migrateModel(info: typeof ConfigProviderV1.Model.Type, nativeOpenAI = false) {
   const settings = info.options && ConfigProviderOptionsV1.model(info.options)
+  const nativeModel = nativeOpenAI && (info.provider?.npm === undefined || info.provider.npm === "@ai-sdk/openai")
   const costs = info.cost && [
     {
       input: info.cost.input,
@@ -322,7 +324,7 @@ function migrateModel(info: typeof ConfigProviderV1.Model.Type) {
     family: info.family,
     name: info.name,
     compatibility: Model.compatibility(info.interleaved),
-    package: info.provider?.npm ? Provider.aisdk(info.provider.npm) : undefined,
+    package: info.provider?.npm && !nativeModel ? Provider.aisdk(info.provider.npm) : undefined,
     settings: info.provider?.api ? { ...settings, baseURL: info.provider.api } : settings,
     capabilities,
     headers: info.headers,

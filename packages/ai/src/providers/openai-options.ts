@@ -13,10 +13,11 @@ export type OpenAIProviderOptionsInput = ProviderOptions & {
 const definedEntries = (input: Record<string, unknown>) =>
   Object.entries(input).filter((entry) => entry[1] !== undefined)
 
-const openAIProviderOptions = (options: OpenAIOptionsInput | undefined): ProviderOptions | undefined => {
+export const openAIProviderOptions = (options: OpenAIOptionsInput | undefined): ProviderOptions | undefined => {
   const openai = Object.fromEntries(
     definedEntries({
       store: options?.store,
+      compactThreshold: options?.compactThreshold,
       reasoningEffort: options?.reasoningEffort,
       reasoningSummary: options?.reasoningSummary,
       include: options?.include,

@@ -1,3 +1,8 @@
+import { translate, type Translator } from "../i18n"
+import type { SessionMessageAssistantTool } from "@opencode-ai/client/promise"
+
+const englishTranslator: Translator = (key, params) => translate("en", key, params)
+
 export function canonicalToolName(name: string) {
   if (name === "bash") return "shell"
   if (name === "task") return "subagent"
@@ -19,12 +24,12 @@ export function primitiveInputSummary(input: Record<string, unknown>, omit: read
   return `[${entries.map(([key, value]) => `${key}=${String(value)}`).join(", ")}]`
 }
 
-export function webSearchProviderLabel(provider: unknown) {
-  if (provider === "parallel") return "Parallel Web Search"
-  if (provider === "exa") return "Exa Web Search"
-  if (provider === "firecrawl") return "Firecrawl Web Search"
-  if (provider === "tavily") return "Tavily Web Search"
-  return "Web Search"
+export function webSearchProviderLabel(provider: unknown, t: Translator = englishTranslator) {
+  if (provider === "parallel") return t("common.websearch.provider.parallel")
+  if (provider === "exa") return t("common.websearch.provider.exa")
+  if (provider === "firecrawl") return t("common.websearch.provider.firecrawl")
+  if (provider === "tavily") return t("common.websearch.provider.tavily")
+  return t("common.websearch.provider.default")
 }
 
 export function toolDisplayMetadata(state: unknown): Record<string, unknown> {
@@ -45,4 +50,3 @@ export function nonEmptyToolContent<T>(content: ReadonlyArray<T> | undefined): [
   const [first, ...rest] = content
   return first === undefined ? undefined : [first, ...rest]
 }
-import type { SessionMessageAssistantTool } from "@opencode-ai/client/promise"

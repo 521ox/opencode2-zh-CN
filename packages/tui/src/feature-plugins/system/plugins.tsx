@@ -4,10 +4,12 @@ import { usePlugin } from "../../plugin/context"
 import { DialogSelect, type DialogSelectOption } from "../../ui/dialog-select"
 import { useDialog } from "../../ui/dialog"
 import { DialogErrorDetails } from "../../component/dialog-error-details"
+import { useI18n } from "../../context/i18n"
 
 const id = "opencode.plugins"
 
 function View(props: { context: Plugin.Context; plugins: ReturnType<typeof usePlugin> }) {
+  const i18n = useI18n()
   const [locked, setLocked] = createSignal(false)
   const [focused, setFocused] = createSignal<string>()
   const [detail, setDetail] = createSignal<{ title: string; error: string }>()
@@ -20,8 +22,8 @@ function View(props: { context: Plugin.Context; plugins: ReturnType<typeof usePl
         (plugin): DialogSelectOption<string> => ({
           title: plugin.id,
           value: plugin.id,
-          category: "Built-in",
-          footer: plugin.active ? "active" : "inactive",
+          category: i18n.t("feature.plugins.category.builtIn"),
+          footer: i18n.t(plugin.active ? "feature.plugins.status.active" : "feature.plugins.status.inactive"),
           footerColor: plugin.active
             ? props.context.theme.text.feedback.success.default
             : props.context.theme.text.subdued,
@@ -34,9 +36,15 @@ function View(props: { context: Plugin.Context; plugins: ReturnType<typeof usePl
         (plugin): DialogSelectOption<string> => ({
           title: plugin.id ?? plugin.target,
           value: plugin.id ?? plugin.target,
-          category: "External",
+          category: i18n.t("feature.plugins.category.external"),
           searchText: plugin.target,
-          footer: plugin.status,
+          footer: i18n.t(
+            plugin.status === "active"
+              ? "feature.plugins.status.active"
+              : plugin.status === "inactive"
+                ? "feature.plugins.status.inactive"
+                : "feature.plugins.status.failed",
+          ),
           footerColor:
             plugin.status === "active"
               ? props.context.theme.text.feedback.success.default
@@ -68,7 +76,7 @@ function View(props: { context: Plugin.Context; plugins: ReturnType<typeof usePl
     void (current.active ? props.plugins.deactivate(current.id) : props.plugins.activate(current.id))
       .then((ok) => {
         if (ok) return
-        props.context.ui.toast.show({ variant: "error", message: `Failed to update plugin ${current.id}` })
+        props.context.ui.toast.show({ variant: "error", message: i18n.t("feature.plugins.updateFailed", { id: current.id }) })
       })
       .catch((error) => {
         props.context.ui.toast.show({
@@ -91,14 +99,14 @@ function View(props: { context: Plugin.Context; plugins: ReturnType<typeof usePl
         when={detail()}
         fallback={
           <DialogSelect
-            title="Plugins"
+            title={i18n.t("feature.plugins.title")}
             options={options()}
             locked={locked()}
             preserveSelection={true}
             onMove={(option) => setFocused(option.value)}
             actions={[
               {
-                title: "toggle",
+                title: i18n.t("feature.plugins.action.toggle"),
                 command: "plugins.toggle",
                 disabled: (option) => {
                   const failed = failure(option?.value)
@@ -110,7 +118,7 @@ function View(props: { context: Plugin.Context; plugins: ReturnType<typeof usePl
             onSelect={select}
             footer={
               <Show when={failure(focused())}>
-                <text fg={props.context.theme.text.subdued}>enter to view error</text>
+                <text fg={props.context.theme.text.subdued}>{i18n.t("feature.plugins.viewError")}</text>
               </Show>
             }
           />
@@ -118,7 +126,7 @@ function View(props: { context: Plugin.Context; plugins: ReturnType<typeof usePl
       >
         {(item) => (
           <DialogErrorDetails
-            title={`Plugin: ${item().title}`}
+            title={i18n.t("feature.plugins.errorDetails", { title: item().title })}
             error={item().error}
             onBack={() => {
               setDetail()
@@ -132,14 +140,15 @@ function View(props: { context: Plugin.Context; plugins: ReturnType<typeof usePl
 }
 
 function Commands(props: { context: Plugin.Context }) {
+  const i18n = useI18n()
   const plugins = usePlugin()
   props.context.keymap.layer(() => ({
     mode: "global",
     commands: [
       {
         id: "plugins.list",
-        title: "Plugins",
-        group: "System",
+        title: i18n.t("feature.plugins.command.list"),
+        group: i18n.t("feature.plugins.group"),
         slash: { name: "plugins" },
         palette: true,
         run() {

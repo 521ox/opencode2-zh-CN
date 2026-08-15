@@ -1,6 +1,7 @@
 import { createEffect, createMemo, createSignal, onCleanup } from "solid-js"
 import path from "path"
 import { useTuiPaths } from "../../context/runtime"
+import { useI18n } from "../../context/i18n"
 import { errorMessage } from "../../util/error"
 import { useDialog } from "../../ui/dialog"
 import { useClient } from "../../context/client"
@@ -10,6 +11,7 @@ import { useData } from "../../context/data"
 
 export function usePromptMove(input: { projectID: () => string | undefined; sessionID: () => string | undefined }) {
   const dialog = useDialog()
+  const { t } = useI18n()
   const client = useClient()
   const toast = useToast()
   const data = useData()
@@ -23,7 +25,7 @@ export function usePromptMove(input: { projectID: () => string | undefined; sess
     const projectID = await resolveProjectID()
     if (!projectID) return
     setCreating(true)
-    setProgress("Creating worktree")
+    setProgress(t("ui.promptMove.creatingWorktree"))
     try {
       const result = await client.api.worktree.create({
         projectID,
@@ -37,13 +39,13 @@ export function usePromptMove(input: { projectID: () => string | undefined; sess
       // Call a location-based route to initialize it before moving on.
       await client.api.location.get({ location: { directory } })
 
-      setProgress("Creating session")
+      setProgress(t("ui.promptMove.creatingSession"))
       return directory
     } catch (err) {
       setDestination(undefined)
       setProgress(undefined)
       setCreating(false)
-      toast.show({ title: "Creating workspace failed", message: errorMessage(err), variant: "error" })
+      toast.show({ title: t("ui.promptMove.workspaceFailed"), message: errorMessage(err), variant: "error" })
       return
     }
   }
@@ -51,7 +53,7 @@ export function usePromptMove(input: { projectID: () => string | undefined; sess
   async function open() {
     const projectID = await resolveProjectID()
     if (!projectID) {
-      toast.show({ message: "Unable to determine current project", variant: "error" })
+      toast.show({ message: t("ui.promptMove.unableProject"), variant: "error" })
       return
     }
     const sessionID = input.sessionID()
@@ -95,7 +97,7 @@ export function usePromptMove(input: { projectID: () => string | undefined; sess
       dialog.clear()
       return
     }
-    setProgress("Moving session")
+    setProgress(t("ui.promptMove.movingSession"))
     try {
       await client.api.session.move({ sessionID, directory })
       dialog.clear()
@@ -141,7 +143,7 @@ export function usePromptMove(input: { projectID: () => string | undefined; sess
   }
 
   function startSubmit() {
-    if (progress()) setProgress("Submitting prompt")
+    if (progress()) setProgress(t("ui.promptMove.submittingPrompt"))
   }
 
   function finishSubmit() {

@@ -1,10 +1,16 @@
 import { describe, expect, test } from "bun:test"
+import { translate, type Translator } from "../../src/i18n"
 import { runPromptQueue as runPromptQueueBase, type QueueInput } from "../../src/mini/runtime.queue"
 import type { RunPrompt } from "../../src/mini/types"
 import { createFooterApiFixture } from "./fixture/footer-api"
 
-function runPromptQueue(input: Omit<QueueInput, "admit" | "settle"> & Partial<Pick<QueueInput, "admit" | "settle">>) {
+const t: Translator = (key, params) => translate("en", key, params)
+
+function runPromptQueue(
+  input: Omit<QueueInput, "admit" | "settle" | "t"> & Partial<Pick<QueueInput, "admit" | "settle" | "t">>,
+) {
   return runPromptQueueBase({
+    t,
     admit: async () => {},
     settle: async () => {},
     ...input,

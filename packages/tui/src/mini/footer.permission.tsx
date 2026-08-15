@@ -14,6 +14,7 @@
 import { TextAttributes, type TextareaRenderable } from "@opentui/core"
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { For, Match, Show, Switch, createEffect, createMemo, createSignal } from "solid-js"
+import { useI18n } from "../context/i18n"
 import {
   createPermissionBodyState,
   permissionAlwaysLines,
@@ -42,6 +43,7 @@ function buttons(
   onHover: (option: PermissionOption) => void,
   onSelect: (option: PermissionOption) => void,
   mono: boolean,
+  t: ReturnType<typeof useI18n>["t"],
 ) {
   return (
     <box flexDirection="row" gap={1} flexShrink={0}>
@@ -62,7 +64,7 @@ function buttons(
               fg={option === selected ? theme.surface : theme.muted}
               attributes={option === selected && mono ? TextAttributes.INVERSE : undefined}
             >
-              {permissionLabel(option)}
+              {permissionLabel(option, t)}
             </text>
           </box>
         )}
@@ -80,6 +82,7 @@ export function RejectField(props: {
   onConfirm: () => void
   onCancel: () => void
 }) {
+  const { t } = useI18n()
   let area: TextareaRenderable | undefined
 
   createEffect(() => {
@@ -106,7 +109,7 @@ export function RejectField(props: {
       minHeight={1}
       maxHeight={3}
       wrapMode="word"
-      placeholder="Tell OpenCode what to do differently"
+      placeholder={t("mini.permission.placeholder")}
       placeholderColor={props.theme.muted}
       textColor={props.theme.text}
       focusedTextColor={props.theme.text}
@@ -143,9 +146,10 @@ export function RunPermissionBody(props: {
   onReply: (input: PermissionReply) => void | Promise<void>
   mono?: boolean
 }) {
+  const { t } = useI18n()
   const dims = useTerminalDimensions()
   const [state, setState] = createSignal(createPermissionBodyState(props.request))
-  const info = createMemo(() => permissionInfo(props.request, props.directory?.(), props.mono))
+  const info = createMemo(() => permissionInfo(props.request, t, props.directory?.(), props.mono))
   const ft = createMemo(() => toolFiletype(info().file))
   const narrow = createMemo(() => footerWidthPolicy(dims().width).dialog.narrow)
   const scrollbar = createMemo(() => ({
@@ -161,14 +165,14 @@ export function RunPermissionBody(props: {
   const busy = createMemo(() => state().submitting)
   const title = createMemo(() => {
     if (state().stage === "always") {
-      return "Always allow"
+      return t("mini.permission.title.always")
     }
 
     if (state().stage === "reject") {
-      return "Reject permission"
+      return t("mini.permission.title.reject")
     }
 
-    return "Permission required"
+    return t("mini.permission.title.required")
   })
 
   createEffect(() => {
@@ -302,7 +306,7 @@ export function RunPermissionBody(props: {
           </Match>
           <Match when={state().stage === "reject"}>
             <box paddingLeft={1}>
-              <text fg={props.theme.muted}>Tell OpenCode what to do differently</text>
+              <text fg={props.theme.muted}>{t("mini.permission.prompt")}</text>
             </box>
           </Match>
         </Switch>
@@ -343,16 +347,16 @@ export function RunPermissionBody(props: {
                 when={!busy()}
                 fallback={
                   <text fg={props.theme.muted} wrapMode="word" flexShrink={0}>
-                    Waiting for permission event...
+                    {t("mini.permission.waiting")}
                   </text>
                 }
               >
                 <box flexDirection="row" gap={2} flexShrink={0}>
                   <text fg={props.theme.text}>
-                    enter <span style={{ fg: props.theme.muted }}>confirm</span>
+                    enter <span style={{ fg: props.theme.muted }}>{t("mini.permission.confirm")}</span>
                   </text>
                   <text fg={props.theme.text}>
-                    esc <span style={{ fg: props.theme.muted }}>cancel</span>
+                    esc <span style={{ fg: props.theme.muted }}>{t("mini.permission.cancel")}</span>
                   </text>
                 </box>
               </Show>
@@ -429,7 +433,7 @@ export function RunPermissionBody(props: {
                   </Show>
                   <Show when={!info().diff && !info().patch && info().lines.length === 0}>
                     <box paddingLeft={1}>
-                      <text fg={props.theme.muted}>No diff provided</text>
+                  <text fg={props.theme.muted}>{t("mini.permission.noDiff")}</text>
                     </box>
                   </Show>
                 </box>
@@ -438,7 +442,7 @@ export function RunPermissionBody(props: {
             <Match when={true}>
               <scrollbox width="100%" height="100%" verticalScrollbarOptions={scrollbar()}>
                 <box width="100%" flexDirection="column" gap={1} paddingLeft={1}>
-                  <For each={permissionAlwaysLines(props.request)}>
+                  <For each={permissionAlwaysLines(props.request, t)}>
                     {(line) => (
                       <text fg={props.theme.text} wrapMode="word">
                         {line}
@@ -473,24 +477,28 @@ export function RunPermissionBody(props: {
             },
             run,
             props.mono ?? false,
+            t,
           )}
           <Show
             when={!busy()}
             fallback={
               <text fg={props.theme.muted} wrapMode="word" flexShrink={0}>
-                Waiting for permission event...
+                {t("mini.permission.waiting")}
               </text>
             }
           >
             <box flexDirection="row" gap={2} flexShrink={0}>
               <text fg={props.theme.text}>
-                {props.mono ? "left/right" : "⇆"} <span style={{ fg: props.theme.muted }}>select</span>
+                {props.mono ? "left/right" : "⇆"} <span style={{ fg: props.theme.muted }}>{t("mini.permission.select")}</span>
               </text>
               <text fg={props.theme.text}>
-                enter <span style={{ fg: props.theme.muted }}>confirm</span>
+                enter <span style={{ fg: props.theme.muted }}>{t("mini.permission.confirm")}</span>
               </text>
               <text fg={props.theme.text}>
-                esc <span style={{ fg: props.theme.muted }}>{state().stage === "always" ? "cancel" : "reject"}</span>
+                esc{" "}
+                <span style={{ fg: props.theme.muted }}>
+                  {state().stage === "always" ? t("mini.permission.cancel") : t("mini.permission.reject")}
+                </span>
               </text>
             </box>
           </Show>

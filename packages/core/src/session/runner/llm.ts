@@ -263,7 +263,15 @@ const layer = Layer.effect(
       const model = resolved.model
       // Make room: history must fit the context window before the call. A pending manual
       // compaction owns this instead; the runner executes it between steps.
-      const compactionInput = { session, messages: loaded.messages, model, ref: resolved.ref, cost: resolved.cost }
+      const compactionInput = {
+        session,
+        messages: loaded.messages,
+        model,
+        providerPackage: resolved.providerPackage,
+        ref: resolved.ref,
+        cost: resolved.cost,
+      }
+      const compactThreshold = compaction.remoteThreshold(compactionInput)
       if (compaction.required(compactionInput)) {
         const compacted = yield* compaction.compact(compactionInput)
         if (compacted.status === "completed")
@@ -273,6 +281,7 @@ const layer = Layer.effect(
       const prepared = yield* modelRequests.prepare({
         context: loaded,
         step: currentStep,
+        compactThreshold,
       })
       // Every local tool call forked here is owned until it reaches one durable settlement.
       const toolRuns: Array<{
@@ -402,7 +411,12 @@ const layer = Layer.effect(
             recoverOverflow &&
             !publisher.record().outputStarted &&
             isContextOverflowFailure(overflowFailure ?? streamFailure) &&
-            (yield* restore(compaction.compact(compactionInput))).status === "completed"
+            (yield* restore(
+              compaction.compact({
+                ...compactionInput,
+                remote: { request: prepared.request, options: prepared.options },
+              }),
+            )).status === "completed"
           )
             return CallOutcome.Restart({ step: currentStep, recoveredOverflow: true })
 
@@ -470,8 +484,9 @@ const layer = Layer.effect(
           }
 
           const incompleteStream =
-            llmFailure?.reason._tag === "InvalidProviderOutput" &&
-            llmFailure.reason.classification === "incomplete-stream"
+            (llmFailure?.reason._tag === "InvalidProviderOutput" &&
+              llmFailure.reason.classification === "incomplete-stream") ||
+            (llmFailure?.reason._tag === "Transport" && llmFailure.reason.operation === "read")
           const toolsAllowContinuation = tools.declines.length === 0 && !tools.interrupted
           if (llmError && incompleteStream && record.outputStarted && toolsAllowContinuation)
             return CallOutcome.Continue({
@@ -525,6 +540,14 @@ const layer = Layer.effect(
                 messages: yield* store.context(sessionID),
                 inputID: pending.id,
                 started: true,
+                prepareRemote: () =>
+                  Effect.gen(function* () {
+                    const selected = yield* context.select(sessionID)
+                    yield* InstructionState.prepare(db, bus, selected.instructions, selected.session.id)
+                    const loaded = yield* context.load(selected)
+                    const prepared = yield* modelRequests.prepare({ context: loaded, step: 0 })
+                    return { request: prepared.request, options: prepared.options }
+                  }),
               })
             }),
           ).pipe(Effect.exit)

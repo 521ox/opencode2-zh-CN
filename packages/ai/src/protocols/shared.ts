@@ -7,6 +7,7 @@ import {
   InvalidProviderOutputReason,
   InvalidRequestReason,
   AIError,
+  type ProviderFailureClassification,
   type ContentPart,
   type LLMRequest,
   type MediaPart,
@@ -256,11 +257,17 @@ export const sseFraming = (bytes: Stream.Stream<Uint8Array, AIError>): Stream.St
  * `InvalidRequestReason` with route context or trace metadata, the change
  * lands here.
  */
-export const invalidRequest = (message: string) =>
+export const invalidRequest = (
+  message: string,
+  options?: {
+    readonly parameter?: string
+    readonly classification?: ProviderFailureClassification
+  },
+) =>
   new AIError({
     module: "ProviderShared",
     method: "request",
-    reason: new InvalidRequestReason({ message }),
+    reason: new InvalidRequestReason({ message, ...options }),
   })
 
 export const matchToolChoice = <Auto, None, Required, Tool>(

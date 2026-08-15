@@ -3,6 +3,7 @@ import {
   AuthenticationReason,
   ContentPolicyReason,
   InvalidRequestReason,
+  InvalidProviderOutputReason,
   AIError,
   ProviderErrorEvent,
   ProviderInternalReason,
@@ -40,6 +41,7 @@ const patterns = [
   /model_context_window_exceeded/i,
   /too many tokens/i,
   /token limit exceeded/i,
+  /invalid ['"]?input['"]?: array too long/i,
 ]
 
 const payloadPatterns = [/request_too_large/i, /request entity too large/i, /payload too large/i, /request too large/i]
@@ -70,6 +72,7 @@ const SERVER_CODES = new Set([
   "serviceunavailableexception",
 ])
 const INVALID_REQUEST_CODES = new Set(["invalid_prompt", "invalid_request_error", "validationexception"])
+const INCOMPLETE_STREAM_CODES = new Set(["stream_read_error"])
 const RATE_LIMIT_TEXT = /rate increased too quickly|rate[-_\s]?limit|too[_\s]?many[_\s]?requests/i
 const QUOTA_TEXT = /insufficient[-_\s]?quota|quota[-_\s]?exceeded/i
 const CONTENT_POLICY_TEXT = /content[-_\s]?policy|content_filter|safety/i
@@ -95,6 +98,12 @@ export function classifyProviderFailure(input: ProviderFailure): AIError["reason
   const common = { message: input.message, providerMetadata: input.providerMetadata, http: input.http }
   const clientScoped = input.status === undefined || (input.status >= 400 && input.status < 500)
 
+  if (codes.some((code) => INCOMPLETE_STREAM_CODES.has(code)))
+    return new InvalidProviderOutputReason({
+      message: input.message,
+      classification: "incomplete-stream",
+      providerMetadata: input.providerMetadata,
+    })
   if (
     clientScoped &&
     (codes.includes("context_length_exceeded") ||

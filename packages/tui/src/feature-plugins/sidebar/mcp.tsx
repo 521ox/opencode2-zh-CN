@@ -1,7 +1,9 @@
 import { Plugin } from "@opencode-ai/plugin/tui"
 import { createMemo, For, Match, Show, Switch, createSignal } from "solid-js"
+import { useI18n } from "../../context/i18n"
 
 function View(props: { context: Plugin.Context; sessionID: string }) {
+  const i18n = useI18n()
   const [open, setOpen] = createSignal(true)
   const theme = props.context.theme
   const session = createMemo(() => props.context.data.session.get(props.sessionID))
@@ -10,6 +12,13 @@ function View(props: { context: Plugin.Context; sessionID: string }) {
   const bad = createMemo(
     () => list().filter((item) => item.status.status === "failed" || item.status.status === "needs_auth").length,
   )
+  const summary = createMemo(() => {
+    if (!bad()) return i18n.t("feature.sidebar.mcp.active", { count: on() })
+    return i18n.t(
+      bad() === 1 ? "feature.sidebar.mcp.activeWithErrors.one" : "feature.sidebar.mcp.activeWithErrors.other",
+      { connected: on(), errors: bad() },
+    )
+  })
 
   const dot = (status: string) => {
     if (status === "connected") return theme.text.feedback.success.default
@@ -31,7 +40,7 @@ function View(props: { context: Plugin.Context; sessionID: string }) {
             <Show when={!open()}>
               <span style={{ fg: theme.text.subdued }}>
                 {" "}
-                ({on()} active{bad() > 0 ? `, ${bad()} error${bad() > 1 ? "s" : ""}` : ""})
+                ({summary()})
               </span>
             </Show>
           </text>
@@ -52,12 +61,12 @@ function View(props: { context: Plugin.Context; sessionID: string }) {
                   {item.name}{" "}
                   <span style={{ fg: theme.text.subdued }}>
                     <Switch fallback={item.status.status}>
-                      <Match when={item.status.status === "connected"}>Connected</Match>
+                      <Match when={item.status.status === "connected"}>{i18n.t("feature.sidebar.mcp.status.connected")}</Match>
                       <Match when={item.status.status === "failed"}>
                         <i>{item.status.status === "failed" ? item.status.error : undefined}</i>
                       </Match>
-                      <Match when={item.status.status === "disabled"}>Disabled</Match>
-                      <Match when={item.status.status === "needs_auth"}>Needs auth</Match>
+                      <Match when={item.status.status === "disabled"}>{i18n.t("feature.sidebar.mcp.status.disabled")}</Match>
+                      <Match when={item.status.status === "needs_auth"}>{i18n.t("feature.sidebar.mcp.status.needsAuth")}</Match>
                     </Switch>
                   </span>
                 </text>

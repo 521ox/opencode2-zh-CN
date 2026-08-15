@@ -8,10 +8,15 @@ import { createSignal, onCleanup, onMount } from "solid-js"
 import { dialogWidth } from "../../../src/ui/dialog"
 import { dialogSelectContentWidth, type DialogSelectOption } from "../../../src/ui/dialog-select"
 import { truncateFilePath } from "../../../src/ui/file-path"
+import { translate } from "../../../src/i18n"
 import { stringWidth } from "../../../src/util/string-width"
 import { emptyThemeSource, tmpdir } from "../../fixture/fixture"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
+
+const search = translate("zh", "ui.dialog.select.search")
+const noItems = translate("zh", "ui.dialog.select.noItems")
+const noResults = translate("zh", "ui.dialog.select.noResults")
 
 async function renderSelect(
   root: string,
@@ -260,12 +265,12 @@ test("renders one gap before an empty state", async () => {
   )
 
   try {
-    await app.waitForFrame((frame) => frame.includes("No items available"))
+    await app.waitForFrame((frame) => frame.includes(noItems))
     const lines = app
       .captureCharFrame()
       .split("\n")
       .map((line) => line.trim())
-    expect(lines.indexOf("No items available") - lines.indexOf("Search")).toBe(2)
+    expect(lines.indexOf(noItems) - lines.indexOf(search)).toBe(2)
   } finally {
     app.renderer.destroy()
   }
@@ -284,7 +289,7 @@ test("footer actions run when filtering leaves no selected row", async () => {
 
   try {
     for (const key of "missing") app.mockInput.pressKey(key)
-    await app.waitForFrame((frame) => frame.includes("No results found"))
+    await app.waitForFrame((frame) => frame.includes(noResults))
 
     app.mockInput.pressKey("d", { ctrl: true })
     app.mockInput.pressTab()
@@ -344,7 +349,7 @@ test("selects a repopulated option after removing the only option", async () => 
 
   try {
     select.replaceOptions([])
-    await select.app.waitForFrame((frame) => frame.includes("No items available"))
+    await select.app.waitForFrame((frame) => frame.includes(noItems))
     select.app.mockInput.pressEnter()
     expect(select.selected).toEqual([])
 
@@ -370,7 +375,7 @@ test("keeps the cursor index while options are temporarily empty", async () => {
     select.app.mockInput.pressArrow("down")
     await select.app.waitFor(() => select.moved.at(-1) === "third")
     select.replaceOptions([])
-    await select.app.waitForFrame((frame) => frame.includes("No items available"))
+    await select.app.waitForFrame((frame) => frame.includes(noItems))
 
     select.replaceOptions(options)
     await select.app.waitForFrame((frame) => frame.includes("third"))
@@ -418,11 +423,11 @@ test("shows no-match and still closes after a flat filter goes empty", async () 
     await select.app.mockInput.typeText("models")
     await select.app.waitForFrame((frame) => frame.includes("models.dev") && !frame.includes("opencode2"))
     await select.app.mockInput.typeText(" missing")
-    await select.app.waitForFrame((frame) => frame.includes("No results found"))
+    await select.app.waitForFrame((frame) => frame.includes(noResults))
     expect(select.app.captureCharFrame()).not.toContain("models.dev")
 
     select.app.mockInput.pressEscape()
-    await select.app.waitForFrame((frame) => !frame.includes("Mutable options") && !frame.includes("No results found"))
+    await select.app.waitForFrame((frame) => !frame.includes("Mutable options") && !frame.includes(noResults))
   } finally {
     select.app.renderer.destroy()
   }

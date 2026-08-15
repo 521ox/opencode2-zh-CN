@@ -389,9 +389,20 @@ export function update(adapter: Adapter, event: SessionEvent.DurableEvent) {
             reason: event.data.reason,
             summary: "",
             recent: event.data.recent ?? "",
+            remote: event.data.remote ? [] : undefined,
             time: { created: event.created },
           }),
         ),
+      "session.compaction.remote-item": (event) =>
+        Effect.gen(function* () {
+          const current = yield* adapter.getCompaction()
+          if (current?.status !== "running" || (current.remote === undefined && !event.data.reset))
+            return yield* Effect.die(new Error("Remote compaction item arrived outside a remote compaction"))
+          yield* adapter.updateCompaction({
+            ...current,
+            remote: event.data.reset ? [event.data.item] : [...(current.remote ?? []), event.data.item],
+          })
+        }),
       "session.compaction.ended": (event) => {
         return Effect.gen(function* () {
           const current = yield* adapter.getCompaction()

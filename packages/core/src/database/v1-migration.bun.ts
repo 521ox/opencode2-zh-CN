@@ -14,6 +14,7 @@ import { existsSync } from "node:fs"
 import path from "node:path"
 import type { Database as SQLiteDatabase } from "bun:sqlite"
 import { Project } from "@opencode-ai/schema/project"
+import { PersistedRevert } from "@opencode-ai/schema/session-revert"
 
 export type SourceMessage = {
   readonly id: string
@@ -29,6 +30,7 @@ export type SourcePart = {
   readonly session_id: string
   readonly time_created: number
   readonly time_updated: number
+  readonly seq: number | null
   readonly data: string
 }
 
@@ -92,7 +94,10 @@ type Options = {
   readonly nextDatabasePath?: string
 }
 
-type MigrationState = { readonly phase: "sessions"; readonly cursor?: string } | { readonly phase: "completed" }
+type MigrationState =
+  | { readonly phase: "clearing-events"; readonly deleted: number }
+  | { readonly phase: "sessions"; readonly cursor?: string }
+  | { readonly phase: "completed" }
 
 type RuntimeState =
   | { readonly status: "idle" }
@@ -165,16 +170,19 @@ const EVENT_DELETE_BATCH_SIZE = 1_000
 const decodeJson = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)
 const decodeMessage = Schema.decodeUnknownOption(SessionV1.Info)
 const decodePart = Schema.decodeUnknownOption(SessionV1.Part)
+const decodeRevert = Schema.decodeUnknownOption(PersistedRevert)
 let runtimeState: RuntimeState = { status: "idle" }
 
 export function transformSession(input: TransformInput): TransformResult {
   const warnings: Warning[] = []
+  const messagesWithParts = new Set(input.parts.map((part) => part.message_id))
   const messages = input.messages
     .map((row) => {
       const value = Option.getOrUndefined(decodeJson(row.data))
+      const normalized = normalizeLegacyMessage(value, row, messagesWithParts.has(row.id))
       const decoded =
-        value && typeof value === "object"
-          ? Option.getOrUndefined(decodeMessage({ ...value, id: row.id, sessionID: row.session_id }))
+        normalized && typeof normalized === "object"
+          ? Option.getOrUndefined(decodeMessage({ ...normalized, id: row.id, sessionID: row.session_id }))
           : undefined
       if (decoded) return { row, value: decoded }
       warnings.push({ reason: "invalid-message", sessionID: input.session.id, messageID: row.id })
@@ -214,7 +222,7 @@ export function transformSession(input: TransformInput): TransformResult {
       return undefined
     })
     .filter((item): item is NonNullable<typeof item> => item !== undefined)
-    .sort((a, b) => a.row.id.localeCompare(b.row.id))
+    .sort((a, b) => comparePartOrder(a.row, b.row))
   const byMessage = Map.groupBy(parts, (item) => item.row.message_id)
   const paired = new Set<string>()
   const used = new Set(messages.map((item) => item.row.id))
@@ -419,8 +427,8 @@ export function transformSession(input: TransformInput): TransformResult {
       tokens_reasoning: assistants.reduce((total, item) => total + item.tokens.reasoning, 0),
       tokens_cache_read: assistants.reduce((total, item) => total + item.tokens.cache.read, 0),
       tokens_cache_write: assistants.reduce((total, item) => total + item.tokens.cache.write, 0),
-      revert: null,
-      time_compacting: null,
+      revert: migrateRevert(input.session.revert, projected, warnings, input.session.id),
+      time_compacting: input.session.time_compacting,
     },
     watermark: projected.length - 1,
     warnings,
@@ -476,32 +484,53 @@ export function run(options: Options = {}): Effect.Effect<RunResult, never, Data
       const state = yield* readState(db)
       if (state?.phase === "completed") return { status: "completed" as const }
       if (!(yield* hasLegacySessions(db))) return { status: "completed" as const }
+      const hasLegacyPartSequence =
+        (yield* db.get<{ value: number }>(
+          sql`SELECT 1 AS value FROM pragma_table_info('part') WHERE name = 'seq' LIMIT 1`,
+        )) !== undefined
       const migrate = Effect.gen(function* () {
         const now = Date.now()
         yield* db.run(sql`
           INSERT OR IGNORE INTO project (id, worktree, time_created, time_updated, sandboxes)
           VALUES (${Project.ID.global}, ${path.parse(global.data).root}, ${now}, ${now}, '[]')
         `)
-        if (state === undefined)
-          yield* db
-            .transaction((tx) =>
-              Effect.gen(function* () {
-                while (true) {
+        if (state === undefined || state.phase === "clearing-events") {
+          let deleted = state?.phase === "clearing-events" ? state.deleted : 0
+          const remaining = (yield* db.get<{ value: number }>(sql`SELECT COUNT(*) AS value FROM event`))?.value ?? 0
+          const total = deleted + remaining
+          updateProgress({ label: "Clearing old events", numerator: deleted, denominator: total })
+          while (true) {
+            const batch = yield* db
+              .transaction((tx) =>
+                Effect.gen(function* () {
                   yield* tx.run(sql`
                     DELETE FROM event
                     WHERE rowid IN (SELECT rowid FROM event LIMIT ${EVENT_DELETE_BATCH_SIZE})
                   `)
-                  const deleted = (yield* tx.get<{ value: number }>(sql`SELECT changes() AS value`))?.value ?? 0
-                  if (deleted < EVENT_DELETE_BATCH_SIZE) break
-                  yield* Effect.yieldNow
-                }
-                yield* tx
-                  .insert(KVTable)
-                  .values({ key: MIGRATION_STATE_KEY, value: { phase: "sessions" } })
-                  .run()
-              }),
-            )
-            .pipe(Effect.orDie)
+                  const count = (yield* tx.get<{ value: number }>(sql`SELECT changes() AS value`))?.value ?? 0
+                  const total = deleted + count
+                  const done = count < EVENT_DELETE_BATCH_SIZE
+                  const value: MigrationState = done
+                    ? { phase: "sessions" }
+                    : { phase: "clearing-events", deleted: total }
+                  yield* tx
+                    .insert(KVTable)
+                    .values({ key: MIGRATION_STATE_KEY, value })
+                    .onConflictDoUpdate({
+                      target: KVTable.key,
+                      set: { value, time_updated: Date.now() },
+                    })
+                    .run()
+                  return { count, total, done }
+                }),
+              )
+              .pipe(Effect.orDie)
+            deleted = batch.total
+            updateProgress({ label: "Clearing old events", numerator: deleted, denominator: total })
+            if (batch.done) break
+            yield* Effect.yieldNow
+          }
+        }
         const sourceTotal = yield* countNextSessions(nextPath(options, global.data))
         const legacyTotal = (yield* db.get<{ value: number }>(sql`SELECT COUNT(*) AS value FROM session`))?.value ?? 0
         const cursor = state?.phase === "sessions" ? state.cursor : undefined
@@ -570,7 +599,9 @@ export function run(options: Options = {}): Effect.Effect<RunResult, never, Data
                   sql`SELECT id, session_id, time_created, time_updated, data FROM message WHERE session_id = ${next.id}`,
                 )
                 const sourceParts = yield* tx.all<SourcePart>(
-                  sql`SELECT id, message_id, session_id, time_created, time_updated, data FROM part WHERE session_id = ${next.id}`,
+                  hasLegacyPartSequence
+                    ? sql`SELECT id, message_id, session_id, time_created, time_updated, seq, data FROM part WHERE session_id = ${next.id}`
+                    : sql`SELECT id, message_id, session_id, time_created, time_updated, NULL AS seq, data FROM part WHERE session_id = ${next.id}`,
                 )
                 const transformed = transformSession({ session: next, messages: sourceMessages, parts: sourceParts })
                 yield* Effect.forEach(transformed.warnings, (warning) =>
@@ -637,6 +668,76 @@ export function run(options: Options = {}): Effect.Effect<RunResult, never, Data
       return yield* migrate
     }).pipe(Effect.orDie),
   )
+}
+
+function comparePartOrder(left: SourcePart, right: SourcePart) {
+  if (left.seq === null && right.seq !== null) return -1
+  if (left.seq !== null && right.seq === null) return 1
+  if (left.seq !== null && right.seq !== null && left.seq !== right.seq) return left.seq - right.seq
+  return left.id.localeCompare(right.id)
+}
+
+function normalizeLegacyMessage(value: unknown, row: SourceMessage, hasParts: boolean) {
+  if (!isRecord(value) || value.role !== "assistant" || hasParts) return value
+  if (value.finish !== "error" || value.cost !== 0) return value
+  const time = isRecord(value.time) ? value.time : undefined
+  const tokens = isRecord(value.tokens) ? value.tokens : undefined
+  const cache = tokens && isRecord(tokens.cache) ? tokens.cache : undefined
+  const error = isRecord(value.error) ? value.error : undefined
+  const data = error && isRecord(error.data) ? error.data : undefined
+  if (
+    !time ||
+    !tokens ||
+    !cache ||
+    !error ||
+    !data ||
+    error.name !== "InterruptedError" ||
+    data.reason !== "dangling_empty_assistant_message_after_transport_interrupt" ||
+    data.session_id !== row.session_id ||
+    data.message_id !== row.id ||
+    typeof data.message !== "string" ||
+    typeof data.recovered_at_ms !== "number" ||
+    !Number.isFinite(data.recovered_at_ms) ||
+    data.recovered_at_ms < 0 ||
+    time.completed !== data.recovered_at_ms ||
+    row.time_updated !== data.recovered_at_ms ||
+    tokens.input !== 0 ||
+    tokens.output !== 0 ||
+    tokens.reasoning !== 0 ||
+    cache.read !== 0 ||
+    cache.write !== 0
+  )
+    return value
+  return {
+    ...value,
+    error: {
+      name: "MessageAbortedError",
+      data: { message: data.message },
+    },
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function migrateRevert(
+  input: TransformInput["session"]["revert"],
+  messages: TransformResult["messages"],
+  warnings: Warning[],
+  sessionID: string,
+) {
+  if (input === null) return null
+  const revert = Option.getOrUndefined(decodeRevert(input))
+  if (!revert) {
+    warnings.push({ reason: "invalid-revert", sessionID })
+    return null
+  }
+  if (!messages.some((message) => message.id === revert.messageID)) {
+    warnings.push({ reason: "missing-revert-boundary", sessionID, messageID: revert.messageID })
+    return null
+  }
+  return revert
 }
 
 function nextPath(options: Options, data: string) {
@@ -984,6 +1085,11 @@ function readState(db: Database.Interface["db"]): Effect.Effect<MigrationState |
 function parseState(input: unknown): MigrationState | undefined {
   if (!input || typeof input !== "object" || !("phase" in input)) return
   if (input.phase === "completed") return { phase: "completed" }
+  if (input.phase === "clearing-events") {
+    if (!("deleted" in input) || typeof input.deleted !== "number" || !Number.isSafeInteger(input.deleted))
+      return { phase: "clearing-events", deleted: 0 }
+    return { phase: "clearing-events", deleted: Math.max(0, input.deleted) }
+  }
   if (input.phase !== "sessions") return
   if (!("cursor" in input) || input.cursor === undefined) return { phase: "sessions" }
   if (typeof input.cursor === "string") return { phase: "sessions", cursor: input.cursor }

@@ -31,6 +31,7 @@ import { RunFormBody } from "./footer.form"
 import { createFormBodyState, type FormBodyState } from "./form.shared"
 import { footerStatuslinePolicy } from "./footer.width"
 import { Keymap } from "../context/keymap"
+import { useI18n } from "../context/i18n"
 import { modelInfo } from "./variant.shared"
 import { monoShortcut } from "./mono"
 import { stringWidth } from "../util/string-width"
@@ -120,6 +121,7 @@ type RunFooterViewProps = {
 }
 
 export function RunFooterView(props: RunFooterViewProps) {
+  const { t } = useI18n()
   const term = useTerminalDimensions()
   const width = createMemo(() => term().width)
   const active = createMemo<FooterView>(() => props.view?.() ?? { type: "prompt" })
@@ -231,11 +233,17 @@ export function RunFooterView(props: RunFooterViewProps) {
   const footerStatus = createMemo(() => {
     const current = model() ?? props.state().model.trim()
     const variant = props.currentVariant()
-    const details = [busy() ? "running" : "idle", `agent ${props.currentAgent()}`]
+    const details = [
+      busy() ? t("mini.footer.status.running") : t("mini.footer.status.idle"),
+      t("mini.footer.status.agentLabel", { agent: props.currentAgent() }),
+    ]
     if (current) details.push(variant ? `${current} ${variant}` : current)
     if (usage()) details.push(props.mono ? usage().replaceAll(" · ", " - ") : usage())
-    if (queue().length > 0) details.push(`${queue().length} queued`)
-    if (activeTabs().length > 0) details.push(`${activeTabs().length} subagent${activeTabs().length === 1 ? "" : "s"}`)
+    if (queue().length > 0) details.push(t("mini.footer.status.queued", { count: queue().length }))
+    if (activeTabs().length > 0) {
+      const count = activeTabs().length
+      details.push(t(count === 1 ? "mini.footer.status.subagents.one" : "mini.footer.status.subagents.other", { count }))
+    }
     return details.join(props.mono ? " - " : " · ")
   })
   const permission = createMemo<Extract<FooterView, { type: "permission" }> | undefined>(() => {
@@ -333,7 +341,12 @@ export function RunFooterView(props: RunFooterViewProps) {
         (error) => error,
       )
       if (!error) return true
-      props.onStatus(`failed to ${action === "cancel" ? "delete" : action} queued prompt: ${errorMessage(error)}`)
+      props.onStatus(
+        t("mini.footer.error.queuedAction", {
+          action: action === "cancel" ? t("mini.command.action.delete") : t("mini.command.action.steer"),
+          error: errorMessage(error),
+        }),
+      )
       return false
     })
     return result ?? false
@@ -366,6 +379,7 @@ export function RunFooterView(props: RunFooterViewProps) {
     openTab(next.sessionID)
   }
   const composer = createPromptState({
+    t,
     directory: props.directory,
     findFiles: props.findFiles,
     agents: props.agents,
@@ -398,10 +412,10 @@ export function RunFooterView(props: RunFooterViewProps) {
   const notice = createMemo(() => props.state().notice.trim())
   const modeLabel = createMemo(() => {
     if (exiting()) {
-      return "EXIT"
+      return t("mini.footer.mode.exit")
     }
 
-    return shell() ? "SHELL" : undefined
+    return shell() ? t("mini.footer.mode.shell") : undefined
   })
   const modeColor = createMemo(() => {
     if (exiting()) {
@@ -416,14 +430,14 @@ export function RunFooterView(props: RunFooterViewProps) {
   })
   const statusText = createMemo(() => {
     if (exiting()) {
-      return `Press ${clearShortcut() || "ctrl+c"} again to exit`
+      return t("mini.footer.status.pressAgainToExit", { shortcut: clearShortcut() || "ctrl+c" })
     }
 
-    if (busy() && armed()) return "again to interrupt"
+    if (busy() && armed()) return t("mini.footer.status.againToInterrupt")
 
     if (notice()) return notice()
 
-    if (!footerDetails()) return shell() ? "Shell mode" : ""
+    if (!footerDetails()) return shell() ? t("mini.footer.status.shellMode") : ""
 
     if (busy()) return "interrupt"
 
@@ -431,7 +445,7 @@ export function RunFooterView(props: RunFooterViewProps) {
       return stateStatus()
     }
 
-    return shell() ? "Shell mode" : ""
+    return shell() ? t("mini.footer.status.shellMode") : ""
   })
   const activityMeta = createMemo(() => {
     if (!footerDetails()) return ""
@@ -472,13 +486,13 @@ export function RunFooterView(props: RunFooterViewProps) {
 
     const items: Array<{ key: string; label: string }> = []
     if (foregroundSubagents() && backgroundShortcut()) {
-      items.push({ key: backgroundShortcut(), label: "background" })
+      items.push({ key: backgroundShortcut(), label: t("mini.footer.hint.background") })
     }
     if (queue().length > 0 && queuedShortcut()) {
-      items.push({ key: queuedShortcut(), label: `${queue().length} queued` })
+      items.push({ key: queuedShortcut(), label: t("mini.footer.status.queued", { count: queue().length }) })
     }
     if (activeTabs().length > 0 && subagentShortcut()) {
-      items.push({ key: subagentShortcut(), label: "subagents" })
+      items.push({ key: subagentShortcut(), label: t("mini.footer.hint.subagents") })
     }
     return items
   })
@@ -486,11 +500,11 @@ export function RunFooterView(props: RunFooterViewProps) {
     if (!prompt()) return
 
     if (shell()) {
-      return { key: "esc", label: "normal" }
+      return { key: "esc", label: t("mini.footer.hint.normal") }
     }
 
     if (command()) {
-      return { key: command(), label: "cmd" }
+      return { key: command(), label: t("mini.footer.hint.command") }
     }
   })
   const commandHintWidth = createMemo(() => {
@@ -551,14 +565,14 @@ export function RunFooterView(props: RunFooterViewProps) {
     commands: [
       {
         id: "command.palette.show",
-        title: "Open command palette",
-        group: "Prompt",
+        title: t("mini.footer.keymap.openCommandPalette"),
+        group: t("mini.footer.group.prompt"),
         run: openCommand,
       },
       {
         id: "variant.cycle",
-        title: "Cycle model variant",
-        group: "Model",
+        title: t("mini.footer.keymap.cycleModelVariant"),
+        group: t("mini.footer.group.model"),
         run: props.onCycle,
       },
     ],
@@ -570,8 +584,8 @@ export function RunFooterView(props: RunFooterViewProps) {
     commands: [
       {
         id: "session.background",
-        title: "Background subagents",
-        group: "Session",
+        title: t("mini.footer.keymap.backgroundSubagents"),
+        group: t("mini.footer.group.session"),
         run: () => props.onBackground?.(),
       },
     ],
@@ -582,8 +596,8 @@ export function RunFooterView(props: RunFooterViewProps) {
     commands: [
       {
         id: "session.child.first",
-        title: "View subagents",
-        group: "Session",
+        title: t("mini.footer.keymap.viewSubagents"),
+        group: t("mini.footer.group.session"),
         run: openSubagentMenu,
       },
     ],
@@ -594,8 +608,8 @@ export function RunFooterView(props: RunFooterViewProps) {
     commands: [
       {
         id: "session.queued_prompts",
-        title: "View queued prompts",
-        group: "Session",
+        title: t("mini.footer.keymap.viewQueuedPrompts"),
+        group: t("mini.footer.group.session"),
         run: openQueuedMenu,
       },
     ],
@@ -611,8 +625,8 @@ export function RunFooterView(props: RunFooterViewProps) {
     commands: [
       {
         id: "composer.subagent.interrupt",
-        title: "Interrupt subagent",
-        group: "Session",
+        title: t("mini.footer.keymap.interruptSubagent"),
+        group: t("mini.footer.group.session"),
         run: () => {
           const current = selectedTab()
           if (current?.status !== "running") {

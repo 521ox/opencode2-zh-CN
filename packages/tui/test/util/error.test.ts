@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test"
-import { errorFormat, errorMessage } from "../../src/util/error"
+import { cliErrorMessage, errorFormat, errorMessage } from "../../src/util/error"
+import { translate, type Translator } from "../../src/i18n"
+
+const chinese: Translator = (key, params) => translate("zh", key, params)
 
 describe("util.error", () => {
   test("formats native Error instances", () => {
@@ -32,5 +35,29 @@ describe("util.error", () => {
     }
 
     expect(errorMessage(err)).toBe("ResolveMessage: Cannot resolve module")
+  })
+
+  test("localizes TUI-owned structured startup errors", () => {
+    expect(
+      cliErrorMessage(
+        {
+          _tag: "ProviderModelNotFoundError",
+          providerID: "mycodex",
+          modelID: "gpt-test",
+          suggestions: ["gpt-next"],
+        },
+        chinese,
+      ),
+    ).toBe(
+      [
+        "未找到模型：mycodex/gpt-test",
+        "你是否想用：gpt-next",
+        "请运行 `opencode models` 查看可用模型",
+        "或检查配置（opencode.json）中的提供商/模型名称",
+      ].join("\n"),
+    )
+    expect(cliErrorMessage({ _tag: "ProviderInitError", providerID: "mycodex" }, chinese)).toBe(
+      "初始化提供商“mycodex”失败。请检查凭据和配置。",
+    )
   })
 })

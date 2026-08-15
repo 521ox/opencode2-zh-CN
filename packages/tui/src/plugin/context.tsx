@@ -20,6 +20,7 @@ import { createStore, produce, reconcile as reconcileStore, unwrap } from "solid
 import { isDeepEqual } from "remeda"
 import "#runtime-plugin-support"
 import { useConfig } from "../config"
+import { useI18n } from "../context/i18n"
 import { useTuiLifecycle } from "../context/runtime"
 import { errorMessage } from "../util/error"
 import { builtins } from "./builtins"
@@ -89,6 +90,7 @@ export function combineMarkdownRenderers(
 export function PluginProvider(props: ParentProps<{ packages: PackageResolver; directories: string[] }>) {
   const host = usePluginHost()
   const config = useConfig()
+  const i18n = useI18n()
   const lifecycle = useTuiLifecycle()
   const directory = config.path ? path.dirname(config.path) : process.cwd()
   const [store, setStore] = createStore({
@@ -393,9 +395,9 @@ export function PluginProvider(props: ParentProps<{ packages: PackageResolver; d
       )
         host.toast.show({
           variant: "error",
-          title: `Plugin failed: ${state.target}`,
-          message: "Run /plugins to view details.",
-          action: { label: "Open plugins", run: () => host.keymap.dispatch("plugins.list") },
+          title: i18n.t("misc.plugin.failed.title", { target: state.target }),
+          message: i18n.t("misc.plugin.failed.message"),
+          action: { label: i18n.t("misc.plugin.failed.action"), run: () => host.keymap.dispatch("plugins.list") },
         })
     setStore("states", reconcileStore(states))
   }

@@ -3,11 +3,12 @@ import { useConfig } from "../config"
 import { DialogSelect } from "../ui/dialog-select"
 import { useTheme } from "../context/theme"
 import { useToast } from "../ui/toast"
+import { useI18n } from "../context/i18n"
 
 type Experiment = {
   id: string
-  title: string
-  description: string
+  title: "dialog.experiments.tabScroll.title"
+  description: "dialog.experiments.tabScroll.description"
 }
 
 // In-flight features anyone can opt into. Each entry is temporary: an
@@ -16,8 +17,8 @@ type Experiment = {
 export const experiments: Experiment[] = [
   {
     id: "tab_scroll",
-    title: "Remember tab scroll",
-    description: "Keep each open tab's reading position and show a shortcut back to the bottom.",
+    title: "dialog.experiments.tabScroll.title",
+    description: "dialog.experiments.tabScroll.description",
   },
 ]
 
@@ -25,6 +26,7 @@ export function DialogExperiments() {
   const config = useConfig()
   const theme = useTheme()
   const toast = useToast()
+  const { t } = useI18n()
   const [selected, setSelected] = createSignal<Experiment>()
   const [saving, setSaving] = createSignal(false)
 
@@ -32,9 +34,9 @@ export function DialogExperiments() {
 
   const options = createMemo(() =>
     experiments.map((experiment) => ({
-      title: experiment.title,
-      searchText: experiment.description,
-      footer: enabled(experiment) ? "on" : "off",
+      title: t(experiment.title),
+      searchText: t(experiment.description),
+      footer: enabled(experiment) ? t("dialog.experiments.on") : t("dialog.experiments.off"),
       value: experiment,
     })),
   )
@@ -56,30 +58,30 @@ export function DialogExperiments() {
 
   return (
     <DialogSelect
-      title="Experiments"
+      title={t("dialog.experiments.title")}
       options={options()}
       renderFilter={experiments.length > 0}
       onMove={(option) => setSelected(option.value)}
       onSelect={(option) => void change(option.value)}
       emptyView={
         <box paddingLeft={4} paddingRight={4}>
-          <text fg={theme.text.subdued}>No experiments available</text>
+          <text fg={theme.text.subdued}>{t("dialog.experiments.empty")}</text>
         </box>
       }
-      footerHints={experiments.length > 0 ? [{ title: "←/→", label: "change" }] : []}
+      footerHints={experiments.length > 0 ? [{ title: "←/→", label: t("dialog.experiments.change") }] : []}
       bindings={
         experiments.length > 0
           ? [
               {
                 bind: "left",
-                title: "Previous value",
-                group: "Experiments",
+                title: t("dialog.experiments.previousValue"),
+                group: t("dialog.experiments.title"),
                 run: () => void change(),
               },
               {
                 bind: "right",
-                title: "Next value",
-                group: "Experiments",
+                title: t("dialog.experiments.nextValue"),
+                group: t("dialog.experiments.title"),
                 run: () => void change(),
               },
             ]

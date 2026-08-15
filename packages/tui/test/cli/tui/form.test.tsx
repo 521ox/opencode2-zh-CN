@@ -9,6 +9,7 @@ import { ThemeProvider } from "../../../src/context/theme"
 import { Keymap } from "../../../src/context/keymap"
 import { ConfigProvider } from "../../../src/config"
 import { ToastProvider } from "../../../src/ui/toast"
+import { I18nProvider } from "../../../src/context/i18n"
 import { emptyThemeSource, tmpdir } from "../../fixture/fixture"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
@@ -71,7 +72,9 @@ async function mountForm(root: string, width = 80, fields?: FormWithLocation["fi
             <ClientProvider api={createApi(transport.fetch)}>
               <ThemeProvider mode="dark" source={emptyThemeSource}>
                 <ToastProvider>
-                  <FormPrompt form={form} />
+                  <I18nProvider locale="en">
+                    <FormPrompt form={form} />
+                  </I18nProvider>
                 </ToastProvider>
               </ThemeProvider>
             </ClientProvider>

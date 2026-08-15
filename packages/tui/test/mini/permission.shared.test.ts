@@ -1,15 +1,22 @@
 import { describe, expect, test } from "bun:test"
+import { translate, type Translator } from "../../src/i18n"
 import {
   createPermissionBodyState,
   permissionAlwaysLines,
   permissionCancel,
   permissionEscape,
-  permissionInfo,
+  permissionInfo as permissionInfoBase,
   permissionReject,
   permissionRun,
 } from "../../src/mini/permission.shared"
 import type { MiniPermissionRequest } from "../../src/mini/types"
 import { canonicalToolPart } from "./fixture/tool-part"
+
+const t: Translator = (key, params) => translate("en", key, params)
+
+function permissionInfo(request: MiniPermissionRequest, directory?: string, mono?: boolean) {
+  return permissionInfoBase(request, t, directory, mono)
+}
 
 function req(input: Partial<MiniPermissionRequest> = {}): MiniPermissionRequest {
   return {
@@ -182,11 +189,11 @@ describe("run permission shared", () => {
   })
 
   test("formats always-allow copy for wildcard and explicit patterns", () => {
-    expect(permissionAlwaysLines(req({ action: "bash", save: ["*"] }))).toEqual([
+    expect(permissionAlwaysLines(req({ action: "bash", save: ["*"] }), t)).toEqual([
       "This will allow bash until OpenCode is restarted.",
     ])
 
-    expect(permissionAlwaysLines(req({ save: ["src/**/*.ts", "src/**/*.tsx"] }))).toEqual([
+    expect(permissionAlwaysLines(req({ save: ["src/**/*.ts", "src/**/*.tsx"] }), t)).toEqual([
       "This will allow the following patterns until OpenCode is restarted.",
       "- src/**/*.ts",
       "- src/**/*.tsx",

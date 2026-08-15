@@ -26,6 +26,7 @@ import {
   webSearchProviderLabel,
 } from "../util/tool-display"
 import { formatPath } from "../util/path-format"
+import type { Translator } from "../i18n"
 import type { RunEntryBody, StreamCommit, ToolSnapshot } from "./types"
 
 export { canonicalToolName } from "../util/tool-display"
@@ -106,6 +107,7 @@ type ToolProps = {
   input: ToolInput
   metadata: ToolMetadata
   frame: ToolFrame
+  t: Translator
 }
 
 type ToolName =
@@ -145,11 +147,12 @@ function dict(v: unknown): ToolDict {
   return { ...v }
 }
 
-function props(frame: ToolFrame): ToolProps {
+function props(frame: ToolFrame, t: Translator): ToolProps {
   return {
     input: frame.input,
     metadata: frame.meta,
     frame,
+    t,
   }
 }
 
@@ -274,13 +277,13 @@ function span(frame: ToolFrame): string {
   return Locale.duration(end - start)
 }
 
-function fail(ctx: ToolFrame): string {
+function fail(ctx: ToolFrame, t: Translator): string {
   const error = toolError(ctx)
   if (error) {
-    return `✖ ${ctx.name} failed: ${error}`
+    return `✖ ${t("mini.tool.failedWithError", { tool: ctx.name, error })}`
   }
 
-  return `✖ ${ctx.name} failed`
+  return `✖ ${t("mini.tool.failed", { tool: ctx.name })}`
 }
 
 function toolError(ctx: ToolFrame): string {
@@ -296,7 +299,7 @@ function toolError(ctx: ToolFrame): string {
   return ctx.raw.trim()
 }
 
-function fallbackStart(ctx: ToolFrame): string {
+function fallbackStart(ctx: ToolFrame, _t: Translator): string {
   const extra = primitiveInputSummary(ctx.input)
   if (!extra) {
     return `⚙ ${ctx.name}`
@@ -305,9 +308,9 @@ function fallbackStart(ctx: ToolFrame): string {
   return `⚙ ${ctx.name} ${extra}`
 }
 
-function fallbackFinal(ctx: ToolFrame): string {
+function fallbackFinal(ctx: ToolFrame, t: Translator): string {
   if (ctx.status === "error") {
-    return fail(ctx)
+    return fail(ctx, t)
   }
 
   if (ctx.status && ctx.status !== "completed") {
@@ -316,10 +319,10 @@ function fallbackFinal(ctx: ToolFrame): string {
 
   const time = span(ctx)
   if (!time) {
-    return `${ctx.name} completed`
+    return t("mini.tool.completed", { tool: ctx.name })
   }
 
-  return `${ctx.name} completed · ${time}`
+  return t("mini.tool.completedWithTime", { tool: ctx.name, time })
 }
 
 export function toolPath(input?: string, opts: { home?: boolean; directory?: string } = {}): string {
@@ -334,8 +337,8 @@ function displayPath(p: ToolProps, input?: string, opts: { home?: boolean } = {}
   return toolPath(input, { ...opts, directory: p.frame.directory })
 }
 
-function fallbackInline(ctx: ToolFrame): ToolInline {
-  const title = Object.keys(ctx.input).length > 0 ? JSON.stringify(ctx.input) : "Unknown"
+function fallbackInline(ctx: ToolFrame, t: Translator): ToolInline {
+  const title = Object.keys(ctx.input).length > 0 ? JSON.stringify(ctx.input) : t("mini.tool.unknown")
 
   return {
     icon: "⚙",
@@ -343,16 +346,16 @@ function fallbackInline(ctx: ToolFrame): ToolInline {
   }
 }
 
-function count(n: number, label: string): string {
-  return `${n} ${label}${n === 1 ? "" : "es"}`
+function count(n: number, t: Translator): string {
+  return t(n === 1 ? "mini.tool.match.one" : "mini.tool.match.other", { count: n })
 }
 
 function runGlob(p: ToolProps): ToolInline {
   const root = p.input.path ?? ""
-  const title = `Glob "${p.input.pattern ?? ""}"`
-  const suffix = root ? `in ${displayPath(p, root)}` : ""
+  const title = p.t("mini.tool.glob", { pattern: p.input.pattern ?? "" })
+  const suffix = root ? p.t("mini.tool.in", { path: displayPath(p, root) }) : ""
   const matches = p.metadata.count
-  const description = matches === undefined ? suffix : `${suffix}${suffix ? " · " : ""}${count(matches, "match")}`
+  const description = matches === undefined ? suffix : `${suffix}${suffix ? " · " : ""}${count(matches, p.t)}`
   return {
     icon: "✱",
     title,
@@ -362,10 +365,10 @@ function runGlob(p: ToolProps): ToolInline {
 
 function runGrep(p: ToolProps): ToolInline {
   const root = p.input.path ?? ""
-  const title = `Grep "${p.input.pattern ?? ""}"`
-  const suffix = root ? `in ${displayPath(p, root)}` : ""
+  const title = p.t("mini.tool.grep", { pattern: p.input.pattern ?? "" })
+  const suffix = root ? p.t("mini.tool.in", { path: displayPath(p, root) }) : ""
   const matches = p.metadata.matches
-  const description = matches === undefined ? suffix : `${suffix}${suffix ? " · " : ""}${count(matches, "match")}`
+  const description = matches === undefined ? suffix : `${suffix}${suffix ? " · " : ""}${count(matches, p.t)}`
   return {
     icon: "✱",
     title,
@@ -377,7 +380,7 @@ function runList(p: ToolProps): ToolInline {
   const dir = text(dict(p.input).path)
   return {
     icon: "→",
-    title: dir ? `List ${displayPath(p, dir)}` : "List",
+    title: dir ? `${p.t("mini.tool.list")} ${displayPath(p, dir)}` : p.t("mini.tool.list"),
   }
 }
 
@@ -386,7 +389,7 @@ function runRead(p: ToolProps): ToolInline {
   const description = primitiveInputSummary(p.frame.input, ["path"]) || undefined
   return {
     icon: "→",
-    title: `Read ${file}`,
+    title: p.t("mini.tool.read", { path: file }),
     ...(description && { description }),
   }
 }
@@ -394,7 +397,7 @@ function runRead(p: ToolProps): ToolInline {
 function runWrite(p: ToolProps): ToolInline {
   return {
     icon: "←",
-    title: `Write ${displayPath(p, p.input.path)}`,
+    title: p.t("mini.tool.write", { path: displayPath(p, p.input.path) }),
     mode: "block",
     body: p.frame.status === "completed" ? p.frame.output : undefined,
   }
@@ -404,7 +407,7 @@ function runWebfetch(p: ToolProps): ToolInline {
   const url = p.input.url ?? ""
   return {
     icon: "%",
-    title: url ? `WebFetch ${url}` : "WebFetch",
+    title: url ? `${p.t("mini.tool.webfetch")} ${url}` : p.t("mini.tool.webfetch"),
   }
 }
 
@@ -412,14 +415,14 @@ function runEdit(p: ToolProps): ToolInline {
   const file = list<PatchFile>(p.metadata.files)[0]
   return {
     icon: "←",
-    title: `Edit ${displayPath(p, p.input.path)}`,
+    title: p.t("mini.tool.edit", { path: displayPath(p, p.input.path) }),
     mode: "block",
     body: file?.patch ?? p.metadata.diff,
   }
 }
 
 function runWebSearch(p: ToolProps): ToolInline {
-  const title = webSearchProviderLabel(p.metadata.provider)
+  const title = webSearchProviderLabel(p.metadata.provider, p.t)
   return {
     icon: "◈",
     title: p.input.query ? `${title} "${p.input.query}"` : title,
@@ -432,8 +435,8 @@ function runTask(p: ToolProps): ToolInline {
   const icon = p.frame.status === "error" ? "✗" : p.frame.status === "running" ? "•" : "✓"
   return {
     icon,
-    title: desc || `${kind} Subagent`,
-    description: desc ? `${kind} Agent` : undefined,
+    title: desc || p.t("mini.tool.subagent", { agent: kind }),
+    description: desc ? p.t("mini.tool.agent", { agent: kind }) : undefined,
   }
 }
 
@@ -441,7 +444,7 @@ function runSkill(p: ToolProps): ToolInline {
   const name = p.metadata.name ?? p.input.id ?? ""
   return {
     icon: "→",
-    title: `Skill "${name}"`,
+    title: p.t("mini.tool.skill", { name }),
   }
 }
 
@@ -450,13 +453,13 @@ function runPatch(p: ToolProps): ToolInline {
   if (files === 0) {
     return {
       icon: "%",
-      title: "Patch",
+      title: p.t("mini.tool.patch"),
     }
   }
 
   return {
     icon: "%",
-    title: `Patch ${files} file${files === 1 ? "" : "s"}`,
+    title: p.t(files === 1 ? "mini.tool.patchFiles.one" : "mini.tool.patchFiles.other", { count: files }),
   }
 }
 
@@ -464,14 +467,14 @@ function runQuestion(p: ToolProps): ToolInline {
   const total = list(p.frame.input.questions).length
   return {
     icon: "→",
-    title: `Asked ${total} question${total === 1 ? "" : "s"}`,
+    title: p.t(total === 1 ? "mini.tool.askedQuestions.one" : "mini.tool.askedQuestions.other", { count: total }),
   }
 }
 
 function runInvalid(p: ToolProps): ToolInline {
   return {
     icon: "✗",
-    title: "Invalid Tool",
+    title: p.t("mini.tool.invalid"),
     mode: "block",
     body: p.frame.status === "completed" ? p.frame.output : undefined,
   }
@@ -481,7 +484,10 @@ function runBatch(p: ToolProps): ToolInline {
   const calls = list(dict(p.input).tool_calls).length
   return {
     icon: "#",
-    title: calls > 0 ? `Batch ${calls} tool${calls === 1 ? "" : "s"}` : "Batch",
+    title:
+      calls > 0
+        ? p.t(calls === 1 ? "mini.tool.batchTools.one" : "mini.tool.batchTools.other", { count: calls })
+        : p.t("mini.tool.batch"),
     mode: "block",
     body: p.frame.status === "completed" ? p.frame.output : undefined,
   }
@@ -494,6 +500,7 @@ function lspTitle(
     line?: number
     character?: number
   },
+  t: Translator,
   opts: { home?: boolean; directory?: string } = {},
 ): string {
   const op = input.operation || "request"
@@ -502,31 +509,34 @@ function lspTitle(
   const char = typeof input.character === "number" ? input.character : undefined
   const pos = line !== undefined && char !== undefined ? `:${line}:${char}` : ""
   if (!file) {
-    return `LSP ${op}`
+    return t("mini.tool.lsp", { operation: op })
   }
 
-  return `LSP ${op} ${file}${pos}`
+  return t("mini.tool.lspFile", { operation: op, file: `${file}${pos}` })
 }
 
 function runLsp(p: ToolProps): ToolInline {
   return {
     icon: "→",
-    title: lspTitle(p.input, { directory: p.frame.directory }),
+    title: lspTitle(p.input, p.t, { directory: p.frame.directory }),
   }
 }
 
-function patchTitle(file: PatchFile, directory?: string): string {
+function patchTitle(file: PatchFile, t: Translator, directory?: string): string {
   if (file.status === "added") {
-    return `# Created ${toolPath(file.file, { directory })}`
+    return t("mini.tool.created", { path: toolPath(file.file, { directory }) })
   }
   if (file.status === "deleted") {
-    return `# Deleted ${toolPath(file.file, { directory })}`
+    return t("mini.tool.deleted", { path: toolPath(file.file, { directory }) })
   }
   if (file.status === "moved") {
-    return `# Moved ${toolPath(file.from, { directory })} -> ${toolPath(file.file, { directory })}`
+    return t("mini.tool.moved", {
+      from: toolPath(file.from, { directory }),
+      to: toolPath(file.file, { directory }),
+    })
   }
 
-  return `# Patched ${toolPath(file.file, { directory })}`
+  return t("mini.tool.patched", { path: toolPath(file.file, { directory }) })
 }
 
 function snapWrite(p: ToolProps): ToolSnapshot | undefined {
@@ -538,7 +548,7 @@ function snapWrite(p: ToolProps): ToolSnapshot | undefined {
 
   return {
     kind: "code",
-    title: `# Wrote ${displayPath(p, file)}`,
+    title: p.t("mini.tool.wrote", { path: displayPath(p, file) }),
     content,
     file,
   }
@@ -556,7 +566,7 @@ function snapEdit(p: ToolProps): ToolSnapshot | undefined {
     kind: "diff",
     items: [
       {
-        title: `# Edited ${displayPath(p, file)}`,
+        title: p.t("mini.tool.edited", { path: displayPath(p, file) }),
         diff,
         file,
       },
@@ -583,7 +593,7 @@ function snapPatch(p: ToolProps): ToolSnapshot | undefined {
     const name = file.file
     return [
       {
-        title: patchTitle(file, p.frame.directory),
+        title: patchTitle(file, p.t, p.frame.directory),
         diff,
         file: name,
         deletions: typeof file.deletions === "number" ? file.deletions : 0,
@@ -608,7 +618,7 @@ function snapTask(p: ToolProps): ToolSnapshot {
 
   return {
     kind: "task",
-    title: `# ${kind} Subagent`,
+    title: `# ${p.t("mini.tool.subagent", { agent: kind })}`,
     rows,
     tail: "",
   }
@@ -619,8 +629,8 @@ function snapQuestion(p: ToolProps): ToolSnapshot {
   const items = list<{ question?: string }>(p.frame.input.questions).map((item, i) => {
     const answer = list<string>(answers[i]).filter((entry) => typeof entry === "string")
     return {
-      question: item.question || `Question ${i + 1}`,
-      answer: answer.length > 0 ? answer.join(", ") : "(no answer)",
+      question: item.question || p.t("mini.tool.question", { index: i + 1 }),
+      answer: answer.length > 0 ? answer.join(", ") : p.t("mini.tool.noAnswer"),
     }
   })
 
@@ -682,27 +692,27 @@ function scrollBashProgress(p: ToolProps): string {
 
 function scrollShellFinal(p: ToolProps): string {
   if (p.frame.status === "error") {
-    return fail(p.frame)
+    return fail(p.frame, p.t)
   }
 
   const code = p.metadata.exit
   const time = span(p.frame)
   if (code === undefined) {
     if (!time) {
-      return "shell completed"
+      return p.t("mini.tool.shellCompleted")
     }
 
-    return `shell completed · ${time}`
+    return p.t("mini.tool.shellCompletedWithTime", { time })
   }
 
-  return `shell completed (exit ${code})${time ? ` · ${time}` : ""}`
+  return p.t("mini.tool.shellCompletedWithExit", { code, time: time ? ` · ${time}` : "" })
 }
 
 function scrollReadStart(p: ToolProps): string {
   const file = displayPath(p, p.input.path)
   const extra = primitiveInputSummary(p.frame.input, ["path"])
   const tail = extra ? ` ${extra}` : ""
-  return `→ Read ${file}${tail}`.trim()
+  return `→ ${p.t("mini.tool.read", { path: file })}${tail}`.trim()
 }
 
 function scrollWriteStart(_: ToolProps): string {
@@ -717,48 +727,51 @@ function scrollPatchStart(_: ToolProps): string {
   return ""
 }
 
-function patchLine(file: PatchFile, directory?: string): string {
+function patchLine(file: PatchFile, t: Translator, directory?: string): string {
   if (file.status === "added") {
-    return `+ Created ${toolPath(file.file, { directory })}`
+    return t("mini.tool.createdLine", { path: toolPath(file.file, { directory }) })
   }
 
   if (file.status === "deleted") {
-    return `- Deleted ${toolPath(file.file, { directory })}`
+    return t("mini.tool.deletedLine", { path: toolPath(file.file, { directory }) })
   }
   if (file.status === "moved") {
-    return `→ Moved ${toolPath(file.from, { directory })} → ${toolPath(file.file, { directory })}`
+    return t("mini.tool.movedLine", {
+      from: toolPath(file.from, { directory }),
+      to: toolPath(file.file, { directory }),
+    })
   }
 
-  return `~ Patched ${toolPath(file.file, { directory })}`
+  return t("mini.tool.patchedLine", { path: toolPath(file.file, { directory }) })
 }
 
 function scrollPatchFinal(p: ToolProps): string {
   if (p.frame.status === "error") {
-    return fail(p.frame)
+    return fail(p.frame, p.t)
   }
 
   const files = list<PatchFile>(p.frame.meta.files)
   if (files.length === 0) {
     const time = span(p.frame)
     if (!time) {
-      return "patch"
+      return p.t("mini.tool.patchLower")
     }
 
-    return `patch · ${time}`
+    return `${p.t("mini.tool.patchLower")} · ${time}`
   }
 
   const showModified = !files.some((file) => file?.status && file.status !== "modified")
   const shown = files.filter((file) => showModified || file.status !== "modified")
-  const rows = shown.slice(0, 6).map((file) => patchLine(file, p.frame.directory))
+  const rows = shown.slice(0, 6).map((file) => patchLine(file, p.t, p.frame.directory))
   if (shown.length > 6) {
-    rows.push(`... and ${shown.length - 6} more`)
+    rows.push(p.t("mini.tool.andMore", { count: shown.length - 6 }))
   }
 
   if (rows.length > 0) {
     return rows.join("\n")
   }
 
-  return patchLine(files[0]!, p.frame.directory)
+  return patchLine(files[0]!, p.t, p.frame.directory)
 }
 
 function scrollTaskStart(_: ToolProps): string {
@@ -785,16 +798,16 @@ function taskResult(output: string): string | undefined {
 
 function scrollTaskFinal(p: ToolProps): string {
   if (p.frame.status === "error") {
-    return fail(p.frame)
+    return fail(p.frame, p.t)
   }
 
   const kind = Locale.titlecase(p.input.agent || "general")
   const row = p.input.description
   if (!row) {
-    return `# ${kind} Subagent`
+      return `# ${p.t("mini.tool.subagent", { agent: kind })}`
   }
 
-  return `# ${kind} Subagent\n${row}`
+  return `# ${p.t("mini.tool.subagent", { agent: kind })}\n${row}`
 }
 
 function scrollQuestionStart(_: ToolProps): string {
@@ -807,81 +820,81 @@ function scrollQuestionFinal(p: ToolProps): string {
   const time = span(p.frame)
   if (q.length === 0) {
     if (!time) {
-      return "0 questions"
+      return p.t("mini.tool.questions", { count: 0 })
     }
 
-    return `0 questions · ${time}`
+    return `${p.t("mini.tool.questions", { count: 0 })} · ${time}`
   }
 
   const rows: string[] = []
   for (const [i, item] of q.slice(0, 4).entries()) {
     const prompt = item.question
     const reply = a[i] ?? []
-    rows.push(`? ${prompt || `Question ${i + 1}`}`)
-    rows.push(`  ${reply.length > 0 ? reply.join(", ") : "(no answer)"}`)
+    rows.push(`? ${prompt || p.t("mini.tool.question", { index: i + 1 })}`)
+    rows.push(`  ${reply.length > 0 ? reply.join(", ") : p.t("mini.tool.noAnswer")}`)
   }
 
   if (q.length > 4) {
-    rows.push(`... and ${q.length - 4} more`)
+    rows.push(p.t("mini.tool.andMore", { count: q.length - 4 }))
   }
 
   return rows.join("\n")
 }
 
 function scrollLspStart(p: ToolProps): string {
-  return `→ ${lspTitle(p.input, { directory: p.frame.directory })}`
+  return `→ ${lspTitle(p.input, p.t, { directory: p.frame.directory })}`
 }
 
 function scrollSkillStart(p: ToolProps): string {
-  return `→ Skill "${p.metadata.name ?? p.input.id ?? ""}"`
+  return `→ ${p.t("mini.tool.skill", { name: p.metadata.name ?? p.input.id ?? "" })}`
 }
 
 function scrollGlobStart(p: ToolProps): string {
   const pattern = p.input.pattern ?? ""
-  const head = pattern ? `✱ Glob "${pattern}"` : "✱ Glob"
+  const head = pattern ? `✱ ${p.t("mini.tool.glob", { pattern })}` : `✱ ${p.t("mini.tool.glob", { pattern: "" })}`
   const dir = p.input.path ?? ""
   if (!dir) {
     return head
   }
 
-  return `${head} in ${displayPath(p, dir)}`
+  return `${head} ${p.t("mini.tool.in", { path: displayPath(p, dir) })}`
 }
 
 function scrollGlobFinal(p: ToolProps): string {
-  return toolError(p.frame) || fail(p.frame)
+  return toolError(p.frame) || fail(p.frame, p.t)
 }
 
 function scrollGrepStart(p: ToolProps): string {
   const pattern = p.input.pattern ?? ""
-  const head = pattern ? `✱ Grep "${pattern}"` : "✱ Grep"
+  const head = pattern ? `✱ ${p.t("mini.tool.grep", { pattern })}` : `✱ ${p.t("mini.tool.grep", { pattern: "" })}`
   const dir = p.input.path ?? ""
   if (!dir) {
     return head
   }
 
-  return `${head} in ${displayPath(p, dir)}`
+  return `${head} ${p.t("mini.tool.in", { path: displayPath(p, dir) })}`
 }
 
 function scrollListStart(p: ToolProps): string {
   const dir = text(dict(p.input).path)
   if (!dir) {
-    return "→ List"
+    return `→ ${p.t("mini.tool.list")}`
   }
 
-  return `→ List ${displayPath(p, dir)}`
+  return `→ ${p.t("mini.tool.list")} ${displayPath(p, dir)}`
 }
 
 function scrollWebfetchStart(p: ToolProps): string {
   const url = p.input.url ?? ""
   if (!url) {
-    return "% WebFetch"
+    return `% ${p.t("mini.tool.webfetch")}`
   }
 
-  return `% WebFetch ${url}`
+  return `% ${p.t("mini.tool.webfetch")} ${url}`
 }
 
 function scrollWebSearchStart(p: ToolProps): string {
-  const title = webSearchProviderLabel(p.metadata.provider)
+  const title = webSearchProviderLabel(p.metadata.provider, p.t)
   const query = p.input.query ?? ""
   if (!query) {
     return `◈ ${title}`
@@ -1158,48 +1171,48 @@ export function toolStructuredFinal(commit: StreamCommit): boolean {
   )
 }
 
-export function toolInlineInfo(part: SessionMessageAssistantTool, directory?: string): ToolInline {
+export function toolInlineInfo(part: SessionMessageAssistantTool, t: Translator, directory?: string): ToolInline {
   const ctx = frame(part, directory)
   const draw = rule(ctx.name)?.run
   try {
     if (draw) {
-      return draw(props(ctx))
+      return draw(props(ctx, t))
     }
   } catch {
-    return fallbackInline(ctx)
+    return fallbackInline(ctx, t)
   }
 
-  return fallbackInline(ctx)
+  return fallbackInline(ctx, t)
 }
 
-export function toolScroll(phase: ToolPhase, ctx: ToolFrame): string {
+export function toolScroll(phase: ToolPhase, ctx: ToolFrame, t: Translator): string {
   const draw = rule(ctx.name)?.scroll?.[phase]
   try {
     if (draw) {
-      return draw(props(ctx))
+      return draw(props(ctx, t))
     }
   } catch {
     if (phase === "start") {
-      return fallbackStart(ctx)
+      return fallbackStart(ctx, t)
     }
     if (phase === "progress") {
       return ctx.raw
     }
-    return fallbackFinal(ctx)
+    return fallbackFinal(ctx, t)
   }
 
   if (phase === "start") {
-    return fallbackStart(ctx)
+    return fallbackStart(ctx, t)
   }
 
   if (phase === "progress") {
     return ctx.raw
   }
 
-  return fallbackFinal(ctx)
+  return fallbackFinal(ctx, t)
 }
 
-function toolSnapshot(commit: StreamCommit, raw: string): ToolSnapshot | undefined {
+function toolSnapshot(commit: StreamCommit, raw: string, t: Translator): ToolSnapshot | undefined {
   const ctx = toolFrame(commit, raw)
   const draw = rule(ctx.name)?.snap
   if (!draw) {
@@ -1207,7 +1220,7 @@ function toolSnapshot(commit: StreamCommit, raw: string): ToolSnapshot | undefin
   }
 
   try {
-    return draw(props(ctx))
+    return draw(props(ctx, t))
   } catch {
     return undefined
   }
@@ -1235,8 +1248,8 @@ function markdownBody(content: string): RunEntryBody | undefined {
   }
 }
 
-function structuredBody(commit: StreamCommit, raw: string): RunEntryBody | undefined {
-  const snap = toolSnapshot(commit, raw)
+function structuredBody(commit: StreamCommit, raw: string, t: Translator): RunEntryBody | undefined {
+  const snap = toolSnapshot(commit, raw, t)
   if (!snap) {
     return undefined
   }
@@ -1249,11 +1262,11 @@ function structuredBody(commit: StreamCommit, raw: string): RunEntryBody | undef
 
 const STRUCTURED_FALLBACK_LENGTH = 4_096
 
-function structuredFallback(value: ToolDict): RunEntryBody | undefined {
+function structuredFallback(value: ToolDict, t: Translator): RunEntryBody | undefined {
   if (Object.keys(value).length === 0) return
   const content = JSON.stringify(value, null, 2)
   if (!content) return
-  const suffix = "\n... [truncated]"
+  const suffix = `\n... ${t("mini.tool.truncated")}`
   return {
     type: "code",
     content:
@@ -1280,6 +1293,7 @@ function shellOutput(command: string, raw: string): string | undefined {
 export function toolEntryBody(
   commit: StreamCommit,
   raw: string,
+  t: Translator,
   options?: { shellOutput?: boolean },
 ): RunEntryBody | undefined {
   if (commit.shell) {
@@ -1293,7 +1307,7 @@ export function toolEntryBody(
 
     if (commit.toolState === "error") {
       const ctx = toolFrame(commit, raw)
-      return textBody(toolScroll("final", ctx))
+      return textBody(toolScroll("final", ctx, t))
     }
 
     return undefined
@@ -1323,7 +1337,7 @@ export function toolEntryBody(
 
   if (commit.phase === "final") {
     if (ctx.status === "error") {
-      return textBody(toolScroll("final", ctx))
+      return textBody(toolScroll("final", ctx, t))
     }
 
     if (!view.final) {
@@ -1335,15 +1349,15 @@ export function toolEntryBody(
     }
 
     if (toolStructuredFinal(commit)) {
-      return structuredBody(commit, raw) ?? textBody(toolScroll("final", ctx))
+      return structuredBody(commit, raw, t) ?? textBody(toolScroll("final", ctx, t))
     }
 
     if (!rule(ctx.name) && !ctx.output.trim()) {
-      return structuredFallback(ctx.meta) ?? textBody(toolScroll("final", ctx))
+      return structuredFallback(ctx.meta, t) ?? textBody(toolScroll("final", ctx, t))
     }
   }
 
-  return textBody(toolScroll(commit.phase, ctx))
+  return textBody(toolScroll(commit.phase, ctx, t))
 }
 
 export function toolFiletype(input?: string): string | undefined {

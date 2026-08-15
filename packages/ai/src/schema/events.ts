@@ -190,6 +190,18 @@ export const ToolError = Schema.Struct({
 }).annotate({ identifier: "LLM.Event.ToolError" })
 export type ToolError = Schema.Schema.Type<typeof ToolError>
 
+export const ProviderCheckpoint = Schema.Struct({
+  type: Schema.tag("provider-checkpoint"),
+  reset: Schema.Boolean,
+  item: Schema.StructWithRest(Schema.Struct({ type: Schema.String }), [Schema.Record(Schema.String, Schema.Json)]),
+}).annotate({ identifier: "LLM.Event.ProviderCheckpoint" })
+export type ProviderCheckpoint = Schema.Schema.Type<typeof ProviderCheckpoint>
+
+export const ProviderCompactionStart = Schema.Struct({
+  type: Schema.tag("provider-compaction-start"),
+}).annotate({ identifier: "LLM.Event.ProviderCompactionStart" })
+export type ProviderCompactionStart = Schema.Schema.Type<typeof ProviderCompactionStart>
+
 export const FinishReasonDetails = Schema.Struct({
   normalized: FinishReason,
   raw: Schema.optional(Schema.String),
@@ -236,6 +248,8 @@ const llmEventTagged = Schema.Union([
   ToolCall,
   ToolResult,
   ToolError,
+  ProviderCompactionStart,
+  ProviderCheckpoint,
   StepFinish,
   Finish,
   ProviderErrorEvent,
@@ -280,6 +294,8 @@ export const LLMEvent = Object.assign(llmEventTagged, {
       output: input.output === undefined ? undefined : ToolOutput.make(input.output.structured, input.output.content),
     }),
   toolError: (input: WithID<ToolError, ToolCallID>) => ToolError.make({ ...input, id: toolCallID(input.id) }),
+  providerCompactionStart: ProviderCompactionStart.make,
+  providerCheckpoint: ProviderCheckpoint.make,
   stepFinish: (input: WithUsage<StepFinish>) =>
     StepFinish.make({
       ...input,
@@ -306,6 +322,8 @@ export const LLMEvent = Object.assign(llmEventTagged, {
     toolCall: llmEventTagged.guards["tool-call"],
     toolResult: llmEventTagged.guards["tool-result"],
     toolError: llmEventTagged.guards["tool-error"],
+    providerCompactionStart: llmEventTagged.guards["provider-compaction-start"],
+    providerCheckpoint: llmEventTagged.guards["provider-checkpoint"],
     stepFinish: llmEventTagged.guards["step-finish"],
     finish: llmEventTagged.guards.finish,
     providerError: llmEventTagged.guards["provider-error"],

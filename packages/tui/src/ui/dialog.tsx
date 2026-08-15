@@ -1,7 +1,9 @@
 import { useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { batch, createContext, createEffect, onCleanup, Show, useContext, type JSX, type ParentProps } from "solid-js"
 import { Keymap } from "../context/keymap"
+import { useI18n } from "../context/i18n"
 import { useTheme } from "../context/theme"
+import type { Translator } from "../i18n"
 import { MouseButton, Renderable, RGBA } from "@opentui/core"
 import { createStore } from "solid-js/store"
 import { useToast } from "./toast"
@@ -70,7 +72,7 @@ export function Dialog(
   )
 }
 
-function init() {
+function init(t: Translator) {
   const [store, setStore] = createStore({
     stack: [] as {
       element: JSX.Element
@@ -115,8 +117,8 @@ function init() {
     commands: [
       {
         bind: "escape",
-        title: "Close dialog",
-        group: "Dialog",
+        title: t("ui.dialog.close"),
+        group: t("ui.group.dialog"),
         run: () => {
           if (renderer.getSelection()) {
             renderer.clearSelection()
@@ -129,8 +131,8 @@ function init() {
       },
       {
         bind: "ctrl+c",
-        title: "Close dialog",
-        group: "Dialog",
+        title: t("ui.dialog.close"),
+        group: t("ui.group.dialog"),
         run: () => {
           if (renderer.getSelection()) {
             renderer.clearSelection()
@@ -202,7 +204,8 @@ export type DialogContext = ReturnType<typeof init>
 const ctx = createContext<DialogContext>()
 
 export function DialogProvider(props: ParentProps) {
-  const value = init()
+  const { t } = useI18n()
+  const value = init(t)
   const renderer = useRenderer()
   const toast = useToast()
   const clipboard = useClipboard()
@@ -213,7 +216,7 @@ export function DialogProvider(props: ParentProps) {
     const text = renderer.getSelection()?.getSelectedText()
     if (!text) return false
     void clipboard.write(text).then(
-      () => toast.show({ message: "Copied to clipboard", variant: "info" }),
+      () => toast.show({ message: t("ui.dialog.copiedToClipboard"), variant: "info" }),
       (error) => toast.error(error),
     )
     renderer.clearSelection()

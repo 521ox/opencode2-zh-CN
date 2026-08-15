@@ -1,3 +1,4 @@
+import type { Translator } from "../i18n"
 import type { FooterView, MiniFormRequest, MiniPermissionRequest } from "./types"
 
 export function pickBlockerView(input: { permission?: MiniPermissionRequest; form?: MiniFormRequest }): FooterView {
@@ -6,8 +7,8 @@ export function pickBlockerView(input: { permission?: MiniPermissionRequest; for
   return { type: "prompt" }
 }
 
-export function blockerStatus(view: FooterView) {
-  if (view.type === "permission") return "awaiting permission"
-  if (view.type === "form") return "awaiting form"
+export function blockerStatus(view: FooterView, t: Translator) {
+  if (view.type === "permission") return t("mini.transport.status.awaitingPermission")
+  if (view.type === "form") return t("mini.transport.status.awaitingForm")
   return ""
 }

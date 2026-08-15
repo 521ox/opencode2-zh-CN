@@ -2,6 +2,8 @@ import { Effect, Option } from "effect"
 import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
 import { ServerConnection } from "../../services/server-connection"
+import { Config } from "../../config"
+import { resolve } from "@opencode-ai/tui/config"
 
 export default Runtime.handler(Commands.commands.run, (input) =>
   Effect.gen(function* () {
@@ -11,6 +13,8 @@ export default Runtime.handler(Commands.commands.run, (input) =>
       server: Option.getOrUndefined(input.server),
       standalone: input.standalone,
     })
+    const config = yield* Config.Service
+    const resolved = resolve(yield* config.get(), { terminalSuspend: process.platform !== "win32" })
     yield* Effect.promise(() =>
       runNonInteractive({
         server,
@@ -25,6 +29,7 @@ export default Runtime.handler(Commands.commands.run, (input) =>
         title: Option.getOrUndefined(input.title),
         thinking: input.thinking,
         auto: input.auto || input.yolo || input.dangerouslySkipPermissions,
+        locale: resolved.locale,
       }),
     )
   }),

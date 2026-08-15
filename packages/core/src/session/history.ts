@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, sql } from "drizzle-orm"
+import { and, asc, desc, eq, gte, lt, sql } from "drizzle-orm"
 import { Effect, Schema } from "effect"
 import { Database } from "../database/database.js"
 import { MessageDecodeError } from "./error.js"
@@ -6,6 +6,7 @@ import { SessionMessage } from "./message.js"
 import { SessionSchema } from "./schema.js"
 import { Instructions } from "../instructions/index.js"
 import { InstructionState } from "./instruction-state.js"
+import { attachRemoteCompactionToolResults } from "./remote-compaction-replay.js"
 import { SessionMessageTable } from "./sql.js"
 
 type DatabaseService = Database.Interface["db"]
@@ -60,11 +61,45 @@ const decodeMessageRow = (row: typeof SessionMessageTable.$inferSelect) =>
     ),
   )
 
+const previousAssistant = Effect.fnUntraced(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  seq: number,
+) {
+  const row = yield* db
+    .select()
+    .from(SessionMessageTable)
+    .where(
+      and(
+        eq(SessionMessageTable.session_id, sessionID),
+        eq(SessionMessageTable.type, "assistant"),
+        lt(SessionMessageTable.seq, seq),
+      ),
+    )
+    .orderBy(desc(SessionMessageTable.seq))
+    .limit(1)
+    .get()
+    .pipe(Effect.orDie)
+  if (!row) return undefined
+  const message = yield* decodeMessageRow(row)
+  return message.type === "assistant" ? message : undefined
+})
+
 const messageEntries = Effect.fnUntraced(function* (db: DatabaseService, sessionID: SessionSchema.ID) {
   const rows = yield* messageRows(db, sessionID, yield* latestCompaction(db, sessionID))
-  return yield* Effect.forEach(rows, (row) =>
+  const entries = yield* Effect.forEach(rows, (row) =>
     decodeMessageRow(row).pipe(Effect.map((message) => ({ seq: row.seq, message }))),
   )
+  const first = entries[0]
+  if (!first || first.message.type !== "compaction" || first.message.status !== "completed" || !first.message.remote)
+    return entries
+  const assistant = yield* previousAssistant(db, sessionID, first.seq)
+  const attached = attachRemoteCompactionToolResults(
+    entries.map((entry) => entry.message),
+    assistant,
+  )
+  if (attached.length === entries.length) return entries
+  return [first, { seq: first.seq, message: attached[1]! }, ...entries.slice(1)]
 })
 
 export const load = Effect.fn("SessionHistory.load")(function* (db: DatabaseService, sessionID: SessionSchema.ID) {

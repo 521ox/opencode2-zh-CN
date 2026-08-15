@@ -15,6 +15,7 @@
     "./config/keybind": "./src/config/keybind.ts",
     "./config/v1": "./src/config/v1/index.tsx",
     "./config/v1/keybind": "./src/config/v1/keybind.ts",
+    "./i18n": "./src/i18n/index.ts",
     "./context/args": "./src/context/args.tsx",
     "./context/epilogue": "./src/context/epilogue.tsx",
     "./context/exit": "./src/context/exit.tsx",

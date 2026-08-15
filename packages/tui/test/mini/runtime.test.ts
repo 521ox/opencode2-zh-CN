@@ -102,6 +102,7 @@ describe("run interactive runtime", () => {
         model: undefined,
         variant: undefined,
         files: [],
+        tuiConfig: { ...createTuiResolvedConfig(), locale: "en" },
       },
       {
         createRuntimeLifecycle: async (input) => {

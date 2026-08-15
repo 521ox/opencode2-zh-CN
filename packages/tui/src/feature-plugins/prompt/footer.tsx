@@ -2,27 +2,35 @@ import { Plugin } from "@opencode-ai/plugin/tui"
 import { createMemo, Match, Show, Switch } from "solid-js"
 import { contextUsage, formatContextUsage } from "../../util/session"
 import { useTerminalDimensions } from "@opentui/solid"
-
-const money = new Intl.NumberFormat("en-US", {
-  style: "currency",
-  currency: "USD",
-})
+import { useI18n } from "../../context/i18n"
 
 export function PromptFooter(props: { context: Plugin.Context; sessionID?: string; mode: "normal" | "shell" }) {
+  const i18n = useI18n()
   const dimensions = useTerminalDimensions()
+  const money = createMemo(
+    () =>
+      new Intl.NumberFormat(i18n.locale(), {
+        style: "currency",
+        currency: "USD",
+      }),
+  )
   const subagents = createMemo(() => {
     if (!props.sessionID) return 0
     const count = props.context.data.session
       .family(props.sessionID)
       .filter((id) => id !== props.sessionID && props.context.data.session.status(id) === "running").length
-    return count ? `${count} subagent${count === 1 ? "" : "s"}` : undefined
+    return count
+      ? i18n.t(count === 1 ? "feature.promptFooter.subagents.one" : "feature.promptFooter.subagents.other", { count })
+      : undefined
   })
   const shells = createMemo(() => {
     if (!props.sessionID) return 0
     const count = props.context.data.shell
       .list(props.context.location)
       .filter((shell) => shell.metadata.sessionID === props.sessionID).length
-    return count ? `${count} shell${count === 1 ? "" : "s"}` : undefined
+    return count
+      ? i18n.t(count === 1 ? "feature.promptFooter.shells.one" : "feature.promptFooter.shells.other", { count })
+      : undefined
   })
   const status = createMemo(() => {
     if (!props.sessionID) return []
@@ -36,7 +44,7 @@ export function PromptFooter(props: { context: Plugin.Context; sessionID?: strin
     const cost = props.context.data.session.cost(props.sessionID)
     return [
       usage ? formatContextUsage(usage.tokens, usage.percent) : undefined,
-      cost > 0 ? money.format(cost) : undefined,
+      cost > 0 ? money().format(cost) : undefined,
     ].filter((item): item is string => Boolean(item))
   })
   const live = createMemo(() => Boolean(subagents() || shells()))
@@ -60,13 +68,13 @@ export function PromptFooter(props: { context: Plugin.Context; sessionID?: strin
           </Match>
           <Match when={dimensions().width >= 44}>
             <text fg={props.context.theme.text.default} flexShrink={0}>
-              {shortcut("agent.cycle")} <span style={{ fg: props.context.theme.text.subdued }}>agents</span>
+              {shortcut("agent.cycle")} <span style={{ fg: props.context.theme.text.subdued }}>{i18n.t("feature.promptFooter.agents")}</span>
             </text>
           </Match>
         </Switch>
         <Show when={dimensions().width >= 44}>
           <text fg={props.context.theme.text.default} flexShrink={0}>
-            {shortcut("command.palette.show")} <span style={{ fg: props.context.theme.text.subdued }}>commands</span>
+            {shortcut("command.palette.show")} <span style={{ fg: props.context.theme.text.subdued }}>{i18n.t("feature.promptFooter.commands")}</span>
           </text>
         </Show>
       </Match>
@@ -74,7 +82,7 @@ export function PromptFooter(props: { context: Plugin.Context; sessionID?: strin
         <text fg={props.context.theme.text.default} flexShrink={0}>
           esc{" "}
           <span style={{ fg: props.context.theme.text.subdued }}>
-            {dimensions().width < 44 ? "shell" : "exit shell mode"}
+            {dimensions().width < 44 ? i18n.t("feature.promptFooter.shell") : i18n.t("feature.promptFooter.exitShellMode")}
           </span>
         </text>
       </Match>

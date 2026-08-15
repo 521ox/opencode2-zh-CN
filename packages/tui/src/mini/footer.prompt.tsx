@@ -29,6 +29,7 @@ import {
 } from "./prompt.shared"
 import { parseFileLineRange, parseSlashHead, stripFileLineRange } from "../prompt/parse"
 import { Keymap } from "../context/keymap"
+import type { Translator } from "../i18n"
 import { realignEditorPromptParts, resolveEditorSlashValue } from "./prompt.editor"
 import { monoTruncateMiddle } from "./mono"
 import { FOOTER_MENU_ROWS, createFooterMenuState, type RunFooterMenuItem } from "./footer.menu"
@@ -76,6 +77,7 @@ type PromptOption = Auto | SlashOption | SkillOption
 type MenuMode = false | "mention" | "slash"
 
 type PromptInput = {
+  t: Translator
   directory: Accessor<string>
   findFiles: (query: string) => Promise<string[]>
   agents: Accessor<RunAgent[]>
@@ -258,14 +260,14 @@ export function createPromptState(input: PromptInput): PromptState {
   const [shell, setShell] = createSignal(false)
   const placeholder = createMemo(() => {
     if (shell()) {
-      return new StyledText([fg(input.theme().muted)('Run a command... "git status"')])
+      return new StyledText([fg(input.theme().muted)(input.t("mini.prompt.placeholder.shell"))])
     }
 
     if (!input.state().first) {
       return ""
     }
 
-    return new StyledText([fg(input.theme().muted)('Ask anything... "Fix a TODO in the codebase"')])
+    return new StyledText([fg(input.theme().muted)(input.t("mini.prompt.placeholder.default"))])
   })
 
   let history = createPromptHistory(input.history?.())
@@ -403,23 +405,33 @@ export function createPromptState(input: PromptInput): PromptState {
         action: "editor" as const,
         name: "editor",
         display: "/editor",
-        description: "compose in your external editor",
+        description: input.t("mini.prompt.command.editor"),
       } satisfies SlashOption,
       {
         kind: "slash",
         action: "settings" as const,
         name: "settings",
         display: "/settings",
-        description: "configure Mini transcript output",
+        description: input.t("mini.prompt.command.settings"),
       } satisfies SlashOption,
-      { kind: "slash", name: "new", display: "/new", description: "start a new session" } satisfies SlashOption,
+      {
+        kind: "slash",
+        name: "new",
+        display: "/new",
+        description: input.t("mini.prompt.command.new"),
+      } satisfies SlashOption,
       {
         kind: "slash",
         name: "compact",
         display: "/compact",
-        description: "compact older session context to free space",
+        description: input.t("mini.prompt.command.compact"),
       } satisfies SlashOption,
-      { kind: "slash", name: "exit", display: "/exit", description: "close OpenCode" } satisfies SlashOption,
+      {
+        kind: "slash",
+        name: "exit",
+        display: "/exit",
+        description: input.t("mini.prompt.command.exit"),
+      } satisfies SlashOption,
     ]
     const hidden = new Set(builtins.map((item) => item.name))
     const showSkillMenu = !shell() && skillCommands().length > 0 && !hasSkillsCommand()
@@ -436,7 +448,7 @@ export function createPromptState(input: PromptInput): PromptState {
               action: "skill-menu" as const,
               name: "skills",
               display: "/skills",
-              description: "browse available skills",
+              description: input.t("mini.prompt.command.skills"),
             } satisfies SlashOption,
           ]
         : []),
@@ -836,7 +848,7 @@ export function createPromptState(input: PromptInput): PromptState {
       })
     } catch {
       restore(current)
-      input.onStatus("failed to open editor")
+      input.onStatus(input.t("mini.prompt.status.failedOpenEditor"))
     }
   }
 
@@ -1017,8 +1029,8 @@ export function createPromptState(input: PromptInput): PromptState {
     commands: [
       {
         id: "prompt.clear",
-        title: "Clear prompt or exit",
-        group: "Prompt",
+        title: input.t("mini.prompt.keymap.clearOrExit"),
+        group: input.t("mini.footer.group.prompt"),
         run() {
           if (requestExit()) return
           return false
@@ -1032,8 +1044,8 @@ export function createPromptState(input: PromptInput): PromptState {
     commands: [
       {
         id: "session.interrupt",
-        title: "Interrupt session",
-        group: "Session",
+        title: input.t("mini.prompt.keymap.interruptSession"),
+        group: input.t("mini.footer.group.session"),
         run() {
           if (input.onInterrupt()) return
           return false
@@ -1048,8 +1060,8 @@ export function createPromptState(input: PromptInput): PromptState {
     commands: [
       {
         id: "prompt.queue",
-        title: "Queue prompt",
-        group: "Prompt",
+        title: input.t("mini.prompt.keymap.queue"),
+        group: input.t("mini.footer.group.prompt"),
         run() {
           syncDraft()
           submitPrompt(promptCopy(draft), "queue")
@@ -1057,8 +1069,8 @@ export function createPromptState(input: PromptInput): PromptState {
       },
       {
         id: "prompt.editor",
-        title: "Open editor",
-        group: "Prompt",
+        title: input.t("mini.prompt.keymap.openEditor"),
+        group: input.t("mini.footer.group.prompt"),
         run() {
           void openEditor()
         },
@@ -1072,8 +1084,8 @@ export function createPromptState(input: PromptInput): PromptState {
     commands: [
       {
         id: "prompt.history.previous",
-        title: "Previous prompt history",
-        group: "Prompt",
+        title: input.t("mini.prompt.keymap.previousHistory"),
+        group: input.t("mini.footer.group.prompt"),
         run(_input: string | undefined, event?: KeyEvent) {
           if (!event) return false
           return historyCommand(-1, event)
@@ -1081,8 +1093,8 @@ export function createPromptState(input: PromptInput): PromptState {
       },
       {
         id: "prompt.history.next",
-        title: "Next prompt history",
-        group: "Prompt",
+        title: input.t("mini.prompt.keymap.nextHistory"),
+        group: input.t("mini.footer.group.prompt"),
         run(_input: string | undefined, event?: KeyEvent) {
           if (!event) return false
           return historyCommand(1, event)
@@ -1096,8 +1108,8 @@ export function createPromptState(input: PromptInput): PromptState {
     commands: [
       {
         bind: "!",
-        title: "Shell mode",
-        group: "Prompt",
+        title: input.t("mini.prompt.keymap.shellMode"),
+        group: input.t("mini.footer.group.prompt"),
         run() {
           if (shell()) return false
           if (!area || area.isDestroyed) return false
@@ -1113,14 +1125,14 @@ export function createPromptState(input: PromptInput): PromptState {
     commands: [
       {
         bind: "escape",
-        title: "Exit shell mode",
-        group: "Prompt",
+        title: input.t("mini.prompt.keymap.exitShellMode"),
+        group: input.t("mini.footer.group.prompt"),
         run: () => setShellMode(false),
       },
       {
         bind: "backspace",
-        title: "Exit shell mode",
-        group: "Prompt",
+        title: input.t("mini.prompt.keymap.exitShellMode"),
+        group: input.t("mini.footer.group.prompt"),
         run() {
           if (!area || area.isDestroyed) return false
           if (area.cursorOffset !== 0) return false
@@ -1135,26 +1147,26 @@ export function createPromptState(input: PromptInput): PromptState {
     commands: [
       {
         id: "prompt.autocomplete.prev",
-        title: "Previous autocomplete item",
-        group: "Autocomplete",
+        title: input.t("mini.prompt.keymap.previousAutocomplete"),
+        group: input.t("mini.footer.group.autocomplete"),
         run: () => menu.move(-1),
       },
       {
         id: "prompt.autocomplete.next",
-        title: "Next autocomplete item",
-        group: "Autocomplete",
+        title: input.t("mini.prompt.keymap.nextAutocomplete"),
+        group: input.t("mini.footer.group.autocomplete"),
         run: () => menu.move(1),
       },
       {
         id: "prompt.autocomplete.hide",
-        title: "Hide autocomplete",
-        group: "Autocomplete",
+        title: input.t("mini.prompt.keymap.hideAutocomplete"),
+        group: input.t("mini.footer.group.autocomplete"),
         run: cancelAutocomplete,
       },
       {
         id: "prompt.autocomplete.select",
-        title: "Select autocomplete item",
-        group: "Autocomplete",
+        title: input.t("mini.prompt.keymap.selectAutocomplete"),
+        group: input.t("mini.footer.group.autocomplete"),
         run() {
           if (mode() === "slash" && options().length === 0) {
             hide()
@@ -1165,8 +1177,8 @@ export function createPromptState(input: PromptInput): PromptState {
       },
       {
         id: "prompt.autocomplete.complete",
-        title: "Complete autocomplete item",
-        group: "Autocomplete",
+        title: input.t("mini.prompt.keymap.completeAutocomplete"),
+        group: input.t("mini.footer.group.autocomplete"),
         run() {
           if (mode() === "slash" && options().length === 0) {
             hide()
@@ -1215,7 +1227,11 @@ export function createPromptState(input: PromptInput): PromptState {
         })
         return
       }
-      input.onStatus(input.state().phase === "running" ? "waiting for current response" : "empty prompt ignored")
+      input.onStatus(
+        input.state().phase === "running"
+          ? input.t("mini.prompt.status.waitingResponse")
+          : input.t("mini.prompt.status.emptyIgnored"),
+      )
       return
     }
 
@@ -1229,7 +1245,7 @@ export function createPromptState(input: PromptInput): PromptState {
         isExitCommand(next.text) ||
         next.text.trim().toLowerCase() === "/settings")
     ) {
-      input.onStatus("this prompt cannot be queued")
+      input.onStatus(input.t("mini.prompt.status.cannotQueue"))
       return
     }
     if (!command && next.mode !== "shell" && isExitCommand(next.text)) {
@@ -1248,7 +1264,7 @@ export function createPromptState(input: PromptInput): PromptState {
         ? undefined
         : parseSlashCommand(next.text, input.commands())
     if (parsed?.type === "pending") {
-      input.onStatus("loading commands")
+      input.onStatus(input.t("mini.prompt.status.loadingCommands"))
       return
     }
 

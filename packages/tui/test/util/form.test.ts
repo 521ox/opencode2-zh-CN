@@ -14,6 +14,9 @@ import {
   isFormAnswerField,
 } from "../../src/util/form"
 import type { FormAnswerField } from "../../src/util/form"
+import { translate } from "../../src/i18n"
+
+const zh = (key: Parameters<typeof translate>[1], params?: Parameters<typeof translate>[2]) => translate("zh", key, params)
 
 const option = {
   key: "choice",
@@ -107,4 +110,13 @@ test("updates multiselects without mutating their source", () => {
   expect(formToggleMultiselect(source, "two")).toEqual(["one", "custom", "two"])
   expect(formSetMultiselectCustom(source, "custom", "replacement")).toEqual(["one", "replacement"])
   expect(source).toEqual(["one", "custom"])
+})
+
+test("localizes generated form options and validation", () => {
+  expect(formRows({ key: "value", type: "boolean" }, zh)).toEqual([
+    { value: true, label: "是" },
+    { value: false, label: "否" },
+  ])
+  expect(formValidateValue({ key: "value", type: "string", required: true }, undefined, zh)).toBe("需要回答")
+  expect(formValidateValue({ key: "value", type: "integer", minimum: 2 }, 1, zh)).toBe("至少应为 2")
 })

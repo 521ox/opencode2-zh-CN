@@ -1,5 +1,6 @@
 import { CliRenderEvents, InputRenderable, RGBA, ScrollBoxRenderable, TextAttributes } from "@opentui/core"
 import { Keymap, type KeymapCommand } from "../context/keymap"
+import { useI18n } from "../context/i18n"
 import { useTheme, useThemes } from "../context/theme"
 import { entries, filter, flatMap, groupBy, pipe } from "remeda"
 import { batch, createEffect, createMemo, createSignal, For, Show, type JSX, on, onCleanup } from "solid-js"
@@ -102,6 +103,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
   type VisibleAction = (Action & { label: string }) | FooterHint
 
   const dialog = useDialog()
+  const { t } = useI18n()
   const themes = useThemes()
   const theme = useTheme("elevated")
   const mode = themes.mode
@@ -415,8 +417,8 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
       commands: [
         {
           id: "dialog.select.prev",
-          title: "Previous item",
-          group: "Dialog",
+          title: t("ui.dialog.select.previousItem"),
+          group: t("ui.group.dialog"),
           run() {
             setStore("input", "keyboard")
             move(-1)
@@ -424,8 +426,8 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
         },
         {
           id: "dialog.select.next",
-          title: "Next item",
-          group: "Dialog",
+          title: t("ui.dialog.select.nextItem"),
+          group: t("ui.group.dialog"),
           run() {
             setStore("input", "keyboard")
             move(1)
@@ -433,8 +435,8 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
         },
         {
           id: "dialog.select.page_up",
-          title: "Page up",
-          group: "Dialog",
+          title: t("ui.dialog.select.pageUp"),
+          group: t("ui.group.dialog"),
           run() {
             setStore("input", "keyboard")
             move(-10)
@@ -442,8 +444,8 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
         },
         {
           id: "dialog.select.page_down",
-          title: "Page down",
-          group: "Dialog",
+          title: t("ui.dialog.select.pageDown"),
+          group: t("ui.group.dialog"),
           run() {
             setStore("input", "keyboard")
             move(10)
@@ -451,8 +453,8 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
         },
         {
           id: "dialog.select.home",
-          title: "First item",
-          group: "Dialog",
+          title: t("ui.dialog.select.firstItem"),
+          group: t("ui.group.dialog"),
           run() {
             if (props.locked) return
             setStore("input", "keyboard")
@@ -461,8 +463,8 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
         },
         {
           id: "dialog.select.end",
-          title: "Last item",
-          group: "Dialog",
+          title: t("ui.dialog.select.lastItem"),
+          group: t("ui.group.dialog"),
           run() {
             if (props.locked) return
             setStore("input", "keyboard")
@@ -471,28 +473,28 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
         },
         {
           id: "dialog.select.submit",
-          title: "Select item",
-          group: "Dialog",
+          title: t("ui.dialog.select.selectItem"),
+          group: t("ui.group.dialog"),
           run: submit,
         },
         ...visible.map((item) => ({
           id: item.command,
           title: item.title,
-          group: "Dialog",
+          group: t("ui.group.dialog"),
           run: () => trigger(item),
         })),
         ...(visible.length
           ? [
               {
                 bind: "tab",
-                title: "Next dialog action",
-                group: "Dialog",
+                title: t("ui.dialog.select.nextAction"),
+                group: t("ui.group.dialog"),
                 run: () => moveAction(1),
               },
               {
                 bind: "shift+tab",
-                title: "Previous dialog action",
-                group: "Dialog",
+                title: t("ui.dialog.select.previousAction"),
+                group: t("ui.group.dialog"),
                 run: () => moveAction(-1),
               },
             ]
@@ -502,14 +504,14 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
           ? [
               {
                 bind: "alt+up",
-                title: "Previous section",
-                group: "Dialog",
+                title: t("ui.dialog.select.previousSection"),
+                group: t("ui.group.dialog"),
                 run: () => moveSection(-1),
               },
               {
                 bind: "alt+down",
-                title: "Next section",
-                group: "Dialog",
+                title: t("ui.dialog.select.nextSection"),
+                group: t("ui.group.dialog"),
                 run: () => moveSection(1),
               },
             ]
@@ -646,7 +648,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
                   input.focus()
                 }, 1)
               }}
-              placeholder={props.placeholder ?? "Search"}
+              placeholder={props.placeholder ?? t("ui.dialog.select.search")}
               placeholderColor={theme.text.subdued}
             />
           </box>
@@ -661,14 +663,14 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
               fallback={
                 props.emptyView ?? (
                   <box paddingLeft={4} paddingRight={4}>
-                    <text fg={theme.text.subdued}>No items available</text>
+                    <text fg={theme.text.subdued}>{t("ui.dialog.select.noItems")}</text>
                   </box>
                 )
               }
             >
               {props.noMatchView ?? (
                 <box paddingLeft={4} paddingRight={4}>
-                  <text fg={theme.text.subdued}>No results found</text>
+                  <text fg={theme.text.subdued}>{t("ui.dialog.select.noResults")}</text>
                 </box>
               )}
             </Show>

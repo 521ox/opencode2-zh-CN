@@ -10,7 +10,8 @@ import {
   type OpenCodeClient,
   type PermissionRequest,
 } from "@opencode-ai/client/promise"
-import { createSessionTransport } from "../../src/mini/stream-v2.transport"
+import { translate, type Translator } from "../../src/i18n"
+import { createSessionTransport as createSessionTransportBase } from "../../src/mini/stream-v2.transport"
 import { entryBody } from "../../src/mini/entry.body"
 import type { StreamCommit } from "../../src/mini/types"
 import { createFooterApiFixture } from "./fixture/footer-api"
@@ -18,6 +19,14 @@ import { canonicalToolPart } from "./fixture/tool-part"
 import { tmpdir } from "../fixture/fixture"
 
 type RunV2Event = EventSubscribeOutput
+const t: Translator = (key, params) => translate("en", key, params)
+
+function createSessionTransport(
+  input: Omit<Parameters<typeof createSessionTransportBase>[0], "t"> &
+    Partial<Pick<Parameters<typeof createSessionTransportBase>[0], "t">>,
+) {
+  return createSessionTransportBase({ t, ...input })
+}
 
 function feed() {
   const values: RunV2Event[] = []
@@ -217,7 +226,7 @@ afterEach(() => {
 })
 
 describe("V2 mini transport", () => {
-  test("renders projected compactions as labeled transcript boundaries", async () => {
+  test("keeps projected completed compactions out of the transcript", async () => {
     const events = feed()
     events.push(connected())
     const ui = footer()
@@ -234,15 +243,11 @@ describe("V2 mini transport", () => {
       footer: ui.api,
     })
 
-    expect(ui.commits).toMatchObject([
-      { text: "Compaction", compaction: true, messageID: "msg_compaction" },
-      { text: "## Transport", phase: "progress", messageID: "msg_compaction" },
-      { text: "", phase: "final", messageID: "msg_compaction" },
-    ])
+    expect(ui.commits).toEqual([])
     await transport.close()
   })
 
-  test("shows an active compaction boundary before live summary output without history replay", async () => {
+  test("shows active compaction in the footer and preserves the completion notice after execution settles", async () => {
     const events = feed()
     events.push(connected())
     const ui = footer()
@@ -272,13 +277,112 @@ describe("V2 mini transport", () => {
       durable: durable("ses_1", 3),
       data: { sessionID: "ses_1", reason: "auto", text: "Transport", recent: "" },
     })
+    events.push({
+      id: "evt_execution_succeeded",
+      created: 4,
+      type: "session.execution.succeeded",
+      durable: durable("ses_1", 4),
+      data: { sessionID: "ses_1" },
+    })
 
-    while (!ui.commits.some((commit) => commit.phase === "final")) await Bun.sleep(0)
-    expect(ui.commits).toMatchObject([
-      { text: "Compaction", compaction: true, messageID: "msg_compaction" },
-      { text: "Transport", phase: "progress", messageID: "msg_compaction" },
-      { text: "", phase: "final", messageID: "msg_compaction" },
-    ])
+    while (
+      !ui.events.some(
+        (event) => event.type === "stream.patch" && event.patch.notice === "Session compaction completed",
+      )
+    )
+      await Bun.sleep(0)
+    expect(ui.commits).toEqual([])
+    expect(ui.events).toContainEqual({
+      type: "stream.patch",
+      patch: { phase: "running", status: "compacting session" },
+    })
+    const patches = ui.events.filter((event) => event.type === "stream.patch")
+    const idle = patches.findLastIndex((event) => event.patch.phase === "idle" && event.patch.status === "")
+    const notice = patches.findLastIndex((event) => event.patch.notice === "Session compaction completed")
+    expect(notice).toBeGreaterThan(idle)
+    await transport.close()
+  })
+
+  test("reports cancelled compaction without a transcript row", async () => {
+    const events = feed()
+    events.push(connected())
+    const ui = footer()
+    const transport = await createSessionTransport({
+      sdk: sdk({ streams: [events] }),
+      sessionID: "ses_1",
+      thinking: false,
+      footer: ui.api,
+    })
+
+    events.push({
+      id: "evt_compaction_started",
+      created: 2,
+      type: "session.compaction.started",
+      durable: durable("ses_1", 2),
+      data: { sessionID: "ses_1", reason: "manual", recent: "", inputID: "msg_compaction" },
+    })
+    events.push({
+      id: "evt_compaction_failed",
+      created: 3,
+      type: "session.compaction.failed",
+      durable: durable("ses_1", 3),
+      data: {
+        sessionID: "ses_1",
+        reason: "manual",
+        inputID: "msg_compaction",
+        error: { type: "aborted", message: "Compaction cancelled" },
+      },
+    })
+
+    while (
+      !ui.events.some(
+        (event) => event.type === "stream.patch" && event.patch.notice === "Session compaction cancelled",
+      )
+    )
+      await Bun.sleep(0)
+    expect(ui.commits).toEqual([])
+    await transport.close()
+  })
+
+  test("reports compaction failure without a transcript row", async () => {
+    const events = feed()
+    events.push(connected())
+    const ui = footer()
+    const transport = await createSessionTransport({
+      sdk: sdk({ streams: [events] }),
+      sessionID: "ses_1",
+      thinking: false,
+      footer: ui.api,
+    })
+
+    events.push({
+      id: "evt_compaction_started",
+      created: 2,
+      type: "session.compaction.started",
+      durable: durable("ses_1", 2),
+      data: { sessionID: "ses_1", reason: "auto", recent: "" },
+    })
+    events.push({
+      id: "evt_compaction_failed",
+      created: 3,
+      type: "session.compaction.failed",
+      durable: durable("ses_1", 3),
+      data: {
+        sessionID: "ses_1",
+        reason: "auto",
+        error: { type: "provider.error", message: "remote unavailable" },
+      },
+    })
+
+    while (
+      !ui.events.some(
+        (event) =>
+          event.type === "stream.patch" &&
+          event.patch.notice === "Session compaction failed: remote unavailable",
+      )
+    )
+      await Bun.sleep(0)
+    expect(ui.commits).toEqual([])
     await transport.close()
   })
 

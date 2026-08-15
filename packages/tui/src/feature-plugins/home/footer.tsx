@@ -2,6 +2,7 @@ import { Plugin } from "@opencode-ai/plugin/tui"
 import { createMemo, Match, Show, Switch } from "solid-js"
 import { useTerminalDimensions } from "@opentui/solid"
 import { usePlugin } from "../../plugin/context"
+import { useI18n } from "../../context/i18n"
 
 export function homeFooterVisibility(width: number) {
   return {
@@ -12,6 +13,7 @@ export function homeFooterVisibility(width: number) {
 }
 
 function Mcp(props: { context: Plugin.Context }) {
+  const i18n = useI18n()
   const dimensions = useTerminalDimensions()
   const visibility = createMemo(() => homeFooterVisibility(dimensions().width))
   const list = createMemo(() => props.context.data.location.mcp.server.list(props.context.location) ?? [])
@@ -25,7 +27,7 @@ function Mcp(props: { context: Plugin.Context }) {
           <Switch>
             <Match when={failed()}>
               <span style={{ fg: props.context.theme.text.feedback.error.default }}>⊙ </span>
-              {failed()} MCP failed
+              {i18n.t("feature.homeFooter.mcp.failed", { count: failed() })}
             </Match>
             <Match when={true}>
               <span
@@ -36,7 +38,7 @@ function Mcp(props: { context: Plugin.Context }) {
               >
                 ⊙{" "}
               </span>
-              {count()} MCP
+              {i18n.t("feature.homeFooter.mcp.connected", { count: count() })}
             </Match>
           </Switch>
         </text>
@@ -49,6 +51,7 @@ function Mcp(props: { context: Plugin.Context }) {
 }
 
 function Plugins(props: { context: Plugin.Context }) {
+  const i18n = useI18n()
   const dimensions = useTerminalDimensions()
   const visibility = createMemo(() => homeFooterVisibility(dimensions().width))
   const plugins = usePlugin()
@@ -59,7 +62,9 @@ function Plugins(props: { context: Plugin.Context }) {
       <box gap={1} flexDirection="row" flexShrink={0}>
         <text fg={props.context.theme.text.default}>
           <span style={{ fg: props.context.theme.text.feedback.error.default }}>⊙ </span>
-          {failed()} plugin{failed() === 1 ? "" : "s"} failed
+          {i18n.t(failed() === 1 ? "feature.homeFooter.plugins.failed.one" : "feature.homeFooter.plugins.failed.other", {
+            count: failed(),
+          })}
         </text>
         <Show when={visibility().pluginCommand}>
           <text fg={props.context.theme.text.subdued}>/plugins</text>

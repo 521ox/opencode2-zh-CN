@@ -1,10 +1,12 @@
 import { TextAttributes } from "@opentui/core"
 import { Keymap } from "../context/keymap"
+import { useI18n } from "../context/i18n"
 import { useTheme } from "../context/theme"
 import { useDialog, type DialogContext } from "./dialog"
 
 export function DialogExportResult(props: { path: string; onClose?: () => void }) {
   const dialog = useDialog()
+  const { t } = useI18n()
   const theme = useTheme("elevated")
 
   const close = () => {
@@ -17,8 +19,8 @@ export function DialogExportResult(props: { path: string; onClose?: () => void }
     commands: [
       {
         bind: "return",
-        title: "Close export result",
-        group: "Dialog",
+        title: t("ui.dialog.export.closeResult"),
+        group: t("ui.group.dialog"),
         run: close,
       },
     ],
@@ -28,7 +30,7 @@ export function DialogExportResult(props: { path: string; onClose?: () => void }
     <box paddingLeft={2} paddingRight={2} gap={1}>
       <box flexDirection="row" justifyContent="space-between">
         <text attributes={TextAttributes.BOLD} fg={theme.text.default}>
-          Session exported
+          {t("ui.dialog.export.sessionExported")}
         </text>
         <text fg={theme.text.subdued} onMouseUp={close}>
           esc
@@ -44,7 +46,7 @@ export function DialogExportResult(props: { path: string; onClose?: () => void }
           backgroundColor={theme.background.action.primary.focused}
           onMouseUp={close}
         >
-          <text fg={theme.text.action.primary.focused}>Close</text>
+          <text fg={theme.text.action.primary.focused}>{t("ui.action.close")}</text>
         </box>
       </box>
     </box>

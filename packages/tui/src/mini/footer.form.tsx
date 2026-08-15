@@ -2,6 +2,7 @@
 import type { TextareaRenderable } from "@opentui/core"
 import { useKeyboard } from "@opentui/solid"
 import { For, Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js"
+import { useI18n } from "../context/i18n"
 import {
   createFormBodyState,
   formAcknowledge,
@@ -45,13 +46,14 @@ export function RunFormBody(props: {
   onState?: (state: FormBodyState) => void
   mono?: boolean
 }) {
+  const { t } = useI18n()
   const [state, setLocalState] = createSignal(props.state ?? createFormBodyState(props.request))
   const setState = (next: FormBodyState | ((previous: FormBodyState) => FormBodyState)) => {
     const value = typeof next === "function" ? next(state()) : next
     setLocalState(value)
     props.onState?.(value)
   }
-  const unsupported = createMemo(() => formUnsupported(props.request))
+  const unsupported = createMemo(() => formUnsupported(props.request, t))
   const current = createMemo(() => formCurrent(props.request, state()))
   const answerField = createMemo(() => {
     const field = current()
@@ -62,7 +64,7 @@ export function RunFormBody(props: {
     return field?.type === "external" ? field : undefined
   })
   const confirm = createMemo(() => formConfirm(props.request, state()))
-  const rows = createMemo(() => formRows(current()))
+  const rows = createMemo(() => formRows(current(), t))
   const custom = createMemo(() => formCustom(current()))
   const textual = createMemo(() => formTextual(current()))
   const multiple = createMemo(() => current()?.type === "multiselect")
@@ -102,17 +104,19 @@ export function RunFormBody(props: {
     try {
       await props.onReply(input)
     } catch (error) {
-      setState((previous) => (previous.formID === formID ? formSetError(previous, formErrorMessage(error)) : previous))
+      setState((previous) =>
+        previous.formID === formID ? formSetError(previous, formErrorMessage(error, t)) : previous,
+      )
     }
   }
 
   const submit = (next = state()) => {
-    const invalid = formValidate(props.request, next)
+    const invalid = formValidate(props.request, next, t)
     if (invalid) {
       setState((previous) => formSetError(previous, invalid))
       return
     }
-    const reply = formReply(props.request, next)
+    const reply = formReply(props.request, next, t)
     if (reply) void beginReply(reply)
   }
 
@@ -126,12 +130,14 @@ export function RunFormBody(props: {
         location: props.request.location,
       })
     } catch (error) {
-      setState((previous) => (previous.formID === formID ? formSetError(previous, formErrorMessage(error)) : previous))
+      setState((previous) =>
+        previous.formID === formID ? formSetError(previous, formErrorMessage(error, t)) : previous,
+      )
     }
   }
 
   const commitInput = () => {
-    const next = formCommitInput(state(), props.request, area?.plainText ?? formInput(state(), current()))
+    const next = formCommitInput(state(), props.request, area?.plainText ?? formInput(state(), current()), t)
     setState(next)
     if (next.error) return
     if (formSingle(props.request)) {
@@ -158,11 +164,11 @@ export function RunFormBody(props: {
     const field = current()
     if (field?.type === "external") {
       if (state().answers[field.key] !== true) {
-        setState((previous) => formSetError(previous, `Acknowledge ${formLabel(field)}`))
+        setState((previous) => formSetError(previous, t("mini.form.error.acknowledge", { field: formLabel(field) })))
         return
       }
     } else if (field) {
-      const invalid = formValidateValue(field, state().answers[field.key])
+      const invalid = formValidateValue(field, state().answers[field.key], t)
       if (invalid) {
         setState((previous) => formSetError(previous, invalid))
         return
@@ -194,7 +200,7 @@ export function RunFormBody(props: {
       setState((previous) => formSetExternalReady(previous, field.key))
     } catch {
       setState((previous) => formSetExternalReady(previous, field.key))
-      setState((previous) => formSetError(previous, "Could not open the URL. Open it manually, then press enter."))
+      setState((previous) => formSetError(previous, t("mini.form.error.openUrl")))
     }
   }
 
@@ -264,7 +270,7 @@ export function RunFormBody(props: {
           <Show when={!unsupported() && !formSingle(props.request)}>
             <text fg={props.theme.muted}>
               {confirm()
-                ? "Review"
+                ? t("mini.form.review")
                 : `${Math.min(state().field + 1, props.request.fields.length)}/${props.request.fields.length}`}
             </text>
           </Show>
@@ -276,7 +282,7 @@ export function RunFormBody(props: {
               <text fg={props.theme.warning} wrapMode="word">
                 {value()}
               </text>
-              <text fg={props.theme.muted}>This request remains pending until you dismiss it.</text>
+              <text fg={props.theme.muted}>{t("mini.form.pending")}</text>
             </box>
           )}
         </Show>
@@ -289,10 +295,10 @@ export function RunFormBody(props: {
               </text>
               <text fg={props.theme.muted}>
                 {state().answers[field().key] === true
-                  ? "Acknowledged"
+                  ? t("mini.form.acknowledged")
                   : state().externalReady[field().key]
-                    ? "Press enter to acknowledge completion"
-                    : "Press enter to open the URL"}
+                    ? t("mini.form.acknowledgeCompletion")
+                    : t("mini.form.openUrl")}
               </text>
             </box>
           )}
@@ -301,8 +307,8 @@ export function RunFormBody(props: {
           <box flexDirection="column" gap={1}>
             <text fg={props.theme.text} wrapMode="word">
               {answerField()!.description ?? formLabel(answerField()!)}
-              {answerField()!.required ? " (required)" : ""}
-              {multiple() ? " (select all that apply)" : ""}
+              {answerField()!.required ? t("mini.form.required") : ""}
+              {multiple() ? t("mini.form.selectAll") : ""}
             </text>
             <Show when={textual() || state().editing}>
               <textarea
@@ -313,7 +319,7 @@ export function RunFormBody(props: {
                 minHeight={1}
                 maxHeight={3}
                 initialValue={formInput(state(), current())}
-                placeholder={formPlaceholder(answerField())}
+                placeholder={formPlaceholder(answerField(), t)}
                 placeholderColor={props.theme.muted}
                 textColor={props.theme.text}
                 focusedTextColor={props.theme.text}
@@ -376,7 +382,7 @@ export function RunFormBody(props: {
                         : `${rows().length + 1}.`}
                     </text>
                     <text fg={state().selected === rows().length ? props.theme.text : props.theme.muted}>
-                      Type your own answer
+                      {t("mini.form.customAnswer")}
                     </text>
                   </box>
                 </Show>
@@ -392,9 +398,9 @@ export function RunFormBody(props: {
                   {formLabel(field)}:{" "}
                   {field.type === "external"
                     ? state().answers[field.key] === true
-                      ? "acknowledged"
-                      : "required"
-                    : formDisplay(field, state().answers[field.key]) || "(not answered)"}
+                      ? t("mini.form.answerAcknowledged")
+                      : t("mini.form.answerRequired")
+                    : formDisplay(field, state().answers[field.key], t) || t("mini.form.notAnswered")}
                 </text>
               )}
             </For>
@@ -411,16 +417,14 @@ export function RunFormBody(props: {
       >
         <text fg={props.theme.muted}>
           {state().submitting
-            ? "submitting..."
+            ? t("mini.form.hint.submitting")
             : unsupported()
-              ? "esc dismiss"
+              ? t("mini.form.hint.dismiss")
               : confirm()
-                ? "enter submit   esc dismiss"
+                ? t("mini.form.hint.submit")
                 : textual() || state().editing
-                  ? "enter save   esc dismiss"
-                  : props.mono
-                    ? "up/down select   enter choose   tab next   esc dismiss"
-                    : "↑↓ select   enter choose   tab next   esc dismiss"}
+                  ? t("mini.form.hint.save")
+                  : t("mini.form.hint.select", { arrows: props.mono ? "up/down" : "↑↓" })}
         </text>
         <Show when={state().error}>
           <text fg={props.theme.error} wrapMode="none" truncate>

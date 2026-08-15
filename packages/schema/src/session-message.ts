@@ -226,6 +226,9 @@ export const Assistant = Schema.Struct({
 }).annotate({ identifier: "Session.Message.Assistant" })
 
 const CompactionBase = { type: Schema.tag("compaction"), ...Base }
+export const RemoteCompactionItem = Schema.StructWithRest(Schema.Struct({ type: Schema.String }), [
+  Schema.Record(Schema.String, Schema.Json),
+])
 
 export interface CompactionRunning extends Schema.Schema.Type<typeof CompactionRunning> {}
 export const CompactionRunning = Schema.Struct({
@@ -234,6 +237,7 @@ export const CompactionRunning = Schema.Struct({
   reason: Schema.Literals(["auto", "manual"]),
   summary: Schema.String,
   recent: Schema.String,
+  remote: Schema.Array(RemoteCompactionItem).pipe(optional),
 }).annotate({ identifier: "Session.Message.Compaction.Running" })
 
 export interface CompactionCompleted extends Schema.Schema.Type<typeof CompactionCompleted> {}
@@ -243,6 +247,7 @@ export const CompactionCompleted = Schema.Struct({
   reason: Schema.Literals(["auto", "manual"]),
   summary: Schema.String,
   recent: Schema.String,
+  remote: Schema.Array(RemoteCompactionItem).pipe(optional),
 }).annotate({ identifier: "Session.Message.Compaction.Completed" })
 
 export interface CompactionFailed extends Schema.Schema.Type<typeof CompactionFailed> {}

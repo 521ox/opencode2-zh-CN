@@ -4,6 +4,7 @@ import { RGBA } from "@opentui/core"
 import { testRender } from "@opentui/solid"
 import type { Context } from "@opencode-ai/plugin/tui/context"
 import { PromptFooter } from "../../src/feature-plugins/prompt/footer"
+import { I18nProvider } from "../../src/context/i18n"
 
 test("prompt footer separates simultaneous subagent, shell, and usage status", async () => {
   const color = RGBA.fromInts(200, 200, 200)
@@ -30,10 +31,17 @@ test("prompt footer separates simultaneous subagent, shell, and usage status", a
       },
     },
   } as unknown as Context
-  const app = await testRender(() => <PromptFooter context={context} sessionID="session" mode="normal" />, {
-    width: 80,
-    height: 2,
-  })
+  const app = await testRender(
+    () => (
+      <I18nProvider locale="en">
+        <PromptFooter context={context} sessionID="session" mode="normal" />
+      </I18nProvider>
+    ),
+    {
+      width: 80,
+      height: 2,
+    },
+  )
 
   try {
     await app.renderOnce()

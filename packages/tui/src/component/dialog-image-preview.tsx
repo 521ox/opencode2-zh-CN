@@ -4,6 +4,7 @@ import { createMemo, createSignal } from "solid-js"
 import { Keymap } from "../context/keymap"
 import { useTheme } from "../context/theme"
 import { useDialog } from "../ui/dialog"
+import { useI18n } from "../context/i18n"
 
 type ImagePreviewItem = Readonly<{
   uri: string
@@ -14,6 +15,7 @@ export function DialogImagePreview(props: { images: readonly ImagePreviewItem[];
   const dialog = useDialog()
   const dimensions = useTerminalDimensions()
   const theme = useTheme("elevated")
+  const { t } = useI18n()
   const [index, setIndex] = createSignal(Math.max(0, Math.min(props.images.length - 1, props.initial)))
   const [failed, setFailed] = createSignal(false)
   const current = createMemo(() => props.images[index()])
@@ -31,8 +33,8 @@ export function DialogImagePreview(props: { images: readonly ImagePreviewItem[];
   Keymap.createLayer(() => ({
     mode: "modal",
     commands: [
-      { bind: "left", title: "Previous image", group: "Dialog", run: () => move(-1) },
-      { bind: "right", title: "Next image", group: "Dialog", run: () => move(1) },
+      { bind: "left", title: t("dialog.imagePreview.previousCommand"), group: t("dialog.group"), run: () => move(-1) },
+      { bind: "right", title: t("dialog.imagePreview.nextCommand"), group: t("dialog.group"), run: () => move(1) },
     ],
   }))
 
@@ -40,7 +42,7 @@ export function DialogImagePreview(props: { images: readonly ImagePreviewItem[];
     <box id="prompt-image-viewer" paddingLeft={2} paddingRight={2} paddingBottom={1} gap={1}>
       <box flexDirection="row" justifyContent="space-between">
         <text attributes={TextAttributes.BOLD} fg={theme.text.default}>
-          Image {index() + 1} of {props.images.length}
+          {t("dialog.imagePreview.title", { index: index() + 1, count: props.images.length })}
         </text>
         <text fg={theme.text.subdued} onMouseUp={() => dialog.clear()}>
           esc
@@ -57,13 +59,13 @@ export function DialogImagePreview(props: { images: readonly ImagePreviewItem[];
       />
       <box flexDirection="row" justifyContent="space-between">
         <text fg={theme.text.subdued} onMouseUp={() => move(-1)}>
-          {props.images.length > 1 ? "← previous" : ""}
+          {props.images.length > 1 ? `← ${t("dialog.imagePreview.previous")}` : ""}
         </text>
         <text fg={failed() ? theme.text.feedback.error.default : theme.text.subdued} wrapMode="none" truncate>
-          {failed() ? "No preview" : (current().mention?.text ?? `Image ${index() + 1}`)}
+          {failed() ? t("dialog.imagePreview.none") : (current().mention?.text ?? t("dialog.imagePreview.label", { index: index() + 1 }))}
         </text>
         <text fg={theme.text.subdued} onMouseUp={() => move(1)}>
-          {props.images.length > 1 ? "next →" : ""}
+          {props.images.length > 1 ? `${t("dialog.imagePreview.next")} →` : ""}
         </text>
       </box>
     </box>

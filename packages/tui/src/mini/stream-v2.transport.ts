@@ -11,6 +11,7 @@ import type {
 import { Event } from "@opencode-ai/schema/event"
 import { SessionMessage } from "@opencode-ai/schema/session-message"
 import { formatContextUsage } from "../util/session"
+import { translate, type Translator } from "../i18n"
 import { blockerStatus, pickBlockerView } from "./session-data"
 import { writeSessionOutput } from "./stream"
 import { createFragmentReconciler, fragmentRef, type FragmentReconciler } from "./stream-v2.fragment"
@@ -37,6 +38,7 @@ type Trace = {
 }
 
 type StreamInput = {
+  t?: Translator
   sdk: OpenCodeClient
   reconnect?: (signal: AbortSignal) => Promise<OpenCodeClient>
   onClient?: (sdk: OpenCodeClient) => void
@@ -149,6 +151,7 @@ type State = {
   admitted: Set<string>
   stepModel: RunInput["model"]
   activeCompaction?: string
+  compactionNotice?: string
 }
 
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" })
@@ -178,8 +181,8 @@ function globalForm(form: FormInfo, location: LocationRef): MiniFormRequest {
   return { ...form, location: { directory: location.directory, workspaceID: location.workspaceID } }
 }
 
-function errorMessage(error: { message?: string; _tag?: string }) {
-  return error.message || error._tag || "Session execution failed"
+function errorMessage(error: { message?: string; _tag?: string }, t: Translator) {
+  return error.message || error._tag || t("mini.transport.error.sessionExecutionFailed")
 }
 
 function pendingPrompt(item: SessionInboxInfo): FooterQueuedPrompt | undefined {
@@ -340,15 +343,16 @@ function shellTerminal(
   command: string,
   shell: { status: string; exit?: number | string },
   output: { output: string; cursor: number; size: number; truncated: boolean },
+  t: Translator,
 ) {
   const incomplete = output.truncated || output.cursor < output.size
-  const text = `${output.output}${incomplete ? `${output.output.endsWith("\n") || !output.output ? "" : "\n"}[output truncated]` : ""}`
+  const text = `${output.output}${incomplete ? `${output.output.endsWith("\n") || !output.output ? "" : "\n"}${t("mini.tool.outputTruncated")}` : ""}`
   const error =
     shell.status === "exited" && shell.exit === 0
       ? undefined
       : shell.status === "exited"
-        ? `Shell exited with code ${shell.exit ?? "unknown"}`
-        : `Shell ${shell.status}`
+        ? t("mini.tool.shellExited", { code: shell.exit ?? "unknown" })
+        : t("mini.tool.shellStatus", { status: shell.status })
   if (!error) return [shellCommit(id, command, { text, phase: "progress", toolState: "completed" })]
   return [
     ...(text ? [shellCommit(id, command, { text, phase: "progress", toolState: "running" })] : []),
@@ -374,47 +378,13 @@ const catalogEvents = new Set([
 // briefly so the output commit renders inside it.
 const SHELL_OUTPUT_GRACE_MS = 1500
 
-function skillCommit(messageID: string, name: string, skillID = messageID): StreamCommit {
+function skillCommit(messageID: string, name: string, t: Translator, skillID = messageID): StreamCommit {
   return {
     kind: "system",
     source: "system",
     messageID,
     partID: `skill:${skillID}`,
-    text: `→ Skill "${name}"`,
-    phase: "start",
-  }
-}
-
-function compactionCommit(messageID: string): StreamCommit {
-  return {
-    kind: "system",
-    source: "system",
-    messageID,
-    partID: "compaction:header",
-    text: "Compaction",
-    phase: "start",
-    compaction: true,
-  }
-}
-
-function compactionSummary(messageID: string, text: string, phase: "progress" | "final"): StreamCommit {
-  return {
-    kind: "assistant",
-    source: "assistant",
-    messageID,
-    partID: "compaction:summary",
-    text,
-    phase,
-  }
-}
-
-function compactionError(messageID: string, text: string): StreamCommit {
-  return {
-    kind: "error",
-    source: "system",
-    messageID,
-    partID: "compaction:error",
-    text,
+    text: `→ ${t("mini.tool.skill", { name })}`,
     phase: "start",
   }
 }
@@ -449,7 +419,12 @@ async function resolveSelectedModel(
   return { providerID: fallback.providerID, id: fallback.id, variant: next.variant }
 }
 
-export async function createSessionTransport(input: StreamInput): Promise<SessionTransport> {
+export async function createSessionTransport(rawInput: StreamInput): Promise<SessionTransport> {
+  const t: Translator = rawInput.t ?? ((key, params) => translate("en", key, params))
+  const input = {
+    ...rawInput,
+    t,
+  }
   const controller = new AbortController()
   let sdk = input.sdk
   let generation = 0
@@ -496,6 +471,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
     attempt.client === sdk
 
   const subagents = createSubagentTracker({
+    t: input.t,
     sessionID: input.sessionID,
     thinking: input.thinking,
     directory: input.location?.directory,
@@ -512,7 +488,10 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
   })
   controller.signal.addEventListener("abort", () => subagents.close(), { once: true })
 
-  const write = (commits: StreamCommit[], patch?: { phase?: "idle" | "running"; status?: string; usage?: string }) => {
+  const write = (
+    commits: StreamCommit[],
+    patch?: { phase?: "idle" | "running"; status?: string; usage?: string; notice?: string },
+  ) => {
     if (state.closed || controller.signal.aborted || input.footer.isClosed) return
     if (!state.initial && state.buffered === undefined)
       commits.forEach((commit) => {
@@ -523,7 +502,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
         const text = state.fragments.value({ messageID: commit.messageID, partID: commit.partID })
         input.onCommit?.({
           ...commit,
-          text: commit.kind === "reasoning" && text ? `Thinking: ${text}` : (text ?? commit.text),
+          text: commit.kind === "reasoning" && text ? `${input.t("mini.scrollback.thinking")}: ${text}` : (text ?? commit.text),
         })
       })
     writeSessionOutput(
@@ -579,8 +558,8 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
             type: "stream.patch",
             patch:
               next.type === "prompt"
-                ? { phase: state.rootActive ? "running" : "idle", status: blockerStatus(next) }
-                : { status: blockerStatus(next) },
+                ? { phase: state.rootActive ? "running" : "idle", status: blockerStatus(next, input.t) }
+                : { status: blockerStatus(next, input.t) },
           },
           { type: "stream.view", view: next },
         ],
@@ -622,25 +601,26 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
       const started = current?.started === true
       const ready = part.name !== "websearch" || typeof part.state.metadata.provider === "string"
       if (render && !started && ready)
-        write([toolCommit(part, messageID, "start", undefined, input.location?.directory, version)], {
+        write([toolCommit(part, messageID, "start", input.t, undefined, input.location?.directory, version)], {
           phase: "running",
-          status: `running ${part.name}`,
+          status: input.t("mini.tool.running", { tool: part.name }),
         })
-      if (render && delta) write([toolCommit(part, messageID, "progress", delta, input.location?.directory, version)])
+      if (render && delta)
+        write([toolCommit(part, messageID, "progress", input.t, delta, input.location?.directory, version)])
       state.tools.set(key, { part, output, version, started: started || (render && ready) })
       return
     }
     if (render && !current?.started)
-      write([toolCommit(part, messageID, "start", undefined, input.location?.directory, version)])
+      write([toolCommit(part, messageID, "start", input.t, undefined, input.location?.directory, version)])
     state.finishedTools.add(key)
     state.tools.delete(key)
     if (!sourcePending(key)) state.toolSources.delete(key)
     if (!render) return
     const phase = toolFinalPhase(part)
     if (part.state.status === "error" && delta)
-      write([toolCommit(part, messageID, "progress", delta, input.location?.directory, version)])
+      write([toolCommit(part, messageID, "progress", input.t, delta, input.location?.directory, version)])
     write([
-      toolCommit(part, messageID, phase, phase === "progress" ? delta : undefined, input.location?.directory, version),
+      toolCommit(part, messageID, phase, input.t, phase === "progress" ? delta : undefined, input.location?.directory, version),
     ])
   }
 
@@ -656,7 +636,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
       if (!render) return
       if (reuseVisibleWait && waiting) return
       write([
-        ...(message.skills ?? []).map((skill) => skillCommit(message.id, skill.name, skill.id)),
+        ...(message.skills ?? []).map((skill) => skillCommit(message.id, skill.name, input.t, skill.id)),
         { kind: "user", source: "system", text: message.text, phase: "start", messageID: message.id },
       ])
       return
@@ -668,7 +648,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
         return
       }
       state.skillMessages.add(message.id)
-      write([skillCommit(message.id, message.name)])
+      write([skillCommit(message.id, message.name, input.t)])
       return
     }
     if (message.type === "shell") {
@@ -689,7 +669,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
         state.shellStarted.add(message.shellID)
         write([
           shellCommit(message.shellID, message.command, {
-            text: "running shell",
+            text: input.t("mini.tool.runningShell"),
             phase: "start",
             toolState: "running",
           }),
@@ -697,31 +677,19 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
       }
       if (completed && message.output && !state.shellEnded.has(message.shellID)) {
         state.shellEnded.add(message.shellID)
-        write(shellTerminal(message.shellID, message.command, message, message.output))
+        write(shellTerminal(message.shellID, message.command, message, message.output, input.t))
       }
       if (completed && state.shellWait?.id === message.shellID) state.shellWait.resolve()
       return
     }
     if (message.type === "compaction") {
-      const visible = state.messageIDs.has(message.id)
       state.messageIDs.add(message.id)
-      if (message.status === "running") state.activeCompaction = message.id
-      if (message.status !== "running" && state.activeCompaction === message.id) state.activeCompaction = undefined
-      if (visible) return
-      if (message.status === "failed") {
-        if (render && message.error.type !== "aborted")
-          write([compactionCommit(message.id), compactionError(message.id, message.error.message)])
+      if (message.status === "running") {
+        state.activeCompaction = message.id
+        write([], { phase: "running", status: input.t("mini.transport.status.compactingSession") })
         return
       }
-      const fragment = { messageID: message.id, partID: "compaction:summary" }
-      const show = render || message.status === "running"
-      state.fragments.project(fragment, message.summary, show)
-      if (!show) return
-      write([
-        compactionCommit(message.id),
-        ...(message.summary ? [compactionSummary(message.id, message.summary, "progress")] : []),
-        ...(message.status === "completed" ? [compactionSummary(message.id, "", "final")] : []),
-      ])
+      if (state.activeCompaction === message.id) state.activeCompaction = undefined
       return
     }
     if (message.type !== "assistant") return
@@ -753,7 +721,10 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
             {
               kind: "reasoning",
               source: "reasoning",
-              text: update.previous.length === 0 ? `Thinking: ${item.text}` : item.text.slice(update.previous.length),
+              text:
+                update.previous.length === 0
+                  ? `${input.t("mini.scrollback.thinking")}: ${item.text}`
+                  : item.text.slice(update.previous.length),
               phase: "progress",
               messageID: message.id,
               partID: fragment.partID,
@@ -771,7 +742,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
         {
           kind: "error",
           source: "system",
-          text: errorMessage(message.error),
+          text: errorMessage(message.error, input.t),
           phase: "start",
           messageID: message.id,
         },
@@ -791,7 +762,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
     await client.session.wait({ sessionID: input.sessionID }, { signal: controller.signal })
     for (const message of await projectedMessages(client, controller.signal)) renderMessage(message, true, true)
     state.rootActive = false
-    write([], { phase: "idle", status: blockerStatus(state.view) })
+    write([], { phase: "idle", status: blockerStatus(state.view, input.t) })
     await input.footer.idle()
   }
 
@@ -882,7 +853,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
     if (!current(attempt)) return
     write([], {
       phase: state.rootActive ? "running" : "idle",
-      status: state.rootActive ? "assistant responding" : blockerStatus(state.view),
+      status: state.rootActive ? input.t("mini.transport.status.assistantResponding") : blockerStatus(state.view, input.t),
     })
     if (!state.rootActive) await input.footer.idle()
     if (!current(attempt)) return
@@ -957,7 +928,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
           },
         ])
       }
-      write([], { phase: "running", status: "waiting for assistant" })
+      write([], { phase: "running", status: input.t("mini.transport.status.waitingAssistant") })
       return
     }
     if (event.type === "session.inbox.delivery.changed") {
@@ -986,7 +957,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
     }
     if (event.type === "session.step.started") {
       state.stepModel = { providerID: event.data.model.providerID, modelID: event.data.model.id }
-      write([], { phase: "running", status: "assistant responding" })
+      write([], { phase: "running", status: input.t("mini.transport.status.assistantResponding") })
       return
     }
     if (event.type === "session.skill.activated") {
@@ -994,46 +965,38 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
       if (state.wait?.messageID === messageID) promoteWait(state.wait, true)
       if (state.skillMessages.has(messageID)) return
       state.skillMessages.add(messageID)
-      write([skillCommit(messageID, event.data.name)])
+      write([skillCommit(messageID, event.data.name, input.t)])
       return
     }
     if (event.type === "session.compaction.started") {
       const messageID = event.data.inputID ?? messageIDFromEvent(event.id)
       state.activeCompaction = messageID
-      if (state.messageIDs.has(messageID)) return
+      state.compactionNotice = undefined
       state.messageIDs.add(messageID)
-      write([compactionCommit(messageID)], { phase: "running", status: "compacting session" })
+      write([], {
+        phase: "running",
+        status: input.t("mini.transport.status.compactingSession"),
+      })
       return
     }
     if (event.type === "session.compaction.delta") {
-      if (!state.activeCompaction) return
-      const fragment = { messageID: state.activeCompaction, partID: "compaction:summary" }
-      if (!state.fragments.delta(fragment, event.data.text)) return
-      write([compactionSummary(state.activeCompaction, event.data.text, "progress")])
       return
     }
     if (event.type === "session.compaction.ended") {
       if (!state.activeCompaction) return
-      const messageID = state.activeCompaction
       state.activeCompaction = undefined
-      const update = state.fragments.end({ messageID, partID: "compaction:summary" }, event.data.text)
-      write([
-        ...(event.data.text.length > update.previous.length
-          ? [compactionSummary(messageID, event.data.text.slice(update.previous.length), "progress")]
-          : []),
-        compactionSummary(messageID, "", "final"),
-      ])
+      state.compactionNotice = input.t("mini.compaction.completed")
+      write([], { notice: state.compactionNotice })
       return
     }
     if (event.type === "session.compaction.failed") {
       if (!state.activeCompaction) return
-      const messageID = state.activeCompaction
       state.activeCompaction = undefined
-      if (event.data.error.type === "aborted") {
-        write([compactionSummary(messageID, "", "final")])
-        return
-      }
-      write([compactionSummary(messageID, "", "final"), compactionError(messageID, event.data.error.message)])
+      state.compactionNotice =
+        event.data.error.type === "aborted"
+          ? input.t("mini.compaction.cancelled")
+          : input.t("mini.compaction.failed", { message: event.data.error.message })
+      write([], { notice: state.compactionNotice })
       return
     }
     if (event.type === "session.shell.started") {
@@ -1045,14 +1008,14 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
       write(
         [
           shellCommit(event.data.shell.id, event.data.shell.command, {
-            text: "running shell",
+            text: input.t("mini.tool.runningShell"),
             phase: "start",
             toolState: "running",
           }),
         ],
         {
           phase: "running",
-          status: "running shell",
+          status: input.t("mini.tool.runningShell"),
         },
       )
       return
@@ -1064,12 +1027,16 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
         state.shellStarted.add(event.data.shell.id)
         if (command)
           commits.push(
-            shellCommit(event.data.shell.id, command, { text: "running shell", phase: "start", toolState: "running" }),
+            shellCommit(event.data.shell.id, command, {
+              text: input.t("mini.tool.runningShell"),
+              phase: "start",
+              toolState: "running",
+            }),
           )
       }
       if (!state.shellEnded.has(event.data.shell.id)) {
         state.shellEnded.add(event.data.shell.id)
-        commits.push(...shellTerminal(event.data.shell.id, command, event.data.shell, event.data.output))
+        commits.push(...shellTerminal(event.data.shell.id, command, event.data.shell, event.data.output, input.t))
       }
       const wait = state.shellWait
       const owned = wait?.id === event.data.shell.id
@@ -1127,7 +1094,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
           {
             kind: "reasoning",
             source: "reasoning",
-            text: update.previous ? event.data.delta : `Thinking: ${event.data.delta}`,
+            text: update.previous ? event.data.delta : `${input.t("mini.scrollback.thinking")}: ${event.data.delta}`,
             phase: "progress",
             messageID: event.data.assistantMessageID,
             partID: update.partID,
@@ -1145,7 +1112,9 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
           {
             kind: "reasoning",
             source: "reasoning",
-            text: update.previous ? event.data.text.slice(update.previous.length) : `Thinking: ${event.data.text}`,
+            text: update.previous
+              ? event.data.text.slice(update.previous.length)
+              : `${input.t("mini.scrollback.thinking")}: ${event.data.text}`,
             phase: "progress",
             messageID: event.data.assistantMessageID,
             partID: update.partID,
@@ -1289,7 +1258,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
         {
           kind: "error",
           source: "system",
-          text: errorMessage(event.data.error),
+          text: errorMessage(event.data.error, input.t),
           phase: "start",
           messageID: event.data.assistantMessageID,
         },
@@ -1307,18 +1276,21 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
       event.type === "session.execution.interrupted"
     ) {
       state.rootActive = false
+      const compactionNotice = state.compactionNotice
+      state.compactionNotice = undefined
       write([], { phase: "idle", status: "" })
+      if (compactionNotice) write([], { notice: compactionNotice })
       const current = state.wait
       if (!current) return
       if (current.interrupted && event.type === "session.execution.interrupted" && event.data.reason === "user") {
         return
       }
       if (event.type === "session.execution.failed") {
-        if (!current.failureRendered) current.terminalError = new Error(errorMessage(event.data.error))
+        if (!current.failureRendered) current.terminalError = new Error(errorMessage(event.data.error, input.t))
         return
       }
       if (event.type === "session.execution.interrupted") {
-        current.terminalError = new Error(`Session interrupted: ${event.data.reason}`)
+        current.terminalError = new Error(input.t("mini.transport.error.sessionInterrupted", { reason: event.data.reason }))
       }
     }
   }
@@ -1436,7 +1408,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
       state.connected = false
       if (controller.signal.aborted || input.footer.isClosed) return
       input.trace?.write("recv.reconnect", { error: formatUnknownError(error) })
-      write([], { phase: "running", status: "reconnecting" })
+      write([], { phase: "running", status: input.t("mini.transport.status.reconnecting") })
       if (input.reconnect) {
         try {
           const next = await input.reconnect(controller.signal)
@@ -1486,7 +1458,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
     }
     state.shellWait = active
     input.trace?.write("send.shell", { sessionID: input.sessionID, id: eventID, command: next.prompt.text })
-    write([], { phase: "running", status: "running shell" })
+    write([], { phase: "running", status: input.t("mini.tool.runningShell") })
     try {
       await client.session.shell(
         { sessionID: input.sessionID, id: eventID, command: next.prompt.text },
@@ -1572,6 +1544,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
       state.shellCommands.clear()
       state.shellStarted.clear()
       state.activeCompaction = undefined
+      state.compactionNotice = undefined
       state.shellEnded.clear()
       state.errors.clear()
       await hydrate(attempt, { render: true, reuseVisibleWait: false })
@@ -1589,7 +1562,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
             row.commit.partID &&
             (row.commit.kind === "assistant" || row.commit.kind === "reasoning")
           ) {
-            const prefix = row.commit.kind === "reasoning" ? "Thinking: " : ""
+            const prefix = row.commit.kind === "reasoning" ? `${input.t("mini.scrollback.thinking")}: ` : ""
             const text = row.commit.text.startsWith(prefix) ? row.commit.text.slice(prefix.length) : row.commit.text
             const restored = state.fragments.restore(
               { messageID: row.commit.messageID, partID: row.commit.partID },

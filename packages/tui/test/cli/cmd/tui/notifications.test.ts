@@ -1,9 +1,16 @@
-import { describe, expect, test } from "bun:test"
-import Notifications from "../../../../src/feature-plugins/system/notifications"
+import { afterEach, describe, expect, test } from "bun:test"
+import { subscribeNotifications } from "../../../../src/feature-plugins/system/notifications"
 import type { OpenCodeEvent, PermissionAsked } from "@opencode-ai/client"
 import type { AttentionNotifyOptions, Context } from "@opencode-ai/plugin/tui/context"
+import { translate, type Translator } from "../../../../src/i18n"
 
 type Session = { id: string; title: string; parentID?: string }
+const english: Translator = (key, params) => translate("en", key, params)
+const cleanups: Array<() => void> = []
+
+afterEach(() => {
+  cleanups.splice(0).reverse().forEach((cleanup) => cleanup())
+})
 
 async function setup() {
   const notifications: AttentionNotifyOptions[] = []
@@ -20,7 +27,7 @@ async function setup() {
     timeout: session("timeout", "Timeout session"),
   }
 
-  await Notifications.setup({
+  const context = {
     attention: {
       async notify(input: AttentionNotifyOptions) {
         notifications.push(input)
@@ -48,7 +55,8 @@ async function setup() {
         status: () => "running" as const,
       },
     },
-  } as unknown as Context)
+  } as unknown as Context
+  cleanups.push(subscribeNotifications(context, english))
 
   return {
     notifications,

@@ -23,6 +23,7 @@ import type {
   SessionMessageInfo,
 } from "@opencode-ai/client/promise"
 import { Locale } from "../util/locale"
+import type { Translator } from "../i18n"
 import { createFragmentReconciler, fragmentRef, type FragmentReconciler } from "./stream-v2.fragment"
 import type {
   FooterSubagentDetail,
@@ -42,14 +43,13 @@ const FAMILY_LIST_LIMIT = 100
 const FAMILY_DISCOVERY_CONCURRENCY = 8
 const BLOCKER_RETRY_INITIAL_MS = 50
 const BLOCKER_RETRY_MAX_MS = 2_000
-const FALLBACK_LABEL = "Subagent"
-
 type V2Event = EventSubscribeOutput
 
 export function toolCommit(
   input: SessionMessageAssistantTool,
   messageID: string,
   phase: "start" | "progress" | "final",
+  t: Translator,
   value?: string,
   directory?: string,
   version = 0,
@@ -60,7 +60,7 @@ export function toolCommit(
   const partial = status === "error" && phase === "progress" && value !== undefined
   const text =
     status === "running" || partial
-      ? (value ?? (part.name === "subagent" ? "running subagent" : `running ${part.name}`))
+      ? (value ?? (part.name === "subagent" ? t("mini.tool.runningSubagent") : t("mini.tool.running", { tool: part.name })))
       : status === "completed"
         ? (value ?? output)
         : status === "error"
@@ -121,6 +121,7 @@ type ChildState = {
 }
 
 export type SubagentTrackerInput = {
+  t: Translator
   sessionID: string
   thinking: boolean
   directory?: string
@@ -228,7 +229,7 @@ export function createSubagentTracker(input: SubagentTrackerInput): SubagentTrac
     if (!existing && children.size >= FAMILY_LIST_LIMIT) return
     const child: ChildState = existing ?? {
       sessionID,
-      label: FALLBACK_LABEL,
+      label: input.t("mini.subagent.fallback"),
       description: "",
       status: "running",
       background: false,
@@ -318,19 +319,19 @@ export function createSubagentTracker(input: SubagentTrackerInput): SubagentTrac
         current.part.state.status === "running" &&
         typeof current.part.state.metadata.provider !== "string"
       if (ready && (!current || current.part.state.status === "streaming" || awaitingProvider))
-        setFrame(child, frame, toolCommit(part, messageID, "start", undefined, input.directory))
-      if (output) setFrame(child, frame, toolCommit(part, messageID, "progress", output, input.directory))
+        setFrame(child, frame, toolCommit(part, messageID, "start", input.t, undefined, input.directory))
+      if (output) setFrame(child, frame, toolCommit(part, messageID, "progress", input.t, output, input.directory))
       child.tools.set(key, { part })
       return
     }
     child.finishedTools.add(key)
     child.tools.delete(key)
     if (part.state.status === "error" && output) {
-      setFrame(child, frame, toolCommit(part, messageID, "progress", output, input.directory))
-      setFrame(child, `${frame}:final`, toolCommit(part, messageID, "final", undefined, input.directory))
+      setFrame(child, frame, toolCommit(part, messageID, "progress", input.t, output, input.directory))
+      setFrame(child, `${frame}:final`, toolCommit(part, messageID, "final", input.t, undefined, input.directory))
       return
     }
-    setFrame(child, frame, toolCommit(part, messageID, toolFinalPhase(part), undefined, input.directory))
+    setFrame(child, frame, toolCommit(part, messageID, toolFinalPhase(part), input.t, undefined, input.directory))
   }
 
   const rebuild = (child: ChildState, messages: SessionMessageInfo[]) => {
@@ -370,7 +371,7 @@ export function createSubagentTracker(input: SubagentTrackerInput): SubagentTrac
             setFrame(child, update.key, {
               kind: "reasoning",
               source: "reasoning",
-              text: `Thinking: ${item.text}`,
+              text: `${input.t("mini.scrollback.thinking")}: ${item.text}`,
               phase: "progress",
               messageID: message.id,
               partID: fragment.partID,
@@ -664,7 +665,7 @@ export function createSubagentTracker(input: SubagentTrackerInput): SubagentTrac
     }
     if (event.type === "session.step.started") {
       touch(child, event.created)
-      if (child.label === FALLBACK_LABEL && event.data.agent) child.label = Locale.titlecase(event.data.agent)
+      if (child.label === input.t("mini.subagent.fallback") && event.data.agent) child.label = Locale.titlecase(event.data.agent)
       if (child.status !== "running") child.status = "running"
       input.emit()
       return
@@ -720,7 +721,7 @@ export function createSubagentTracker(input: SubagentTrackerInput): SubagentTrac
       setFrame(child, update.key, {
         kind: "reasoning",
         source: "reasoning",
-        text: `Thinking: ${update.text}`,
+        text: `${input.t("mini.scrollback.thinking")}: ${update.text}`,
         phase: "progress",
         messageID: event.data.assistantMessageID,
         partID: update.partID,
@@ -737,7 +738,7 @@ export function createSubagentTracker(input: SubagentTrackerInput): SubagentTrac
       setFrame(child, update.key, {
         kind: "reasoning",
         source: "reasoning",
-        text: `Thinking: ${event.data.text}`,
+        text: `${input.t("mini.scrollback.thinking")}: ${event.data.text}`,
         phase: "progress",
         messageID: event.data.assistantMessageID,
         partID: update.partID,
@@ -1046,7 +1047,7 @@ export function createSubagentTracker(input: SubagentTrackerInput): SubagentTrac
           visited.add(session.id)
           const child = admitChild(session.id)
           if (!child) break
-          if (session.agent && child.label === FALLBACK_LABEL) child.label = Locale.titlecase(session.agent)
+          if (session.agent && child.label === input.t("mini.subagent.fallback")) child.label = Locale.titlecase(session.agent)
           if (!child.title) child.title = session.title
           touch(child, session.time.updated)
           queue.push(session.id)

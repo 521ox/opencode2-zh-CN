@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Effect, Fiber, Layer, Schema, Stream } from "effect"
+import { Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect"
 import path from "path"
 import { Money } from "@opencode-ai/schema/money"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
@@ -320,6 +320,198 @@ describe("SubagentTool", () => {
           })
           const fallbackChild = yield* sessions.get(outputSessionID(fallback.metadata))
           expect(fallbackChild).toMatchObject({ parentID: parent.id, model: parentModel })
+        }),
+      ),
+    ),
+  )
+
+  it.live("continues an existing direct child with the same agent", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
+          const sessions = yield* Session.Service
+          const parent = yield* sessions.create({ location, model: parentModel })
+          yield* withSubagent(parent.location)
+          const locations = yield* LocationServiceMap.Service
+          const registry = yield* Tool.Service.pipe(Effect.provide(locations.get(parent.location)))
+
+          const first = yield* executeTool(registry, {
+            sessionID: parent.id,
+            ...toolIdentity,
+            call: {
+              type: "tool-call",
+              id: "call-subagent-first",
+              name: SubagentTool.name,
+              input: { agent: "reviewer", description: "initial review", prompt: "review this" },
+            },
+          })
+          const childID = outputSessionID(first.metadata)
+          const continued = yield* executeTool(registry, {
+            sessionID: parent.id,
+            ...toolIdentity,
+            call: {
+              type: "tool-call",
+              id: "call-subagent-continue",
+              name: SubagentTool.name,
+              input: {
+                agent: "reviewer",
+                description: "continue review",
+                prompt: "now inspect the tests",
+                sessionID: childID,
+              },
+            },
+          })
+
+          expect(outputSessionID(continued.metadata)).toBe(childID)
+          expect((yield* sessions.list({ parentID: parent.id })).data).toHaveLength(1)
+          expect((yield* sessions.inbox(childID)).filter((message) => message.type === "user").at(-1)?.payload.text).toBe(
+            "now inspect the tests",
+          )
+        }),
+      ),
+    ),
+  )
+
+  it.live("rejects reuse across parents or agents", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
+          const sessions = yield* Session.Service
+          const parent = yield* sessions.create({ location, model: parentModel })
+          const otherParent = yield* sessions.create({ location, model: parentModel })
+          yield* withSubagent(parent.location)
+          const child = yield* sessions.create({ parentID: parent.id, agent: Agent.ID.make("reviewer") })
+          const locations = yield* LocationServiceMap.Service
+          const registry = yield* Tool.Service.pipe(Effect.provide(locations.get(parent.location)))
+
+          const foreign = yield* executeTool(registry, {
+            sessionID: otherParent.id,
+            ...toolIdentity,
+            call: {
+              type: "tool-call",
+              id: "call-subagent-foreign",
+              name: SubagentTool.name,
+              input: {
+                agent: "reviewer",
+                description: "foreign child",
+                prompt: "continue",
+                sessionID: child.id,
+              },
+            },
+          })
+          expect(foreign).toMatchObject({
+            status: "error",
+            error: { message: expect.stringContaining("is not a direct child") },
+          })
+
+          const wrongAgent = yield* executeTool(registry, {
+            sessionID: parent.id,
+            ...toolIdentity,
+            call: {
+              type: "tool-call",
+              id: "call-subagent-wrong-agent",
+              name: SubagentTool.name,
+              input: {
+                agent: "fallback",
+                description: "wrong agent",
+                prompt: "continue",
+                sessionID: child.id,
+              },
+            },
+          })
+          expect(wrongAgent).toMatchObject({
+            status: "error",
+            error: { message: expect.stringContaining("uses agent reviewer, not fallback") },
+          })
+
+          const missing = yield* executeTool(registry, {
+            sessionID: parent.id,
+            ...toolIdentity,
+            call: {
+              type: "tool-call",
+              id: "call-subagent-missing",
+              name: SubagentTool.name,
+              input: {
+                agent: "reviewer",
+                description: "missing child",
+                prompt: "continue",
+                sessionID: Session.ID.make("ses_missing_child"),
+              },
+            },
+          })
+          expect(missing).toMatchObject({
+            status: "error",
+            error: { message: expect.stringContaining("Subagent session not found") },
+          })
+        }),
+      ),
+    ),
+  )
+
+  it.live("adds context to a running direct child without creating another session", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
+          const sessions = yield* Session.Service
+          const jobs = yield* Job.Service
+          const parent = yield* sessions.create({ location, model: parentModel })
+          yield* withSubagent(parent.location)
+          const child = yield* sessions.create({ parentID: parent.id, agent: Agent.ID.make("reviewer") })
+          const release = yield* Deferred.make<void>()
+          yield* jobs.start({
+            id: child.id,
+            type: SubagentTool.name,
+            title: "running child",
+            run: Deferred.await(release).pipe(Effect.as("running child completed")),
+          })
+          const locations = yield* LocationServiceMap.Service
+          const registry = yield* Tool.Service.pipe(Effect.provide(locations.get(parent.location)))
+          const bus = yield* Bus.Service
+          const admitted = yield* bus.subscribe(SessionEvent.InboxEnqueued).pipe(
+            Stream.filter((event) => event.data.sessionID === child.id && event.data.item.type === "user"),
+            Stream.take(1),
+            Stream.runCollect,
+            Effect.forkScoped({ startImmediately: true }),
+          )
+
+          const executing = yield* executeTool(registry, {
+            sessionID: parent.id,
+            ...toolIdentity,
+            call: {
+              type: "tool-call",
+              id: "call-subagent-running-continue",
+              name: SubagentTool.name,
+              input: {
+                agent: "reviewer",
+                description: "extend running child",
+                prompt: "also inspect the migration",
+                sessionID: child.id,
+              },
+            },
+          }).pipe(Effect.forkChild({ startImmediately: true }))
+
+          const admission = Array.from(yield* Fiber.join(admitted))[0]
+          expect(admission?.data.item.type).toBe("user")
+          if (admission?.data.item.type !== "user") return yield* Effect.die("Expected user inbox item")
+          expect(admission.data.item.payload.text).toBe("also inspect the migration")
+          expect((yield* sessions.list({ parentID: parent.id })).data).toHaveLength(1)
+          yield* Deferred.succeed(release, undefined)
+
+          const settled = yield* Fiber.join(executing)
+          expect(outputSessionID(settled.metadata)).toBe(child.id)
+          expect(settled.content).toEqual([{ type: "text", text: "running child completed" }])
         }),
       ),
     ),

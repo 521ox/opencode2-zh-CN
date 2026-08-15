@@ -7,6 +7,8 @@ import * as AnthropicMessages from "@opencode-ai/ai/protocols/anthropic-messages
 // ast-grep-ignore: no-star-import
 import * as OpenAICompatibleChat from "@opencode-ai/ai/protocols/openai-compatible-chat"
 // ast-grep-ignore: no-star-import
+import * as OpenAICompatibleResponses from "@opencode-ai/ai/protocols/openai-compatible-responses"
+// ast-grep-ignore: no-star-import
 import * as OpenAIResponses from "@opencode-ai/ai/protocols/openai-responses"
 import { Auth, type AnyRoute } from "@opencode-ai/ai/route"
 import { Context, Effect, Layer, Schema } from "effect"
@@ -68,6 +70,8 @@ export type Error =
 export interface Resolved {
   /** Route-level model for provider requests; its id is the provider API model id, which may differ from the catalog id. */
   readonly model: LanguageModel
+  /** Exact catalog package specifier that supplied the runtime model. */
+  readonly providerPackage: string
   /** Selected catalog identity. Durable records and displays must use this, never the API model id. */
   readonly ref: Ref
   /** Catalog capabilities used to shape requests before provider lowering. */
@@ -118,7 +122,7 @@ const providerOptions = (model: Info): { readonly [key: string]: { readonly [key
   const { apiKey: _, baseURL: _baseURL, ...settings } = model.settings
   if (Object.keys(settings).length === 0) return undefined
   const packageName = Provider.packageName(model.package)
-  if (packageName === "@ai-sdk/openai") return { openai: settings }
+  if (packageName === "@ai-sdk/openai") return { openresponses: settings }
   if (packageName === "@ai-sdk/anthropic") return { anthropic: settings }
   if (packageName === "@ai-sdk/openai-compatible") return { openai: settings }
   return undefined
@@ -175,7 +179,10 @@ const resolveCatalogModel = Effect.fn("ModelResolver.resolveCatalogModel")(funct
 
   if (Provider.isAISDK(resolved.package) && packageName === "@ai-sdk/openai") {
     const runtime = yield* prepareProviderModel(resolved)
-    return withDefaults(runtime, OpenAIResponses.route)
+    return withDefaults(
+      runtime,
+      OpenAICompatibleResponses.route.with({ endpoint: { baseURL: OpenAIResponses.DEFAULT_BASE_URL } }),
+    )
       .with({ auth: key === undefined ? Auth.none : Auth.bearer(key) })
       .model({ id: runtime.modelID ?? runtime.id, compatibility: runtime.compatibility })
   }
@@ -354,6 +361,8 @@ export const layer = Layer.effect(
     const npm = yield* Npm.Service
     const aisdk = yield* AISDK.Service
     const load = Effect.fn("ModelResolver.resolveModel")(function* (selected: Info, variant?: VariantID) {
+      const providerPackage = selected.package
+      if (!providerPackage) return yield* unsupported(selected)
       const provider = yield* catalog.provider.get(selected.providerID)
       const connection = yield* integrations.connection.active(
         provider?.integrationID ?? Integration.ID.make(selected.providerID),
@@ -369,6 +378,7 @@ export const layer = Layer.effect(
       )
       return {
         model,
+        providerPackage,
         ref: Ref.make({
           id: selected.id,
           providerID: selected.providerID,

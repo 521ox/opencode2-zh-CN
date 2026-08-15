@@ -12,6 +12,7 @@ import { SessionMessage } from "@opencode-ai/schema/session-message"
 import type { LocationRef } from "@opencode-ai/client/promise"
 import type { Config } from "../config"
 import { newSessionLocation } from "../config/new-session-location"
+import { resolveLocale, translate, type Locale, type Translator } from "../i18n"
 import { loadRunAgents, loadRunCommands, loadRunReferences } from "./catalog.shared"
 import {
   resolveMiniSettings,
@@ -196,9 +197,14 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
   const start = input.host.startup.now()
   const log = input.host.diagnostics.trace
   const config = input.config
-  const configState: { current: MiniSettings } = { current: resolveMiniSettings() }
+  const configState: { current: MiniSettings; locale: Locale } = {
+    current: resolveMiniSettings(),
+    locale: resolveLocale(undefined),
+  }
+  const t: Translator = (key, params) => translate(configState.locale, key, params)
   const tuiConfigTask = resolveRunTuiConfig(input.tuiConfig, input.host.platform).then((tuiConfig) => {
     configState.current = resolveMiniSettings(tuiConfig)
+    configState.locale = resolveLocale(tuiConfig.locale)
     return tuiConfig
   })
   const ctx = await input.boot()
@@ -293,7 +299,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
       const model = state.model ?? state.defaultModel
       if (!model || state.variants.length === 0) {
         return {
-          status: "no variants available",
+          status: t("mini.footer.status.noVariants"),
         }
       }
 
@@ -301,7 +307,9 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
       state.activeVariant = cycleVariant(state.activeVariant, state.variants)
       void input.host.preferences.saveVariant(model, state.activeVariant)
       return {
-        status: state.activeVariant ? `variant ${state.activeVariant}` : "variant default",
+          status: state.activeVariant
+            ? t("mini.runtime.status.variant", { variant: state.activeVariant })
+            : t("mini.runtime.status.variantDefault"),
         modelLabel: formatModelLabel(model, state.activeVariant, state.providers),
         variant: state.activeVariant,
       }
@@ -338,7 +346,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
 
       return {
         modelLabel: formatModelLabel(model, state.activeVariant, state.providers),
-        status: `model ${model.modelID}`,
+        status: t("mini.runtime.status.model", { model: model.modelID }),
         variant: state.activeVariant,
         variants: state.variants,
       }
@@ -347,13 +355,13 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
       const model = state.model ?? state.defaultModel
       if (!model || state.variants.length === 0) {
         return {
-          status: "no variants available",
+          status: t("mini.footer.status.noVariants"),
         }
       }
 
       if (variant && !state.variants.includes(variant)) {
         return {
-          status: `variant ${variant} unavailable`,
+          status: t("mini.runtime.status.variantUnavailable", { variant }),
         }
       }
 
@@ -361,7 +369,9 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
       state.activeVariant = variant
       void input.host.preferences.saveVariant(model, state.activeVariant)
       return {
-        status: state.activeVariant ? `variant ${state.activeVariant}` : "variant default",
+          status: state.activeVariant
+            ? t("mini.runtime.status.variant", { variant: state.activeVariant })
+            : t("mini.runtime.status.variantDefault"),
         modelLabel: formatModelLabel(model, state.activeVariant, state.providers),
         variant: state.activeVariant,
         variants: state.variants,
@@ -746,7 +756,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
       if (footer.isClosed) return
       footer.append({
         kind: "system",
-        text: `startup ${Math.max(0, Math.round(input.host.startup.now() - start))}ms`,
+        text: t("mini.runtime.startup", { duration: Math.max(0, Math.round(input.host.startup.now() - start)) }),
         phase: "final",
         source: "system",
       })
@@ -759,6 +769,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
       footer,
       sessionID: state.sessionID,
       thinking: thinking(),
+      t,
     })
   }
 
@@ -795,6 +806,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
       }
 
       const handle = await mod.createSessionTransport({
+        t,
         sdk: state.sdk,
         reconnect: input.reconnect,
         onClient: updateClient,
@@ -896,6 +908,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
     const mod = await import("./runtime.queue")
     const createSession = input.createSession
     await mod.runPromptQueue({
+      t,
       footer,
       initialInput: input.initialInput,
       trace: log,
@@ -997,7 +1010,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
               })
               footer.append({
                 kind: "system",
-                text: `new session ${state.sessionID}`,
+                text: t("mini.runtime.session.new", { sessionID: state.sessionID }),
                 phase: "final",
                 source: "system",
               })
@@ -1007,7 +1020,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
                 type: "stream.patch",
                 patch: {
                   phase: "idle",
-                  status: "failed to start new session",
+                  status: t("mini.runtime.status.failedStartSession"),
                 },
               })
               const commit = {

@@ -8,18 +8,16 @@ import { useLocal } from "../context/local"
 import { useEditorContext } from "../context/editor"
 import { useData } from "../context/data"
 import { useLocation } from "../context/location"
+import { useI18n } from "../context/i18n"
 import { FormPrompt } from "./session/form"
 import { Slot } from "../plugin/render"
 import { useTerminalDimensions } from "@opentui/solid"
 
 let once = false
-const placeholder = {
-  normal: ["Fix a TODO in the codebase", "What is the tech stack of this project?", "Fix broken tests"],
-  shell: ["ls -la", "git status", "pwd"],
-}
 
 export function Home() {
   const route = useRouteData("home")
+  const i18n = useI18n()
   const promptRef = usePromptRef()
   const [ref, setRef] = createSignal<PromptRef | undefined>()
   const args = useArgs()
@@ -28,6 +26,14 @@ export function Home() {
   const data = useData()
   const location = useLocation()
   const dimensions = useTerminalDimensions()
+  const placeholder = {
+    normal: [
+      i18n.t("feature.home.placeholder.todo"),
+      i18n.t("feature.home.placeholder.techStack"),
+      i18n.t("feature.home.placeholder.brokenTests"),
+    ],
+    shell: ["ls -la", "git status", "pwd"],
+  }
   // Global MCP elicitations can arrive without a session route, so keep them reachable from Home.
   const currentLocation = () => route.location ?? data.location.default()
   const forms = createMemo(() => data.session.form.list("global", currentLocation()) ?? [])

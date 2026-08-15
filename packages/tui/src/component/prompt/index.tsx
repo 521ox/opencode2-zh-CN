@@ -10,6 +10,7 @@ import {
 } from "@opentui/core"
 import { createEffect, createMemo, onMount, createSignal, onCleanup, on, Show, Switch, Match, For } from "solid-js"
 import path from "path"
+import { useI18n } from "../../context/i18n"
 import { useLocal } from "../../context/local"
 import { useTheme, useThemes } from "../../context/theme"
 import { tint } from "../../theme/color"
@@ -114,11 +115,12 @@ export function PromptInterruptStatus(props: {
   subdued: ColorInput
   warning: ColorInput
 }) {
+  const { t } = useI18n()
   return (
     <text fg={props.armed ? props.warning : props.text} wrapMode="none" truncate flexShrink={1}>
       esc{" "}
       <span style={{ fg: props.armed ? props.warning : props.subdued }}>
-        {props.armed ? "again to interrupt" : "interrupt"}
+        {props.armed ? t("ui.prompt.interruptAgain") : t("ui.prompt.interrupt")}
       </span>
     </text>
   )
@@ -168,6 +170,7 @@ export function Prompt(props: PromptProps) {
   const [inputTarget, setInputTarget] = createSignal<TextareaRenderable | undefined>()
 
   const leader = Keymap.useLeaderActive()
+  const { t } = useI18n()
   const local = useLocal()
   const args = useArgs()
   const paths = useTuiPaths()
@@ -184,6 +187,13 @@ export function Prompt(props: PromptProps) {
   const dialog = useDialog()
   const toast = useToast()
   const status = createMemo(() => data.session.status(props.sessionID ?? ""))
+  const compacting = createMemo(() => {
+    const sessionID = props.sessionID
+    if (!sessionID) return
+    return data.session.message
+      .list(sessionID)
+      .findLast((message) => message.type === "compaction" && message.status === "running")
+  })
   const history = usePromptHistory()
   const stash = usePromptStash()
   const keymap = Keymap.use()
@@ -238,11 +248,11 @@ export function Prompt(props: PromptProps) {
     commands: [
       {
         id: "session.cd",
-        title: "Change working directory",
+        title: t("ui.prompt.changeDirectory"),
         slash: { name: "cd", arguments: true },
         run: async (input) => {
           if (!input?.trim()) {
-            toast.show({ message: "Directory is required", variant: "error" })
+            toast.show({ message: t("ui.prompt.directoryRequired"), variant: "error" })
             return
           }
           const sessionID = props.sessionID
@@ -257,7 +267,7 @@ export function Prompt(props: PromptProps) {
           )
           if (!sessionID) {
             const location = await client.api.location.get({ location: { directory } }).catch((error) => {
-              toast.show({ title: "Failed to change directory", message: errorMessage(error), variant: "error" })
+              toast.show({ title: t("ui.prompt.changeDirectoryFailed"), message: errorMessage(error), variant: "error" })
               return undefined
             })
             if (!location) return
@@ -270,7 +280,7 @@ export function Prompt(props: PromptProps) {
             (error) => error,
           )
           if (error) {
-            toast.show({ title: "Failed to change directory", message: errorMessage(error), variant: "error" })
+            toast.show({ title: t("ui.prompt.changeDirectoryFailed"), message: errorMessage(error), variant: "error" })
             return
           }
           if (sourceProjectID) directoryRecents.touch(sourceProjectID, directory)
@@ -286,7 +296,7 @@ export function Prompt(props: PromptProps) {
   function promptModelWarning() {
     toast.show({
       variant: "warning",
-      message: "Connect an integration to send prompts",
+      message: t("ui.prompt.connectIntegration"),
       duration: 3000,
     })
     if (!connected()) {
@@ -304,6 +314,26 @@ export function Prompt(props: PromptProps) {
   const pasteStyleId = syntax().getStyleId("extmark.paste")!
   let promptPartTypeId = 0
   const event = useEvent()
+
+  onCleanup(
+    event.on("session.compaction.ended", (evt) => {
+      if (evt.data.sessionID !== props.sessionID) return
+      toast.show({ message: t("session.compaction.completed"), variant: "success" })
+    }),
+  )
+  onCleanup(
+    event.on("session.compaction.failed", (evt) => {
+      if (evt.data.sessionID !== props.sessionID) return
+      if (evt.data.error.type === "aborted") {
+        toast.show({ message: t("session.compaction.cancelledToast"), variant: "warning" })
+        return
+      }
+      toast.show({
+        message: t("session.compaction.failed", { message: evt.data.error.message }),
+        variant: "error",
+      })
+    }),
+  )
 
   event.on("tui.prompt.append", (evt, { workspace }) => {
     if (workspace !== (currentLocation.current?.workspaceID ?? data.location.default().workspaceID)) return
@@ -399,9 +429,9 @@ export function Prompt(props: PromptProps) {
   const promptCommands = createMemo(() =>
     [
       {
-        title: "Clear prompt",
+        title: t("ui.prompt.clear"),
         name: "prompt.clear",
-        category: "Prompt",
+        category: t("ui.group.prompt"),
         palette: undefined,
         run: () => {
           clearPrompt()
@@ -409,9 +439,9 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
-        title: "Submit prompt",
+        title: t("ui.prompt.submit"),
         name: "prompt.submit",
-        category: "Prompt",
+        category: t("ui.group.prompt"),
         palette: undefined,
         run: async (_input: string | undefined, event?: KeyEvent) => {
           event?.preventDefault()
@@ -424,9 +454,9 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
-        title: "Queue prompt",
+        title: t("ui.prompt.queue"),
         name: "prompt.queue",
-        category: "Prompt",
+        category: t("ui.group.prompt"),
         palette: undefined,
         run: async (_input: string | undefined, event?: KeyEvent) => {
           event?.preventDefault()
@@ -438,9 +468,9 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
-        title: "Remove editor context",
+        title: t("ui.prompt.removeEditorContext"),
         name: "prompt.editor_context.clear",
-        category: "Prompt",
+        category: t("ui.group.prompt"),
         enabled: Boolean(editorContext()),
         run: () => {
           dismissEditorContext()
@@ -448,9 +478,9 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
-        title: "Paste",
+        title: t("ui.prompt.paste"),
         name: "prompt.paste",
-        category: "Prompt",
+        category: t("ui.group.prompt"),
         palette: undefined,
         run: (_input: string | undefined, event?: KeyEvent) => {
           event?.preventDefault()
@@ -472,16 +502,16 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
-        title: "View image attachments",
+        title: t("ui.prompt.viewImageAttachments"),
         name: "prompt.images.view",
-        category: "Prompt",
+        category: t("ui.group.prompt"),
         enabled: imageAttachments().length > 0,
         run: () => openImagePreview(0),
       },
       {
-        title: "Interrupt session",
+        title: t("ui.prompt.interruptSession"),
         name: "session.interrupt",
-        category: "Session",
+        category: t("ui.group.session"),
         palette: undefined,
         enabled: status() === "running",
         run: () => {
@@ -511,9 +541,9 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
-        title: "Background blocking tools",
+        title: t("ui.prompt.backgroundTools"),
         name: "session.background",
-        category: "Session",
+        category: t("ui.group.session"),
         palette: undefined,
         enabled: status() === "running",
         run: () => {
@@ -528,8 +558,8 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
-        title: "Open editor",
-        category: "Session",
+        title: t("ui.prompt.openEditor"),
+        category: t("ui.group.session"),
         name: "prompt.editor",
         slash: { name: "editor" },
         run: async () => {
@@ -559,9 +589,9 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
-        title: "Skills",
+        title: t("ui.prompt.skills"),
         name: "prompt.skills",
-        category: "Prompt",
+        category: t("ui.group.prompt"),
         slash: { name: "skills" },
         run: () => {
           dialog.replace(() => (
@@ -597,10 +627,10 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
-        title: "Move session",
-        desc: "Move to another project dir",
+        title: t("ui.prompt.moveSession"),
+        desc: t("ui.prompt.moveDescription"),
         name: "session.move",
-        category: "Session",
+        category: t("ui.group.session"),
         slash: { name: "move" },
         run: () => {
           move.open()
@@ -842,9 +872,9 @@ export function Prompt(props: PromptProps) {
   const stashCommands = createMemo(() =>
     [
       {
-        title: "Stash prompt",
+        title: t("ui.prompt.stash"),
         name: "prompt.stash",
-        category: "Prompt",
+        category: t("ui.group.prompt"),
         enabled: !!store.prompt.text,
         run: () => {
           if (!store.prompt.text) return
@@ -857,9 +887,9 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
-        title: "Stash pop",
+        title: t("ui.prompt.stashPop"),
         name: "prompt.stash.pop",
-        category: "Prompt",
+        category: t("ui.group.prompt"),
         enabled: stash.list().length > 0,
         run: () => {
           const entry = stash.pop()
@@ -873,9 +903,9 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
-        title: "Stash list",
+        title: t("ui.prompt.stashList"),
         name: "prompt.stash.list",
-        category: "Prompt",
+        category: t("ui.group.prompt"),
         enabled: stash.list().length > 0,
         run: () => {
           dialog.replace(() => (
@@ -939,8 +969,8 @@ export function Prompt(props: PromptProps) {
       commands: [
         {
           bind: "!",
-          title: "Shell mode",
-          group: "Prompt",
+          title: t("ui.prompt.shellMode"),
+          group: t("ui.group.prompt"),
           run: () => {
             setStore("placeholder", randomIndex(shell().length))
             setStore("mode", "shell")
@@ -954,7 +984,7 @@ export function Prompt(props: PromptProps) {
     return {
       target: inputTarget,
       enabled: inputTarget() !== undefined && store.mode === "shell",
-      commands: [{ bind: "escape", title: "Exit shell mode", group: "Prompt", run: () => setStore("mode", "normal") }],
+      commands: [{ bind: "escape", title: t("ui.prompt.exitShell"), group: t("ui.group.prompt"), run: () => setStore("mode", "normal") }],
     }
   })
 
@@ -966,7 +996,7 @@ export function Prompt(props: PromptProps) {
         return inputTarget() !== undefined && store.mode === "shell" && input?.visualCursor.offset === 0
       })(),
       commands: [
-        { bind: "backspace", title: "Exit shell mode", group: "Prompt", run: () => setStore("mode", "normal") },
+        { bind: "backspace", title: t("ui.prompt.exitShell"), group: t("ui.group.prompt"), run: () => setStore("mode", "normal") },
       ],
     }
   })
@@ -982,8 +1012,8 @@ export function Prompt(props: PromptProps) {
       commands: [
         {
           id: "prompt.history.previous",
-          title: "Previous prompt history",
-          group: "Prompt",
+          title: t("ui.prompt.previousHistory"),
+          group: t("ui.group.prompt"),
           run() {
             if (input.cursorOffset !== 0) {
               if (input.scrollY + input.visualCursor.visualRow === 0) {
@@ -1018,8 +1048,8 @@ export function Prompt(props: PromptProps) {
       commands: [
         {
           id: "prompt.history.next",
-          title: "Next prompt history",
-          group: "Prompt",
+          title: t("ui.prompt.nextHistory"),
+          group: t("ui.group.prompt"),
           run() {
             if (input.cursorOffset !== input.plainText.length) {
               if (
@@ -1080,7 +1110,7 @@ export function Prompt(props: PromptProps) {
       delivery === "queue" &&
       (store.mode === "shell" || trimmed === "exit" || trimmed === "quit" || trimmed === ":q")
     ) {
-      toast.show({ message: "This prompt cannot be queued", variant: "warning" })
+      toast.show({ message: t("ui.prompt.cannotQueue"), variant: "warning" })
       return false
     }
     if (trimmed === "exit" || trimmed === "quit" || trimmed === ":q") {
@@ -1090,7 +1120,7 @@ export function Prompt(props: PromptProps) {
     const slash = argumentSlash(store.prompt.text, keymapCommands())
     if (slash) {
       if (delivery === "queue") {
-        toast.show({ message: "This prompt cannot be queued", variant: "warning" })
+        toast.show({ message: t("ui.prompt.cannotQueue"), variant: "warning" })
         return false
       }
       clearPrompt()
@@ -1118,13 +1148,13 @@ export function Prompt(props: PromptProps) {
       slashHead !== undefined &&
       (data.location.command.list(currentLocation.ref) ?? []).some((command) => command.name === slashHead.name)
     if (delivery === "queue" && isSkill) {
-      toast.show({ message: "Skills cannot be queued", variant: "warning" })
+      toast.show({ message: t("ui.prompt.skillsCannotQueue"), variant: "warning" })
       return false
     }
     const editorSelection = editorContext()
     const pendingEditorSelection = editorSelection && editor.labelState() === "pending" ? editorSelection : undefined
     if (delivery === "queue" && pendingEditorSelection) {
-      toast.show({ message: "Editor context cannot be queued", variant: "warning" })
+      toast.show({ message: t("ui.prompt.editorContextCannotQueue"), variant: "warning" })
       return false
     }
     const agent = local.agent.current()
@@ -1137,8 +1167,8 @@ export function Prompt(props: PromptProps) {
     const usesModel = !props.sessionID || (store.mode !== "shell" && !isSkill)
     if (usesModel && !local.model.available(selection)) {
       toast.show({
-        title: "Model unavailable",
-        message: `${selection.providerID}/${selection.modelID} is not available in this session's location`,
+        title: t("ui.prompt.modelUnavailable"),
+        message: t("ui.prompt.modelUnavailableMessage", { model: `${selection.providerID}/${selection.modelID}` }),
         variant: "warning",
       })
       return false
@@ -1172,7 +1202,7 @@ export function Prompt(props: PromptProps) {
       if (!created) {
         if (finishMoveProgress) move.finishSubmit()
         toast.show({
-          message: "Creating a session failed. Open console for more details.",
+          message: t("ui.prompt.creatingSessionFailed"),
           variant: "error",
         })
 
@@ -1211,7 +1241,7 @@ export function Prompt(props: PromptProps) {
         })
         .catch((error) => {
           cancelCommit()
-          toast.show({ title: "Failed to run command", message: errorMessage(error), variant: "error" })
+          toast.show({ title: t("ui.prompt.failedRunCommand"), message: errorMessage(error), variant: "error" })
         })
     } else if (isSkill) {
       move.startSubmit()
@@ -1246,7 +1276,7 @@ export function Prompt(props: PromptProps) {
           (error) => error,
         )
         if (error) {
-          toast.show({ title: "Failed to commit revert", message: errorMessage(error), variant: "error" })
+          toast.show({ title: t("ui.prompt.failedCommitRevert"), message: errorMessage(error), variant: "error" })
           return false
         }
       }
@@ -1263,7 +1293,7 @@ export function Prompt(props: PromptProps) {
             (error) => error,
           )
         if (error) {
-          toast.show({ title: "Failed to send editor context", message: errorMessage(error), variant: "error" })
+          toast.show({ title: t("ui.prompt.failedSendEditorContext"), message: errorMessage(error), variant: "error" })
           return false
         }
       }
@@ -1281,7 +1311,7 @@ export function Prompt(props: PromptProps) {
           (error) => error,
         )
       if (error) {
-        toast.show({ title: "Failed to send prompt", message: errorMessage(error), variant: "error" })
+          toast.show({ title: t("ui.prompt.failedSendPrompt"), message: errorMessage(error), variant: "error" })
         return false
       }
       if (pendingEditorSelection) editor.markSelectionSent()
@@ -1394,7 +1424,7 @@ export function Prompt(props: PromptProps) {
         )
       })
       if (extmark && expandPastedText(extmark.id)) return
-      pasteText(pastedContent, `[Pasted ~${lineCount} lines]`)
+      pasteText(pastedContent, t("ui.prompt.pastedLines", { count: lineCount }))
       return
     }
 
@@ -1410,7 +1440,7 @@ export function Prompt(props: PromptProps) {
   function pasteLocalAttachment(filepath: string, attachment: LocalAttachment) {
     const filename = path.basename(filepath)
     if (attachment.type === "text") {
-      pasteText(attachment.content, `[SVG: ${filename || "image"}]`)
+      pasteText(attachment.content, t("ui.prompt.pastedSvg", { filename: filename || t("ui.prompt.image") }))
       return
     }
     pasteAttachment({
@@ -1481,7 +1511,7 @@ export function Prompt(props: PromptProps) {
     return local.agent.color(agent.id)
   })
   const agentLabel = createMemo(() => {
-    if (store.mode === "shell") return "Shell"
+    if (store.mode === "shell") return t("ui.prompt.shell")
     const agent = local.agent.current()
     return agent ? Locale.titlecase(agent.id) : undefined
   })
@@ -1507,10 +1537,10 @@ export function Prompt(props: PromptProps) {
     const value = (() => {
       if (store.mode === "shell") {
         if (!shell().length) return undefined
-        return `Run a command... "${shell()[store.placeholder % shell().length]}"`
+        return t("ui.prompt.placeholder.shell", { example: shell()[store.placeholder % shell().length] ?? "" })
       }
       if (!list().length) return undefined
-      return `Ask anything... "${list()[store.placeholder % list().length]}"`
+      return t("ui.prompt.placeholder.ask", { example: list()[store.placeholder % list().length] ?? "" })
     })()
     if (!value) return undefined
     const width = dimensions().width < 44 ? dimensions().width - 5 : Math.min(75, dimensions().width - 4) - 5
@@ -1606,7 +1636,7 @@ export function Prompt(props: PromptProps) {
                           when={!failed()}
                           fallback={
                             <box width="100%" height="100%" alignItems="center" justifyContent="center">
-                              <text fg={theme.text.subdued}>No preview</text>
+                              <text fg={theme.text.subdued}>{t("ui.prompt.noPreview")}</text>
                             </box>
                           }
                         >
@@ -1639,7 +1669,7 @@ export function Prompt(props: PromptProps) {
                     }}
                   >
                     <text fg={theme.text.subdued} wrapMode="none" truncate>
-                      +{imageAttachments().length - visibleImageAttachments().length} more
+                      {t("ui.prompt.imageMore", { count: imageAttachments().length - visibleImageAttachments().length })}
                     </text>
                   </box>
                 </Show>
@@ -1737,7 +1767,7 @@ export function Prompt(props: PromptProps) {
                       <Show
                         when={store.mode === "normal" && local.permission.mode === "auto" && dimensions().width >= 44}
                       >
-                        <text fg={fadeColor(theme.text.subdued, agentMetaAlpha())}>auto</text>
+                        <text fg={fadeColor(theme.text.subdued, agentMetaAlpha())}>{t("ui.prompt.agentAuto")}</text>
                       </Show>
                       <Show when={store.mode === "normal" && dimensions().width >= 28}>
                         <box flexDirection="row" gap={1} flexGrow={1} flexShrink={1} minWidth={0}>
@@ -1814,6 +1844,24 @@ export function Prompt(props: PromptProps) {
             <Slot path="prompt.footer.status" input={footerInput()}>
               <box flexGrow={1} flexShrink={1} minWidth={0}>
                 <Switch>
+                  <Match when={compacting()}>
+                    <box flexDirection="row" gap={1} flexGrow={1} justifyContent="flex-start">
+                      <box marginLeft={1}>
+                        <Show when={config.animations ?? true} fallback={<text fg={theme.text.subdued}>[⋯]</text>}>
+                          <spinner color={spinnerDef().color} frames={spinnerDef().frames} interval={40} />
+                        </Show>
+                      </box>
+                      <text fg={theme.text.subdued} wrapMode="none" truncate>
+                        {t("session.compaction.running")}
+                      </text>
+                      <PromptInterruptStatus
+                        armed={store.interrupt > 0}
+                        text={theme.text.default}
+                        subdued={theme.text.subdued}
+                        warning={theme.text.feedback.warning.default}
+                      />
+                    </box>
+                  </Match>
                   <Match when={status() === "running"}>
                     <box flexDirection="row" gap={1} flexGrow={1} justifyContent="flex-start">
                       <box marginLeft={1}>
@@ -1842,7 +1890,7 @@ export function Prompt(props: PromptProps) {
                   <Match when={move.pendingNew()}>
                     <box paddingLeft={3} height={1} minHeight={0} flexShrink={1}>
                       <text fg={theme.hue.accent[500]} wrapMode="none" truncate>
-                        (new worktree)
+                        {t("ui.prompt.newWorktree")}
                       </text>
                     </box>
                   </Match>
@@ -1889,13 +1937,13 @@ export function Prompt(props: PromptProps) {
             return {
               display: value,
               value,
-              description: "recent",
+              description: t("ui.prompt.recent"),
               isDirectory: true,
               path: value,
               absolute: item.directory,
               destructive: {
                 id: item.directory,
-                confirm: "Press ctrl+d to confirm",
+                confirm: t("ui.prompt.removeRecentConfirm"),
                 run: () => directoryRecents.remove(projectID, item.directory),
               },
             }

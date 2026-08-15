@@ -22,6 +22,7 @@ import type {
   SessionMessageAssistantTool,
 } from "@opencode-ai/client/promise"
 import type { Config } from "../config"
+import type { Locale } from "../i18n"
 import type { CliRenderer } from "@opentui/core"
 import type { SessionInbox } from "@opencode-ai/schema/session-inbox"
 
@@ -191,6 +192,7 @@ export type TurnSummary = {
 }
 
 export type ScrollbackOptions = {
+  locale?: Locale
   suppressBackgrounds?: boolean
   shellOutput?: boolean
   mono?: boolean
@@ -392,7 +394,7 @@ export type FormCancel = {
   location?: LocationRef
 }
 
-export type RunTuiConfig = Pick<Config.Resolved, "keybinds" | "leader" | "theme" | "mini" | "session">
+export type RunTuiConfig = Pick<Config.Resolved, "keybinds" | "leader" | "locale" | "theme" | "mini" | "session">
 
 export type MiniSettings = {
   thinking: "show" | "hide"
@@ -424,7 +426,6 @@ export type StreamCommit = {
   text: string
   phase: StreamPhase
   source: StreamSource
-  compaction?: true
   summary?: TurnSummary
   messageID?: string
   partID?: string

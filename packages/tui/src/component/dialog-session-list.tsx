@@ -22,6 +22,7 @@ import { useStorage } from "../context/storage"
 import { useConfig } from "../config"
 import { withTimestampedFallback } from "@opencode-ai/util/session-title-fallback"
 import { projectName } from "../util/project"
+import { useI18n } from "../context/i18n"
 
 export function DialogSessionList() {
   const dialog = useDialog()
@@ -37,8 +38,14 @@ export function DialogSessionList() {
   const toast = useToast()
   const [filter, setFilter] = createSignal("")
   const shortcuts = Keymap.useShortcuts()
+  const { t } = useI18n()
   const [search, setSearch] = createDebouncedSignal("", 150)
   const [toDelete, setToDelete] = createSignal<string>()
+  const quickSwitchRange = (first: string, last: string) => {
+    const prefix = first.slice(0, -1)
+    if (first.endsWith("1") && last === `${prefix}9`) return `${prefix}1-9`
+    return t("dialog.sessionList.range", { first, last })
+  }
   const [prefs, updatePrefs] = useStorage().store("session-list", {
     initial: { allProjects: config.tabs?.scope !== "cwd" },
   })
@@ -100,14 +107,14 @@ export function DialogSessionList() {
   const searchState = createMemo(() => {
     const query = filter().trim()
     if (query !== search().trim() || searchResults.loading)
-      return { message: query ? "Searching sessions…" : "Loading sessions…", error: false }
+      return { message: query ? t("dialog.sessionList.searching") : t("dialog.sessionList.loading"), error: false }
     const result = searchResults()
     if (result?.query === query && result.error)
       return {
-        message: query ? "Could not search sessions. Change the search to try again." : "Could not load sessions.",
+        message: query ? t("dialog.sessionList.searchFailed") : t("dialog.sessionList.loadFailed"),
         error: true,
       }
-    return { message: query ? "No sessions found" : "No sessions available", error: false }
+    return { message: query ? t("dialog.sessionList.noMatch") : t("dialog.sessionList.empty"), error: false }
   })
 
   const quickSwitchHint = createMemo(() => {
@@ -119,7 +126,7 @@ export function DialogSessionList() {
   })
   const quickSwitchFooterHints = createMemo(() => {
     const hint = quickSwitchHint()
-    return hint && local.session.slots().length > 0 ? [{ title: "switch", label: hint }] : []
+    return hint && local.session.slots().length > 0 ? [{ title: t("dialog.sessionList.switch"), label: hint }] : []
   })
   const currentProjectName = createMemo(() => {
     const current = data.location.info()
@@ -152,7 +159,7 @@ export function DialogSessionList() {
       const deleting = toDelete() === session.id
       return {
         title: deleting
-          ? `Press ${shortcuts.get("session.delete")} again to confirm`
+          ? t("dialog.sessionList.confirmDelete", { shortcut: shortcuts.get("session.delete") ?? "" })
           : withTimestampedFallback(session),
         value: session.id,
         category,
@@ -173,24 +180,24 @@ export function DialogSessionList() {
       .filter((session) => !session.parentID && !pinnedSet.has(session.id))
       .map((session) => {
         const date = new Date(session.time.updated).toDateString()
-        return option(session, date === today ? "Today" : date)
+        return option(session, date === today ? t("dialog.sessionList.today") : date)
       })
 
-    return [...pinned.map((sessionID) => option(sessionMap.get(sessionID)!, "Pinned")), ...remaining]
+    return [...pinned.map((sessionID) => option(sessionMap.get(sessionID)!, t("dialog.sessionList.pinned"))), ...remaining]
   })
 
   onMount(() => dialog.setSize("large"))
 
   return (
     <DialogSelect
-      title="Sessions"
+      title={t("dialog.sessionList.title")}
       titleView={
         <box flexDirection="row">
           <text fg={theme.text.default} attributes={TextAttributes.BOLD}>
-            Sessions
+            {t("dialog.sessionList.title")}
           </text>
           <Show when={!allProjects() && currentProjectName()}>
-            <text fg={theme.text.subdued}> for {currentProjectName()}</text>
+            <text fg={theme.text.subdued}>{t("dialog.sessionList.titleForProject", { project: currentProjectName() })}</text>
           </Show>
         </box>
       }
@@ -204,8 +211,8 @@ export function DialogSessionList() {
       bindings={[
         {
           bind: "ctrl+a",
-          title: allProjects() ? "Show current directory sessions" : "Show all project sessions",
-          group: "Dialog",
+          title: allProjects() ? t("dialog.sessionList.showCurrentDirectory") : t("dialog.sessionList.showAllProjects"),
+          group: t("dialog.group"),
           run: () => {
             void updatePrefs((draft) => {
               draft.allProjects = !draft.allProjects
@@ -235,13 +242,13 @@ export function DialogSessionList() {
       actions={[
         {
           command: "session.pin.toggle",
-          title: "pin/unpin",
+          title: t("dialog.sessionList.pin"),
           hidden: sessionTabs.enabled(),
           onTrigger: (option) => local.session.togglePin(option.value),
         },
         {
           command: "session.delete",
-          title: "delete",
+          title: t("dialog.sessionList.delete"),
           onTrigger: (option: { value: string }) => {
             if (toDelete() !== option.value) {
               setToDelete(option.value)
@@ -259,7 +266,7 @@ export function DialogSessionList() {
               .catch((error) => {
                 setToDelete(undefined)
                 toast.show({
-                  message: `Failed to delete session: ${errorMessage(error)}`,
+                  message: t("dialog.sessionList.deleteFailed", { error: errorMessage(error) }),
                   variant: "error",
                   duration: 5000,
                 })
@@ -268,21 +275,19 @@ export function DialogSessionList() {
         },
         {
           command: "session.rename",
-          title: "rename",
+          title: t("dialog.sessionList.rename"),
           onTrigger: (option: { value: string; title: string }) =>
             DialogSessionRename.show(dialog, option.value, option.title),
         },
       ]}
       footerHints={[
         ...quickSwitchFooterHints(),
-        { title: allProjects() ? "current directory" : "all projects", label: "ctrl+a", side: "right" },
+        {
+          title: allProjects() ? t("dialog.sessionList.currentDirectory") : t("dialog.sessionList.allProjects"),
+          label: "ctrl+a",
+          side: "right",
+        },
       ]}
     />
   )
-}
-
-function quickSwitchRange(first: string, last: string) {
-  const prefix = first.slice(0, -1)
-  if (first.endsWith("1") && last === `${prefix}9`) return `${prefix}1-9`
-  return `${first} through ${last}`
 }

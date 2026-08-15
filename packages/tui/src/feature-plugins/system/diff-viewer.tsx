@@ -12,7 +12,9 @@ import { Panel, PanelGroup, Separator } from "./diff-viewer-ui"
 import { DialogSelect } from "../../ui/dialog-select"
 import { getScrollAcceleration } from "../../util/scroll"
 import { useConfig } from "../../config"
+import { useI18n } from "../../context/i18n"
 import { useThemes } from "../../context/theme"
+import type { Translator } from "../../i18n"
 import { PatchDiff, type PatchDiffRef } from "../../component/patch-diff"
 import {
   allExpandedFileTreeDirectories,
@@ -69,12 +71,13 @@ function storedView(value: unknown): DiffView | undefined {
   if (value === "split" || value === "unified") return value
 }
 
-function diffSourceLabel(mode: DiffMode) {
-  if (mode === "branch") return "main branch"
-  return "working tree"
+function diffSourceLabel(mode: DiffMode, t: Translator) {
+  if (mode === "branch") return t("feature.diff.source.branch")
+  return t("feature.diff.source.working")
 }
 
 function DiffViewer(props: { context: Plugin.Context }) {
+  const i18n = useI18n()
   const dimensions = useTerminalDimensions()
   const config = useConfig()
   const dialog = props.context.ui.dialog
@@ -419,14 +422,14 @@ function DiffViewer(props: { context: Plugin.Context }) {
   const commands: KeymapCommand[] = [
     {
       id: "diff.close",
-      title: "Close diff viewer",
-      group: "VCS",
+      title: i18n.t("feature.diff.command.close"),
+      group: i18n.t("feature.diff.group"),
       run: close,
     },
     {
       id: "diff.down",
-      title: "Move diff viewer down",
-      group: "VCS",
+      title: i18n.t("feature.diff.command.down"),
+      group: i18n.t("feature.diff.group"),
       run: focusRunner({
         files() {
           moveFileSelection(1)
@@ -439,8 +442,8 @@ function DiffViewer(props: { context: Plugin.Context }) {
     },
     {
       id: "diff.up",
-      title: "Move diff viewer up",
-      group: "VCS",
+      title: i18n.t("feature.diff.command.up"),
+      group: i18n.t("feature.diff.group"),
       run: focusRunner({
         files() {
           moveFileSelection(-1)
@@ -453,8 +456,8 @@ function DiffViewer(props: { context: Plugin.Context }) {
     },
     {
       id: "diff.page.down",
-      title: "Page diff viewer down",
-      group: "VCS",
+      title: i18n.t("feature.diff.command.pageDown"),
+      group: i18n.t("feature.diff.group"),
       run: focusRunner({
         files() {
           moveFileSelection(8)
@@ -467,8 +470,8 @@ function DiffViewer(props: { context: Plugin.Context }) {
     },
     {
       id: "diff.page.up",
-      title: "Page diff viewer up",
-      group: "VCS",
+      title: i18n.t("feature.diff.command.pageUp"),
+      group: i18n.t("feature.diff.group"),
       run: focusRunner({
         files() {
           moveFileSelection(-8)
@@ -481,8 +484,8 @@ function DiffViewer(props: { context: Plugin.Context }) {
     },
     {
       id: "diff.toggle",
-      title: "Toggle diff viewer item",
-      group: "VCS",
+      title: i18n.t("feature.diff.command.toggle"),
+      group: i18n.t("feature.diff.group"),
       run: focusRunner({
         files() {
           toggleSelectedFileTreeRow()
@@ -492,8 +495,8 @@ function DiffViewer(props: { context: Plugin.Context }) {
     },
     {
       id: "diff.expand",
-      title: "Expand diff viewer item",
-      group: "VCS",
+      title: i18n.t("feature.diff.command.expand"),
+      group: i18n.t("feature.diff.group"),
       run: focusRunner({
         files() {
           const highlighted = highlightedFileNode()
@@ -510,8 +513,8 @@ function DiffViewer(props: { context: Plugin.Context }) {
     },
     {
       id: "diff.expand_all",
-      title: "Expand all diff viewer folders",
-      group: "VCS",
+      title: i18n.t("feature.diff.command.expandAll"),
+      group: i18n.t("feature.diff.group"),
       run: focusRunner({
         files() {
           setExpandedFileNodes(allExpandedFileTreeDirectories(fileTree()))
@@ -521,8 +524,8 @@ function DiffViewer(props: { context: Plugin.Context }) {
     },
     {
       id: "diff.collapse",
-      title: "Collapse diff viewer item",
-      group: "VCS",
+      title: i18n.t("feature.diff.command.collapse"),
+      group: i18n.t("feature.diff.group"),
       run: focusRunner({
         files() {
           const highlighted = highlightedFileNode()
@@ -540,48 +543,48 @@ function DiffViewer(props: { context: Plugin.Context }) {
     },
     {
       id: "diff.next_hunk",
-      title: "Jump to next diff hunk",
-      group: "VCS",
+      title: i18n.t("feature.diff.command.nextHunk"),
+      group: i18n.t("feature.diff.group"),
       run() {
         jumpRelativeHunk(1)
       },
     },
     {
       id: "diff.previous_hunk",
-      title: "Jump to previous diff hunk",
-      group: "VCS",
+      title: i18n.t("feature.diff.command.previousHunk"),
+      group: i18n.t("feature.diff.group"),
       run() {
         jumpRelativeHunk(-1)
       },
     },
     {
       id: "diff.next_file",
-      title: "Jump to next diff file",
-      group: "VCS",
+      title: i18n.t("feature.diff.command.nextFile"),
+      group: i18n.t("feature.diff.group"),
       run() {
         jumpRelativePatchFile(1)
       },
     },
     {
       id: "diff.previous_file",
-      title: "Jump to previous diff file",
-      group: "VCS",
+      title: i18n.t("feature.diff.command.previousFile"),
+      group: i18n.t("feature.diff.group"),
       run() {
         jumpRelativePatchFile(-1)
       },
     },
     {
       id: "diff.mark_reviewed",
-      title: "Toggle selected diff file reviewed",
-      group: "VCS",
+      title: i18n.t("feature.diff.command.markReviewed"),
+      group: i18n.t("feature.diff.group"),
       run() {
         toggleSelectedFileReviewed()
       },
     },
     {
       id: "diff.switch_focus",
-      title: "Switch diff viewer focus",
-      group: "VCS",
+      title: i18n.t("feature.diff.command.switchFocus"),
+      group: i18n.t("feature.diff.group"),
       run() {
         if (!showFileTree()) return
         setFocus((current) => {
@@ -593,8 +596,8 @@ function DiffViewer(props: { context: Plugin.Context }) {
     },
     {
       id: "diff.toggle_file_tree",
-      title: "Toggle diff viewer file tree",
-      group: "VCS",
+      title: i18n.t("feature.diff.command.toggleFileTree"),
+      group: i18n.t("feature.diff.group"),
       run() {
         const next = !fileTreeEnabled()
         if (!next) setFocus("patches")
@@ -608,8 +611,8 @@ function DiffViewer(props: { context: Plugin.Context }) {
     },
     {
       id: "diff.single_patch",
-      title: "Toggle single patch view",
-      group: "VCS",
+      title: i18n.t("feature.diff.command.singlePatch"),
+      group: i18n.t("feature.diff.group"),
       run() {
         setSelectedHunk(undefined)
         if (!singlePatch()) {
@@ -643,16 +646,16 @@ function DiffViewer(props: { context: Plugin.Context }) {
     },
     {
       id: "diff.switch_source",
-      title: "Switch diff viewer source",
-      group: "VCS",
+      title: i18n.t("feature.diff.command.switchSource"),
+      group: i18n.t("feature.diff.group"),
       run() {
         openSwitchDiffDialog()
       },
     },
     {
       id: "diff.toggle_view",
-      title: "Toggle diff viewer split or unified view",
-      group: "VCS",
+      title: i18n.t("feature.diff.command.toggleView"),
+      group: i18n.t("feature.diff.group"),
       run() {
         if (!splitAvailable()) return
         setSelectedHunk(undefined)
@@ -667,8 +670,8 @@ function DiffViewer(props: { context: Plugin.Context }) {
     },
     {
       id: "diff.help",
-      title: "Show more diff viewer shortcuts",
-      group: "VCS",
+      title: i18n.t("feature.diff.command.help"),
+      group: i18n.t("feature.diff.group"),
       run() {
         openHelpDialog()
       },
@@ -678,14 +681,14 @@ function DiffViewer(props: { context: Plugin.Context }) {
   const switchDiffOptions = createMemo(() => {
     return [
       {
-        title: "Working tree",
+        title: i18n.t("feature.diff.sourceOption.working.title"),
         value: "working" as const,
-        description: "Show current git changes",
+        description: i18n.t("feature.diff.sourceOption.working.description"),
       },
       {
-        title: "Main branch",
+        title: i18n.t("feature.diff.sourceOption.branch.title"),
         value: "branch" as const,
-        description: "Show changes compared to main branch",
+        description: i18n.t("feature.diff.sourceOption.branch.description"),
       },
     ]
   })
@@ -693,7 +696,7 @@ function DiffViewer(props: { context: Plugin.Context }) {
   const openSwitchDiffDialog = () => {
     dialog.show(() => (
       <DialogSelect
-        title="Switch source"
+        title={i18n.t("feature.diff.sourceDialog.title")}
         skipFilter={true}
         renderFilter={false}
         current={mode()}
@@ -729,12 +732,13 @@ function DiffViewer(props: { context: Plugin.Context }) {
     <box position="absolute" zIndex={2500} left={0} top={0} width={dimensions().width} height={dimensions().height}>
       <PanelGroup axis="y" context={props.context} width="100%" height="100%">
         <Panel border="none" flexShrink={0} padding={0} paddingLeft={1}>
-          <text fg={theme.text.default}>Diff </text>
-          <text fg={theme.text.subdued}>{diffSourceLabel(mode())}</text>
+          <text fg={theme.text.default}>{i18n.t("feature.diff.title", { source: diffSourceLabel(mode(), i18n.t) })}</text>
           <box flexGrow={1} />
           <Show when={!diff.loading && !diff.error}>
             <text fg={theme.text.subdued}>
-              {files().length} {files().length === 1 ? "file" : "files"}
+              {i18n.t(files().length === 1 ? "feature.diff.fileCount.one" : "feature.diff.fileCount.other", {
+                count: files().length,
+              })}
             </text>
           </Show>
         </Panel>
@@ -744,21 +748,21 @@ function DiffViewer(props: { context: Plugin.Context }) {
             <Match when={diff.loading}>
               <Separator axis="x" />
               <box flexGrow={1} paddingLeft={1}>
-                <text fg={theme.text.subdued}>Loading diff…</text>
+                <text fg={theme.text.subdued}>{i18n.t("feature.diff.loading")}</text>
               </box>
             </Match>
             <Match when={!diff.loading && diff.error}>
               <Separator axis="x" />
               <box flexGrow={1} paddingLeft={1}>
                 <text fg={theme.text.feedback.error.default}>
-                  Could not load diff. Reopen the diff viewer to try again.
+                  {i18n.t("feature.diff.loadError")}
                 </text>
               </box>
             </Match>
             <Match when={!diff.loading && files().length === 0}>
               <Separator axis="x" />
               <box flexGrow={1} paddingLeft={1}>
-                <text fg={theme.text.subdued}>No changes to show</text>
+                <text fg={theme.text.subdued}>{i18n.t("feature.diff.noChanges")}</text>
               </box>
             </Match>
             <Match when={!diff.loading}>
@@ -816,7 +820,7 @@ function DiffViewer(props: { context: Plugin.Context }) {
                             <Separator axis="x" start={showFileTree() ? "edge" : undefined} />
                             <Show
                               when={entry.file.patch}
-                              fallback={<text fg={theme.text.subdued}>No patch available for this file.</text>}
+                              fallback={<text fg={theme.text.subdued}>{i18n.t("feature.diff.noPatch")}</text>}
                             >
                               {(patch) => (
                                 <box border={patchLeftBorder()} borderColor={theme.border.default}>
@@ -879,56 +883,56 @@ function DiffViewer(props: { context: Plugin.Context }) {
           <Show when={switchFocusShortcut()}>
             {(shortcut) => (
               <text fg={theme.text.default}>
-                {shortcut()} <span style={{ fg: theme.text.subdued }}>focus file tree</span>
+                {shortcut()} <span style={{ fg: theme.text.subdued }}>{i18n.t("feature.diff.hint.focusFileTree")}</span>
               </text>
             )}
           </Show>
           <Show when={nextFileShortcut()}>
             {(shortcut) => (
               <text fg={theme.text.default}>
-                {shortcut()} <span style={{ fg: theme.text.subdued }}>next file</span>
+                {shortcut()} <span style={{ fg: theme.text.subdued }}>{i18n.t("feature.diff.hint.nextFile")}</span>
               </text>
             )}
           </Show>
           <Show when={nextHunkShortcut()}>
             {(shortcut) => (
               <text fg={theme.text.default}>
-                {shortcut()} <span style={{ fg: theme.text.subdued }}>next hunk</span>
+                {shortcut()} <span style={{ fg: theme.text.subdued }}>{i18n.t("feature.diff.hint.nextHunk")}</span>
               </text>
             )}
           </Show>
           <Show when={previousHunkShortcut()}>
             {(shortcut) => (
               <text fg={theme.text.default}>
-                {shortcut()} <span style={{ fg: theme.text.subdued }}>previous hunk</span>
+                {shortcut()} <span style={{ fg: theme.text.subdued }}>{i18n.t("feature.diff.hint.previousHunk")}</span>
               </text>
             )}
           </Show>
           <Show when={previousFileShortcut()}>
             {(shortcut) => (
               <text fg={theme.text.default}>
-                {shortcut()} <span style={{ fg: theme.text.subdued }}>previous file</span>
+                {shortcut()} <span style={{ fg: theme.text.subdued }}>{i18n.t("feature.diff.hint.previousFile")}</span>
               </text>
             )}
           </Show>
           <Show when={switchSourceShortcut()}>
             {(shortcut) => (
               <text fg={theme.text.default}>
-                {shortcut()} <span style={{ fg: theme.text.subdued }}>switch source</span>
+                {shortcut()} <span style={{ fg: theme.text.subdued }}>{i18n.t("feature.diff.hint.switchSource")}</span>
               </text>
             )}
           </Show>
           <Show when={markReviewedShortcut()}>
             {(shortcut) => (
               <text fg={theme.text.default}>
-                {shortcut()} <span style={{ fg: theme.text.subdued }}>mark reviewed</span>
+                {shortcut()} <span style={{ fg: theme.text.subdued }}>{i18n.t("feature.diff.hint.markReviewed")}</span>
               </text>
             )}
           </Show>
           <Show when={helpShortcut()}>
             {(shortcut) => (
               <text fg={theme.text.default}>
-                {shortcut()} <span style={{ fg: theme.text.subdued }}>all</span>
+                {shortcut()} <span style={{ fg: theme.text.subdued }}>{i18n.t("feature.diff.hint.all")}</span>
               </text>
             )}
           </Show>
@@ -939,68 +943,69 @@ function DiffViewer(props: { context: Plugin.Context }) {
 }
 
 function DiffViewerHelpDialog(props: { context: Plugin.Context }) {
+  const i18n = useI18n()
   const theme = props.context.theme.contextual.elevated
   const shortcut = (id: string) => () => props.context.keymap.shortcuts(id)[0]
   const rows = [
     {
       shortcut: () => "q",
-      action: "Close viewer",
-      description: "Quit the diff viewer",
+      action: i18n.t("feature.diff.help.close.action"),
+      description: i18n.t("feature.diff.help.close.description"),
     },
     {
       shortcut: shortcut("diff.switch_focus"),
-      action: "Focus file tree",
-      description: "Move keyboard focus between the file tree and patch pane",
+      action: i18n.t("feature.diff.help.focusFileTree.action"),
+      description: i18n.t("feature.diff.help.focusFileTree.description"),
     },
     {
       shortcut: shortcut("diff.next_hunk"),
-      action: "Next hunk",
-      description: "Jump to the next diff hunk",
+      action: i18n.t("feature.diff.help.nextHunk.action"),
+      description: i18n.t("feature.diff.help.nextHunk.description"),
     },
     {
       shortcut: shortcut("diff.previous_hunk"),
-      action: "Previous hunk",
-      description: "Jump to the previous diff hunk",
+      action: i18n.t("feature.diff.help.previousHunk.action"),
+      description: i18n.t("feature.diff.help.previousHunk.description"),
     },
     {
       shortcut: shortcut("diff.next_file"),
-      action: "Next file",
-      description: "Select the next changed file in file-tree order",
+      action: i18n.t("feature.diff.help.nextFile.action"),
+      description: i18n.t("feature.diff.help.nextFile.description"),
     },
     {
       shortcut: shortcut("diff.previous_file"),
-      action: "Previous file",
-      description: "Select the previous changed file in file-tree order",
+      action: i18n.t("feature.diff.help.previousFile.action"),
+      description: i18n.t("feature.diff.help.previousFile.description"),
     },
     {
       shortcut: shortcut("diff.toggle_file_tree"),
-      action: "Toggle file tree",
-      description: "Show or hide the file tree sidebar",
+      action: i18n.t("feature.diff.help.toggleFileTree.action"),
+      description: i18n.t("feature.diff.help.toggleFileTree.description"),
     },
     {
       shortcut: shortcut("diff.single_patch"),
-      action: "Toggle patches",
-      description: "Switch between one selected patch and all patches",
+      action: i18n.t("feature.diff.help.singlePatch.action"),
+      description: i18n.t("feature.diff.help.singlePatch.description"),
     },
     {
       shortcut: shortcut("diff.switch_source"),
-      action: "Switch source",
-      description: "Choose working tree or main branch changes",
+      action: i18n.t("feature.diff.help.switchSource.action"),
+      description: i18n.t("feature.diff.help.switchSource.description"),
     },
     {
       shortcut: shortcut("diff.toggle_view"),
-      action: "Toggle view",
-      description: "Switch between split and unified diff layout",
+      action: i18n.t("feature.diff.help.toggleView.action"),
+      description: i18n.t("feature.diff.help.toggleView.description"),
     },
     {
       shortcut: shortcut("diff.expand_all"),
-      action: "Expand all folders",
-      description: "Open every folder in the file tree",
+      action: i18n.t("feature.diff.help.expandAll.action"),
+      description: i18n.t("feature.diff.help.expandAll.description"),
     },
     {
       shortcut: shortcut("diff.mark_reviewed"),
-      action: "Mark reviewed",
-      description: "Toggle reviewed state for the selected file",
+      action: i18n.t("feature.diff.help.markReviewed.action"),
+      description: i18n.t("feature.diff.help.markReviewed.description"),
     },
   ]
 
@@ -1008,18 +1013,18 @@ function DiffViewerHelpDialog(props: { context: Plugin.Context }) {
     <box paddingLeft={2} paddingRight={2} paddingBottom={1} gap={1}>
       <box flexDirection="row" justifyContent="space-between">
         <text attributes={TextAttributes.BOLD} fg={theme.text.default}>
-          Diff shortcuts
+          {i18n.t("feature.diff.help.title")}
         </text>
         <text fg={theme.text.subdued}>esc</text>
       </box>
       <box flexDirection="row">
         <text fg={theme.text.subdued} width={5} wrapMode="none">
-          Key
+          {i18n.t("feature.diff.help.key")}
         </text>
         <text fg={theme.text.subdued} width={22} wrapMode="none">
-          Action
+          {i18n.t("feature.diff.help.action")}
         </text>
-        <text fg={theme.text.subdued}>Description</text>
+        <text fg={theme.text.subdued}>{i18n.t("feature.diff.help.description")}</text>
       </box>
       <For each={rows}>
         {(row) => (
@@ -1039,14 +1044,15 @@ function DiffViewerHelpDialog(props: { context: Plugin.Context }) {
 }
 
 function Commands(props: { context: Plugin.Context }) {
+  const i18n = useI18n()
   props.context.keymap.layer(() => ({
     mode: "global",
     commands: [
       {
         id: "diff.open",
-        title: "Open diff viewer",
+        title: i18n.t("feature.diff.command.open"),
         slash: { name: "diff" },
-        group: "VCS",
+        group: i18n.t("feature.diff.group"),
         palette: true,
         run() {
           const route = props.context.ui.router.current()

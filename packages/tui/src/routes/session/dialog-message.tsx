@@ -8,6 +8,7 @@ import { errorMessage } from "../../util/error"
 import { DialogFork } from "./dialog-fork"
 import type { PromptInfo } from "../../prompt/history"
 import { projectedPromptInput } from "../../prompt/codec"
+import { useI18n } from "../../context/i18n"
 
 export function DialogMessage(props: {
   messageID: string
@@ -18,22 +19,23 @@ export function DialogMessage(props: {
   const clipboard = useClipboard()
   const toast = useToast()
   const client = useClient()
+  const i18n = useI18n()
   const message = createMemo(() => data.session.message.get(props.sessionID, props.messageID))
 
   return (
     <DialogSelect
-      title="Message Actions"
+      title={i18n.t("session.dialog.messageActions")}
       options={[
         {
-          title: "Jump to",
+          title: i18n.t("session.dialog.jumpTo"),
           value: "message.jump",
-          description: "view message in session",
+          description: i18n.t("session.dialog.jumpDescription"),
           onSelect: (dialog) => dialog.clear(),
         },
         {
-          title: "Revert",
+          title: i18n.t("session.dialog.revert"),
           value: "session.revert",
-          description: "undo messages and file changes",
+          description: i18n.t("session.dialog.revertDescription"),
           onSelect: (dialog) => {
             const value = message()
             if (value?.type === "user") {
@@ -49,9 +51,9 @@ export function DialogMessage(props: {
           },
         },
         {
-          title: "Copy",
+          title: i18n.t("session.dialog.copy"),
           value: "message.copy",
-          description: "message text to clipboard",
+          description: i18n.t("session.dialog.copyDescription"),
           onSelect: async (dialog) => {
             const value = message()
             if (!value) return
@@ -75,9 +77,9 @@ export function DialogMessage(props: {
           },
         },
         {
-          title: "Fork",
+          title: i18n.t("session.dialog.forkAction"),
           value: "session.fork",
-          description: "create a new session",
+          description: i18n.t("session.dialog.forkDescription"),
           onSelect: (dialog) => {
             const value = message()
             if (!value || value.type !== "user") return

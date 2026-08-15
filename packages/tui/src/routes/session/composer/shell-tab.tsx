@@ -6,6 +6,7 @@ import { useClient } from "../../../context/client"
 import { useTheme } from "../../../context/theme"
 import { Keymap } from "../../../context/keymap"
 import { useComposerTab } from "./index"
+import { useI18n } from "../../../context/i18n"
 
 export function ShellTab(props: { sessionID: string }) {
   const data = useData()
@@ -13,6 +14,7 @@ export function ShellTab(props: { sessionID: string }) {
   const theme = useTheme()
   const composer = useComposerTab()
   const shortcuts = Keymap.useShortcuts()
+  const i18n = useI18n()
 
   const entries = createMemo(() =>
     data.shell.listBySession(props.sessionID).filter((shell) => shell.status === "running"),
@@ -41,8 +43,9 @@ export function ShellTab(props: { sessionID: string }) {
   onMount(() => {
     const cleanup = composer.register({
       id: "shell",
-      label: "Shell",
-      hints: () => (selectedEntry() ? [{ label: "kill", shortcut: shortcuts.get("composer.shell.kill") ?? "" }] : []),
+      label: i18n.t("session.composer.shell"),
+      hints: () =>
+        selectedEntry() ? [{ label: i18n.t("session.composer.kill"), shortcut: shortcuts.get("composer.shell.kill") ?? "" }] : [],
     })
     onCleanup(cleanup)
   })
@@ -54,8 +57,8 @@ export function ShellTab(props: { sessionID: string }) {
     commands: [
       {
         id: "composer.shell.up",
-        title: "Previous shell",
-        group: "Composer",
+        title: i18n.t("session.composer.command.previousShell"),
+        group: i18n.t("session.group.composer"),
         run() {
           if (store.selected === 0) {
             composer.close()
@@ -66,8 +69,8 @@ export function ShellTab(props: { sessionID: string }) {
       },
       {
         id: "composer.shell.down",
-        title: "Next shell",
-        group: "Composer",
+        title: i18n.t("session.composer.command.nextShell"),
+        group: i18n.t("session.group.composer"),
         run() {
           const list = entries()
           if (list.length === 0) return
@@ -76,8 +79,8 @@ export function ShellTab(props: { sessionID: string }) {
       },
       {
         id: "composer.shell.kill",
-        title: "Kill shell command",
-        group: "Composer",
+        title: i18n.t("session.composer.command.killShell"),
+        group: i18n.t("session.group.composer"),
         run() {
           const entry = selectedEntry()
           if (!entry) return
@@ -93,7 +96,10 @@ export function ShellTab(props: { sessionID: string }) {
   return (
     <Show when={composer.active("shell")}>
       <scrollbox scrollbarOptions={{ visible: false }} maxHeight={5} ref={(r: ScrollBoxRenderable) => (scroll = r)}>
-        <Show when={entries().length > 0} fallback={<text fg={theme.text.subdued}> No shell commands</text>}>
+        <Show
+          when={entries().length > 0}
+          fallback={<text fg={theme.text.subdued}> {i18n.t("session.composer.noShellCommands")}</text>}
+        >
           <For each={entries()}>
             {(shell, index) => {
               const active = createMemo(() => index() === store.selected)

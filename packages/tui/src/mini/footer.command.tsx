@@ -4,6 +4,7 @@ import { useKeyboard, type JSX } from "@opentui/solid"
 import fuzzysort from "fuzzysort"
 import { createEffect, createMemo, createSignal, type Accessor } from "solid-js"
 import { Keymap } from "../context/keymap"
+import { useI18n } from "../context/i18n"
 import { RunFooterMenu, createFooterMenuState, type RunFooterMenuItem } from "./footer.menu"
 import { monoShortcut } from "./mono"
 import type { RunFooterTheme } from "./theme"
@@ -101,20 +102,20 @@ function countLabel(count: number, total: number, query: string) {
   return `${count}/${total}`
 }
 
-function subagentStatusLabel(status: FooterSubagentTab["status"]) {
+function subagentStatusLabel(status: FooterSubagentTab["status"], t: ReturnType<typeof useI18n>["t"]) {
   if (status === "completed") {
-    return "done"
+    return t("mini.command.done")
   }
 
   if (status === "cancelled") {
-    return "cancelled"
+    return t("mini.command.cancelled")
   }
 
   if (status === "error") {
-    return "error"
+    return t("mini.command.error")
   }
 
-  return "running"
+  return t("mini.command.running")
 }
 
 function match<T extends PanelEntry>(query: string, entries: T[]) {
@@ -369,31 +370,34 @@ export function RunCommandMenuBody(props: {
   onExit: () => void
   mono?: boolean
 }) {
+  const { t } = useI18n()
   const skills = createMemo(() => (props.commands() ?? []).filter((item) => item.source === "skill"))
   const activeSubagentCount = createMemo(() => props.subagents().filter((item) => item.status === "running").length)
   const entries = createMemo<CommandEntry[]>(() => {
     const session: CommandEntry[] = [
       {
         action: "editor",
-        category: "Session",
-        display: "Open editor",
+        category: t("mini.command.category.session"),
+        display: t("mini.command.openEditor"),
         footer: "/editor",
         keywords: "editor compose draft external editor",
       },
       {
         action: "status",
-        category: "Session",
-        display: "Show status",
+        category: t("mini.command.category.session"),
+        display: t("mini.command.showStatus"),
         keywords: "status activity model context usage footer",
       },
       ...(props.subagents().length > 0
         ? [
             {
               action: "subagent" as const,
-              category: "Session",
-              display: "View subagents",
+              category: t("mini.command.category.session"),
+              display: t("mini.command.viewSubagents"),
               footer:
-                activeSubagentCount() > 0 ? `${activeSubagentCount()} active` : `${props.subagents().length} recent`,
+                activeSubagentCount() > 0
+                  ? t("mini.command.active", { count: activeSubagentCount() })
+                  : t("mini.command.recent", { count: props.subagents().length }),
               keywords: props
                 .subagents()
                 .map((item) => `${item.label} ${item.description} ${item.title ?? ""}`)
@@ -403,17 +407,17 @@ export function RunCommandMenuBody(props: {
         : []),
       {
         action: "slash",
-        category: "Session",
+        category: t("mini.command.category.session"),
         name: "compact",
-        display: "Compact session",
+        display: t("mini.command.compactSession"),
         footer: "/compact",
         keywords: "compact session context",
       },
       {
         action: "slash",
-        category: "Session",
+        category: t("mini.command.category.session"),
         name: "new",
-        display: "New session",
+        display: t("mini.command.newSession"),
         footer: "/new",
         keywords: "new session clear",
       },
@@ -423,8 +427,8 @@ export function RunCommandMenuBody(props: {
         ? [
             {
               action: "skill" as const,
-              category: "Prompt",
-              display: "Skills",
+              category: t("mini.command.category.prompt"),
+              display: t("mini.command.skills"),
               footer: "/skills",
               keywords: `skill skills ${skills()
                 .map((item) => `${item.name} ${item.description ?? ""}`)
@@ -435,21 +439,21 @@ export function RunCommandMenuBody(props: {
     const agent: CommandEntry[] = [
       {
         action: "agent",
-        category: "Agent",
-        display: "Switch agent",
+        category: t("mini.command.category.agent"),
+        display: t("mini.command.switchAgent"),
       },
       {
         action: "model",
-        category: "Agent",
-        display: "Switch model",
+        category: t("mini.command.category.agent"),
+        display: t("mini.command.switchModel"),
       },
       ...(props.queued().length > 0
         ? [
             {
               action: "queued" as const,
-              category: "Agent",
-              display: "View queued prompts",
-              footer: `${props.queued().length} pending`,
+              category: t("mini.command.category.agent"),
+              display: t("mini.command.viewQueuedPrompts"),
+              footer: t("mini.command.pending", { count: props.queued().length }),
               keywords: props
                 .queued()
                 .map((item) => item.prompt.text)
@@ -459,8 +463,8 @@ export function RunCommandMenuBody(props: {
         : []),
       {
         action: "variant.cycle",
-        category: "Agent",
-        display: "Variant cycle",
+        category: t("mini.command.category.agent"),
+        display: t("mini.command.variantCycle"),
         footer: props.variantCycle,
         keywords: "variant cycle",
       },
@@ -468,8 +472,8 @@ export function RunCommandMenuBody(props: {
         ? [
             {
               action: "variant.list" as const,
-              category: "Agent",
-              display: "Switch model variant",
+              category: t("mini.command.category.agent"),
+              display: t("mini.command.switchVariant"),
               keywords: `variant variants ${props.variants().join(" ")}`,
             },
           ]
@@ -481,12 +485,18 @@ export function RunCommandMenuBody(props: {
       ...agent,
       {
         action: "settings",
-        category: "System",
-        display: "Settings",
+        category: t("mini.command.category.system"),
+        display: t("mini.command.settings"),
         footer: "/settings",
         keywords: "/settings settings preferences configuration",
       },
-      { action: "exit", category: "System", display: "Exit", footer: "/exit", keywords: "/exit exit" },
+      {
+        action: "exit",
+        category: t("mini.command.category.system"),
+        display: t("mini.command.exit"),
+        footer: "/exit",
+        keywords: "/exit exit",
+      },
     ]
   })
   const pick = (item: CommandEntry) => {
@@ -561,12 +571,12 @@ export function RunCommandMenuBody(props: {
 
   return (
     <PanelShell
-      title="Commands"
+      title={t("mini.command.commands")}
       countVisible={false}
       query={controller.query()}
       count={controller.items().length}
       total={entries().length}
-      placeholder="Search"
+      placeholder={t("mini.command.search")}
       theme={props.theme}
       inputRef={controller.inputRef}
       onQuery={controller.setQuery}
@@ -579,7 +589,7 @@ export function RunCommandMenuBody(props: {
         offset={controller.menu.offset}
         rows={() => PANEL_LIST_ROWS}
         limit={PANEL_LIST_ROWS}
-        empty="No results found"
+        empty={t("mini.command.noResults")}
         border={false}
         paddingLeft={panelPad(props.mono)}
         paddingRight={panelPad(props.mono)}
@@ -600,6 +610,7 @@ export function RunAgentSelectBody(props: {
   onSelect: (agent: string) => void
   mono?: boolean
 }) {
+  const { t } = useI18n()
   const entries = createMemo<AgentEntry[]>(() =>
     props
       .agents()
@@ -608,7 +619,7 @@ export function RunAgentSelectBody(props: {
         category: "",
         display: agent.id,
         description: agent.description,
-        footer: props.current() === agent.id ? "current" : undefined,
+        footer: props.current() === agent.id ? t("mini.command.current") : undefined,
         keywords: `${agent.id} ${agent.name} ${agent.description ?? ""}`,
         id: agent.id,
         current: props.current() === agent.id,
@@ -624,11 +635,11 @@ export function RunAgentSelectBody(props: {
 
   return (
     <PanelShell
-      title="Select agent"
+      title={t("mini.command.selectAgent")}
       query={controller.query()}
       count={controller.items().length}
       total={entries().length}
-      placeholder="Search"
+      placeholder={t("mini.command.search")}
       theme={props.theme}
       inputRef={controller.inputRef}
       onQuery={controller.setQuery}
@@ -641,7 +652,7 @@ export function RunAgentSelectBody(props: {
         offset={controller.menu.offset}
         rows={() => PANEL_LIST_ROWS}
         limit={PANEL_LIST_ROWS}
-        empty="No agents found"
+        empty={t("mini.command.noAgents")}
         border={false}
         paddingLeft={panelPad(props.mono)}
         paddingRight={panelPad(props.mono)}
@@ -660,47 +671,48 @@ export function RunSettingsBody(props: {
   onChange: (change: MiniSettingChange) => void | Promise<void>
   mono?: boolean
 }) {
+  const { t } = useI18n()
   const [saving, setSaving] = createSignal<keyof MiniSettings>()
   const entries = createMemo<SettingEntry[]>(() => [
     {
-      category: "Transcript",
-      display: "Thinking",
-      footer: saving() === "thinking" ? "saving" : props.settings().thinking,
+      category: t("mini.command.category.transcript"),
+      display: t("mini.command.setting.thinking"),
+      footer: saving() === "thinking" ? t("mini.command.setting.saving") : props.settings().thinking,
       keywords: `thinking reasoning ${props.settings().thinking}`,
       key: "thinking",
     },
     {
-      category: "Transcript",
-      display: "Shell",
-      footer: saving() === "shell_output" ? "saving" : props.settings().shell_output,
+      category: t("mini.command.category.transcript"),
+      display: t("mini.command.setting.shell"),
+      footer: saving() === "shell_output" ? t("mini.command.setting.saving") : props.settings().shell_output,
       keywords: `shell tool command output ${props.settings().shell_output}`,
       key: "shell_output",
     },
     {
-      category: "Transcript",
-      display: "Turn summary",
-      footer: saving() === "turn_summary" ? "saving" : props.settings().turn_summary,
+      category: t("mini.command.category.transcript"),
+      display: t("mini.command.setting.turnSummary"),
+      footer: saving() === "turn_summary" ? t("mini.command.setting.saving") : props.settings().turn_summary,
       keywords: `turn summary agent model duration ${props.settings().turn_summary}`,
       key: "turn_summary",
     },
     {
-      category: "Terminal",
-      display: "Footer details",
-      footer: saving() === "footer" ? "saving" : props.settings().footer,
+      category: t("mini.command.category.terminal"),
+      display: t("mini.command.setting.footer"),
+      footer: saving() === "footer" ? t("mini.command.setting.saving") : props.settings().footer,
       keywords: `footer status activity model context usage ${props.settings().footer}`,
       key: "footer",
     },
     {
-      category: "Terminal",
-      display: "Splash",
-      footer: saving() === "splash" ? "saving" : props.settings().splash,
+      category: t("mini.command.category.terminal"),
+      display: t("mini.command.setting.splash"),
+      footer: saving() === "splash" ? t("mini.command.setting.saving") : props.settings().splash,
       keywords: `splash entry exit banner ${props.settings().splash}`,
       key: "splash",
     },
     {
-      category: "Terminal",
-      display: "Monochrome UI",
-      footer: saving() === "mono" ? "saving" : props.settings().mono ? "on" : "off",
+      category: t("mini.command.category.terminal"),
+      display: t("mini.command.setting.monochrome"),
+      footer: saving() === "mono" ? t("mini.command.setting.saving") : props.settings().mono ? t("mini.command.setting.on") : t("mini.command.setting.off"),
       keywords: `mono monochrome ascii legacy compat terminal ${props.settings().mono ? "on" : "off"}`,
       key: "mono",
     },
@@ -732,16 +744,16 @@ export function RunSettingsBody(props: {
 
   return (
     <PanelShell
-      title="Settings"
+      title={t("mini.command.settingsTitle")}
       countVisible={false}
       query={controller.query()}
       count={controller.items().length}
       total={entries().length}
-      placeholder="Search"
+      placeholder={t("mini.command.search")}
       theme={props.theme}
       inputRef={controller.inputRef}
       onQuery={controller.setQuery}
-      hint="left/right change"
+      hint={t("mini.command.hint.change")}
       mono={props.mono}
     >
       <RunFooterMenu
@@ -751,7 +763,7 @@ export function RunSettingsBody(props: {
         offset={controller.menu.offset}
         rows={() => PANEL_LIST_ROWS}
         limit={PANEL_LIST_ROWS}
-        empty="No settings found"
+        empty={t("mini.command.noSettings")}
         border={false}
         paddingLeft={panelPad(props.mono)}
         paddingRight={panelPad(props.mono)}
@@ -773,6 +785,7 @@ export function RunSubagentSelectBody(props: {
   onRows?: (rows: number) => void
   mono?: boolean
 }) {
+  const { t } = useI18n()
   const [active, setActive] = createSignal(true)
   const entries = createMemo<SubagentEntry[]>(() =>
     props
@@ -784,7 +797,7 @@ export function RunSubagentSelectBody(props: {
           category: "",
           display: title,
           description: title === item.label ? undefined : item.label,
-          footer: subagentStatusLabel(item.status),
+          footer: subagentStatusLabel(item.status, t),
           keywords: `${item.label} ${item.description} ${item.title ?? ""} ${item.status}`,
           sessionID: item.sessionID,
           current: props.current() === item.sessionID,
@@ -809,15 +822,15 @@ export function RunSubagentSelectBody(props: {
 
   return (
     <PanelShell
-      title="Select subagent"
+      title={t("mini.command.selectSubagent")}
       query={controller.query()}
       count={controller.items().length}
       total={entries().length}
-      placeholder="Search"
+      placeholder={t("mini.command.search")}
       theme={props.theme}
       inputRef={controller.inputRef}
       onQuery={controller.setQuery}
-      hint={`tab show ${active() ? "inactive" : "active"}`}
+      hint={t("mini.command.hint.show", { status: active() ? "inactive" : "active" })}
       mono={props.mono}
     >
       <RunFooterMenu
@@ -827,7 +840,7 @@ export function RunSubagentSelectBody(props: {
         offset={controller.menu.offset}
         rows={controller.menu.rows}
         limit={SUBAGENT_LIST_ROWS}
-        empty="No subagents found"
+        empty={t("mini.command.noSubagents")}
         border={false}
         paddingLeft={panelPad(props.mono)}
         paddingRight={panelPad(props.mono)}
@@ -848,11 +861,12 @@ export function RunQueuedPromptSelectBody(props: {
   onRows?: (rows: number) => void
   mono?: boolean
 }) {
+  const { t } = useI18n()
   const entries = createMemo<QueuedPromptEntry[]>(() =>
     props.prompts().map((prompt) => ({
       category: "",
       display: prompt.prompt.text.replaceAll("\n", " "),
-      footer: "queued",
+      footer: t("mini.footer.status.queued", { count: 1 }),
       keywords: prompt.prompt.text,
       prompt,
     })),
@@ -871,8 +885,8 @@ export function RunQueuedPromptSelectBody(props: {
     commands: [
       {
         id: "queued_prompt.delete",
-        title: "Delete queued prompt",
-        group: "Prompt",
+        title: t("mini.command.keymap.deleteQueued"),
+        group: t("mini.footer.group.prompt"),
         run() {
           const item = controller.items()[controller.menu.selected()]
           if (!item) return false
@@ -884,15 +898,20 @@ export function RunQueuedPromptSelectBody(props: {
 
   return (
     <PanelShell
-      title="Queued prompts"
+      title={t("mini.command.queuedPrompts")}
       query={controller.query()}
       count={controller.items().length}
       total={entries().length}
-      placeholder="Search"
+      placeholder={t("mini.command.search")}
       theme={props.theme}
       inputRef={controller.inputRef}
       onQuery={controller.setQuery}
-      hint={["enter steer", deleteShortcut() ? `${deleteShortcut()} delete` : undefined].filter(Boolean).join(" · ")}
+      hint={[
+        t("mini.command.hint.steer"),
+        deleteShortcut() ? t("mini.command.hint.delete", { shortcut: deleteShortcut() }) : undefined,
+      ]
+        .filter(Boolean)
+        .join(" · ")}
       mono={props.mono}
     >
       <RunFooterMenu
@@ -902,7 +921,7 @@ export function RunQueuedPromptSelectBody(props: {
         offset={controller.menu.offset}
         rows={controller.menu.rows}
         limit={SUBAGENT_LIST_ROWS}
-        empty="No queued prompts"
+        empty={t("mini.command.noQueuedPrompts")}
         border={false}
         paddingLeft={panelPad(props.mono)}
         paddingRight={panelPad(props.mono)}
@@ -921,6 +940,7 @@ export function RunSkillSelectBody(props: {
   onSelect: (name: string) => void
   mono?: boolean
 }) {
+  const { t } = useI18n()
   const entries = createMemo<SkillEntry[]>(() =>
     (props.commands() ?? [])
       .filter((item) => item.source === "skill")
@@ -942,11 +962,11 @@ export function RunSkillSelectBody(props: {
 
   return (
     <PanelShell
-      title="Skills"
+      title={t("mini.command.skillsTitle")}
       query={controller.query()}
       count={controller.items().length}
       total={entries().length}
-      placeholder="Search"
+      placeholder={t("mini.command.search")}
       theme={props.theme}
       inputRef={controller.inputRef}
       onQuery={controller.setQuery}
@@ -959,7 +979,7 @@ export function RunSkillSelectBody(props: {
         offset={controller.menu.offset}
         rows={() => PANEL_LIST_ROWS}
         limit={PANEL_LIST_ROWS}
-        empty={props.commands() ? "No skills found" : "Skills loading"}
+        empty={props.commands() ? t("mini.command.noSkills") : t("mini.command.skillsLoading")}
         border={false}
         paddingLeft={panelPad(props.mono)}
         paddingRight={panelPad(props.mono)}
@@ -979,11 +999,12 @@ export function RunVariantSelectBody(props: {
   onSelect: (variant: string | undefined) => void
   mono?: boolean
 }) {
+  const { t } = useI18n()
   const entries = createMemo<VariantEntry[]>(() => [
     {
       category: "",
-      display: "Default",
-      description: props.current() === undefined ? "current" : undefined,
+      display: t("mini.command.variant.default"),
+      description: props.current() === undefined ? t("mini.command.current") : undefined,
       keywords: "default",
       variant: undefined,
       current: props.current() === undefined,
@@ -991,7 +1012,7 @@ export function RunVariantSelectBody(props: {
     ...props.variants().map((variant) => ({
       category: "",
       display: variant,
-      description: props.current() === variant ? "current" : undefined,
+      description: props.current() === variant ? t("mini.command.current") : undefined,
       keywords: variant,
       variant,
       current: props.current() === variant,
@@ -1007,11 +1028,11 @@ export function RunVariantSelectBody(props: {
 
   return (
     <PanelShell
-      title="Select variant"
+      title={t("mini.command.selectVariant")}
       query={controller.query()}
       count={controller.items().length}
       total={entries().length}
-      placeholder="Search"
+      placeholder={t("mini.command.search")}
       theme={props.theme}
       inputRef={controller.inputRef}
       onQuery={controller.setQuery}
@@ -1024,7 +1045,7 @@ export function RunVariantSelectBody(props: {
         offset={controller.menu.offset}
         rows={() => PANEL_LIST_ROWS}
         limit={PANEL_LIST_ROWS}
-        empty="No results found"
+        empty={t("mini.command.noResults")}
         border={false}
         paddingLeft={panelPad(props.mono)}
         paddingRight={panelPad(props.mono)}
@@ -1044,6 +1065,7 @@ export function RunModelSelectBody(props: {
   onSelect: (model: NonNullable<RunInput["model"]>) => void
   mono?: boolean
 }) {
+  const { t } = useI18n()
   const entries = createMemo<ModelEntry[]>(() =>
     (props.providers() ?? [])
       .flatMap((provider) =>
@@ -1053,9 +1075,9 @@ export function RunModelSelectBody(props: {
             const title = model.name ?? modelID
             const current = props.current()?.providerID === provider.id && props.current()?.modelID === modelID
             const footer = current
-              ? "current"
+                ? t("mini.command.current")
               : model.cost?.input === 0 && provider.id === "opencode"
-                ? "Free"
+                ? t("mini.command.free")
                 : title !== modelID
                   ? modelID
                   : undefined
@@ -1095,11 +1117,11 @@ export function RunModelSelectBody(props: {
 
   return (
     <PanelShell
-      title="Select model"
+      title={t("mini.command.selectModel")}
       query={controller.query()}
       count={controller.items().length}
       total={entries().length}
-      placeholder="Search"
+      placeholder={t("mini.command.search")}
       theme={props.theme}
       inputRef={controller.inputRef}
       onQuery={controller.setQuery}
@@ -1116,7 +1138,7 @@ export function RunModelSelectBody(props: {
         offset={controller.menu.offset}
         rows={() => PANEL_LIST_ROWS}
         limit={PANEL_LIST_ROWS}
-        empty={props.providers() ? "No results found" : "Models loading"}
+        empty={props.providers() ? t("mini.command.noResults") : t("mini.command.modelsLoading")}
         border={false}
         paddingLeft={panelPad(props.mono)}
         paddingRight={panelPad(props.mono)}

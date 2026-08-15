@@ -7,6 +7,7 @@ import { createStore, reconcile } from "solid-js/store"
 import { watch } from "fs"
 import path from "path"
 import { TuiKeybind } from "./keybind"
+import { I18nProvider } from "../context/i18n"
 
 export interface Interface {
   readonly path?: string
@@ -45,6 +46,9 @@ export const Cursor = Schema.Struct({
 }).annotate({ description: "Terminal cursor settings" })
 
 export const Info = Schema.Struct({
+  locale: Schema.optional(Schema.Literals(["en", "zh"])).annotate({
+    description: "Interface language; defaults to Simplified Chinese in this custom build",
+  }),
   theme: Schema.optional(
     Schema.Struct({
       name: Schema.optional(Schema.String).annotate({ description: "Theme name" }),
@@ -201,7 +205,11 @@ export const Info = Schema.Struct({
 })
 export type Info = Schema.Schema.Type<typeof Info>
 
-export type Resolved = Omit<Info, "attention" | "cursor" | "keybinds" | "leader" | "mouse" | "session" | "tabs"> & {
+export type Resolved = Omit<
+  Info,
+  "attention" | "cursor" | "keybinds" | "leader" | "locale" | "mouse" | "session" | "tabs"
+> & {
+  locale: "en" | "zh"
   attention: {
     enabled: boolean
     notifications: boolean
@@ -241,6 +249,7 @@ export function resolve(input: Info, options: { terminalSuspend: boolean }): Res
 
   return {
     ...input,
+    locale: input.locale ?? "zh",
     attention: {
       enabled: input.attention?.enabled ?? false,
       notifications: input.attention?.notifications ?? true,
@@ -305,7 +314,9 @@ export function ConfigProvider(props: {
     : undefined
   onCleanup(() => watcher?.close())
   return (
-    <ConfigContext.Provider value={{ data: config, path: host?.path, update }}>{props.children}</ConfigContext.Provider>
+    <ConfigContext.Provider value={{ data: config, path: host?.path, update }}>
+      <I18nProvider locale={() => config.locale}>{props.children}</I18nProvider>
+    </ConfigContext.Provider>
   )
 }
 

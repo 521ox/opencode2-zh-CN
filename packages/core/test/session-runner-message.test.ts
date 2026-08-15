@@ -5,11 +5,12 @@ import { Provider } from "@opencode-ai/core/provider"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { AgentAttachment, Base64, FileAttachment, SkillAttachment } from "@opencode-ai/schema/prompt"
 import { Skill } from "@opencode-ai/schema/skill"
-import { toLLMMessages } from "@opencode-ai/core/session/runner/to-llm-message"
+import { toolResultTokenBudget, toLLMMessages } from "@opencode-ai/core/session/runner/to-llm-message"
 import { Agent } from "@opencode-ai/core/agent"
 import { Shell } from "@opencode-ai/schema/shell"
 import { Location } from "@opencode-ai/schema/location"
 import { AbsolutePath } from "@opencode-ai/schema/schema"
+import { Token } from "@opencode-ai/core/util/token"
 import { DateTime } from "effect"
 import path from "path"
 import { pathToFileURL } from "url"
@@ -20,6 +21,334 @@ const model = Model.Ref.make({ id: Model.ID.make("model"), providerID: Provider.
 const build = Agent.defaultID
 
 describe("toLLMMessages", () => {
+  test("scales the aggregate tool result budget with the model context window", () => {
+    expect(toolResultTokenBudget(undefined)).toBe(64_000)
+    expect(toolResultTokenBudget(50_000)).toBe(10_000)
+    expect(toolResultTokenBudget(380_000)).toBe(38_000)
+    expect(toolResultTokenBudget(1_000_000)).toBe(64_000)
+  })
+
+  test("bounds oldest local tool results without mutating history or hosted outputs", () => {
+    const completed = (input: {
+      toolID: string
+      text: string
+      executed?: boolean
+      outputPath?: string
+      file?: boolean
+    }) =>
+      SessionMessage.AssistantTool.make({
+        type: "tool",
+        id: input.toolID,
+        name: "read",
+        executed: input.executed,
+        state: SessionMessage.ToolStateCompleted.make({
+          status: "completed",
+          input: { path: `${input.toolID}.txt` },
+          content: [
+            { type: "text", text: input.text },
+            ...(input.file
+              ? [
+                  {
+                    type: "file" as const,
+                    uri: "data:text/plain;base64,aGVsbG8=",
+                    mime: "text/plain",
+                    name: "evidence.txt",
+                  },
+                ]
+              : []),
+          ],
+          metadata: input.outputPath === undefined ? undefined : { outputPath: input.outputPath },
+        }),
+        time: { created, completed: created },
+      })
+    const old = completed({
+      toolID: "call_old",
+      text: "A".repeat(100),
+      outputPath: "C:\\tool-output\\call_old",
+    })
+    const middle = completed({
+      toolID: "call_middle",
+      text: `HEAD-${"x".repeat(300)}-TAIL`,
+      file: true,
+    })
+    const newest = completed({ toolID: "call_newest", text: "newest result" })
+    const hosted = completed({ toolID: "call_hosted", text: "H".repeat(400), executed: true })
+    const source = SessionMessage.Assistant.make({
+      id: id("bounded-tools"),
+      type: "assistant",
+      agent: build,
+      model: { id: Model.ID.make("model"), providerID: Provider.ID.make("provider") },
+      content: [old, middle, newest, hosted],
+      time: { created, completed: created },
+    })
+
+    const project = () => toLLMMessages([source], model, model.providerID, { toolResultTokens: 30 })
+    const messages = project()
+    const parts = messages.flatMap((message) => message.content)
+    const calls = parts.filter((part) => part.type === "tool-call")
+    const results = parts.filter((part) => part.type === "tool-result")
+    const byID = new Map(results.map((part) => [part.id, part]))
+    const text = (toolID: string) => {
+      const result = byID.get(toolID)?.result
+      if (!result) return ""
+      if (result.type === "text") return result.value
+      if (result.type !== "content") return ""
+      return result.value.flatMap((item) => (item.type === "text" ? [item.text] : [])).join("\n")
+    }
+
+    expect(calls).toHaveLength(4)
+    expect(results).toHaveLength(4)
+    expect(text("call_old")).toContain("Earlier tool result omitted")
+    expect(text("call_old")).toContain("C:\\tool-output\\call_old")
+    expect(text("call_middle")).toContain("HEAD-")
+    expect(text("call_middle")).toContain("-TAIL")
+    expect(text("call_middle")).toContain("trimmed for context")
+    expect(byID.get("call_middle")).toMatchObject({
+      result: {
+        type: "content",
+        value: [{ type: "text" }, { type: "file", name: "evidence.txt" }],
+      },
+    })
+    expect(text("call_newest")).toBe("newest result")
+    expect(text("call_hosted")).toBe("H".repeat(400))
+    expect(old.state.status === "completed" ? old.state.content[0] : undefined).toEqual({
+      type: "text",
+      text: "A".repeat(100),
+    })
+    expect(project()).toEqual(messages)
+  })
+
+  test("bounds astral Unicode with the same estimator used for the request budget", () => {
+    const original = "😀".repeat(80_000)
+    const tool = SessionMessage.AssistantTool.make({
+      type: "tool",
+      id: "call_astral",
+      name: "read",
+      state: SessionMessage.ToolStateCompleted.make({
+        status: "completed",
+        input: { path: "astral.txt" },
+        content: [{ type: "text", text: original }],
+      }),
+      time: { created, completed: created },
+    })
+    const source = SessionMessage.Assistant.make({
+      id: id("astral"),
+      type: "assistant",
+      agent: build,
+      model: { id: Model.ID.make("model"), providerID: Provider.ID.make("provider") },
+      content: [tool],
+      time: { created, completed: created },
+    })
+    const result = toLLMMessages([source], model, model.providerID, { toolResultTokens: 38_000 })
+      .flatMap((message) => message.content)
+      .find((part) => part.type === "tool-result")
+    const projected =
+      result?.result.type === "text" && typeof result.result.value === "string" ? result.result.value : ""
+
+    expect(Token.estimate(original)).toBe(40_000)
+    expect(Token.estimate(projected)).toBeLessThanOrEqual(38_000)
+    expect(projected).toStartWith("😀")
+    expect(projected).toEndWith("😀")
+    expect(projected).toContain("trimmed for context")
+  })
+
+  test("reserves a marked boundary preview when the newest result would consume the budget", () => {
+    const completed = (toolID: string, text: string) =>
+      SessionMessage.AssistantTool.make({
+        type: "tool",
+        id: toolID,
+        name: "read",
+        state: SessionMessage.ToolStateCompleted.make({
+          status: "completed",
+          input: { path: `${toolID}.txt` },
+          content: [{ type: "text", text }],
+        }),
+        time: { created, completed: created },
+      })
+    const older = completed("call_boundary_old", `OLD-HEAD-${"o".repeat(400)}-OLD-TAIL`)
+    const newest = completed("call_boundary_new", `NEW-HEAD-${"n".repeat(382)}-NEW-TAIL`)
+    const source = SessionMessage.Assistant.make({
+      id: id("boundary-preview"),
+      type: "assistant",
+      agent: build,
+      model: { id: Model.ID.make("model"), providerID: Provider.ID.make("provider") },
+      content: [older, newest],
+      time: { created, completed: created },
+    })
+    const results = toLLMMessages([source], model, model.providerID, { toolResultTokens: 100 })
+      .flatMap((message) => message.content)
+      .filter((part) => part.type === "tool-result")
+    const byID = new Map(
+      results.map((part) => [
+        part.id,
+        part.result.type === "text" && typeof part.result.value === "string" ? part.result.value : "",
+      ]),
+    )
+
+    expect(Token.estimate(`NEW-HEAD-${"n".repeat(382)}-NEW-TAIL`)).toBe(100)
+    expect(Token.estimate(byID.get("call_boundary_new") ?? "")).toBeLessThanOrEqual(100)
+    expect(byID.get("call_boundary_new")).toStartWith("NEW-HEAD-")
+    expect(byID.get("call_boundary_new")).toEndWith("-NEW-TAIL")
+    expect(byID.get("call_boundary_new")).toContain("trimmed for context")
+    expect(byID.get("call_boundary_old")).toContain("Earlier tool result omitted")
+  })
+
+  test("keeps a short Unicode result and moves the boundary to the next oversized result", () => {
+    const completed = (toolID: string, text: string) =>
+      SessionMessage.AssistantTool.make({
+        type: "tool",
+        id: toolID,
+        name: "read",
+        state: SessionMessage.ToolStateCompleted.make({
+          status: "completed",
+          input: { path: `${toolID}.txt` },
+          content: [{ type: "text", text }],
+        }),
+        time: { created, completed: created },
+      })
+    const oldest = completed("call_short_boundary_old", `OLD-HEAD-${"o".repeat(1_182)}-OLD-TAIL`)
+    const short = completed("call_short_boundary_emoji", "😀")
+    const newestText = "N".repeat(38_976)
+    const newest = completed("call_short_boundary_new", newestText)
+    const source = SessionMessage.Assistant.make({
+      id: id("short-boundary"),
+      type: "assistant",
+      agent: build,
+      model: { id: Model.ID.make("model"), providerID: Provider.ID.make("provider") },
+      content: [oldest, short, newest],
+      time: { created, completed: created },
+    })
+    const results = toLLMMessages([source], model, model.providerID, { toolResultTokens: 10_000 })
+      .flatMap((message) => message.content)
+      .filter((part) => part.type === "tool-result")
+    const byID = new Map(
+      results.map((part) => [
+        part.id,
+        part.result.type === "text" && typeof part.result.value === "string" ? part.result.value : "",
+      ]),
+    )
+    const boundary = byID.get("call_short_boundary_old") ?? ""
+
+    expect(Token.estimate(newestText)).toBe(9_744)
+    expect(byID.get("call_short_boundary_new")).toBe(newestText)
+    expect(byID.get("call_short_boundary_emoji")).toBe("😀")
+    expect(Token.estimate(boundary)).toBeLessThanOrEqual(255)
+    expect(boundary).toStartWith("OLD-HEAD-")
+    expect(boundary).toEndWith("-OLD-TAIL")
+    expect(boundary).toContain("trimmed for context")
+  })
+
+  test("preserves remote compaction output as opaque provider metadata", () => {
+    const remote = [
+      { type: "compaction", id: "cmp_1", encrypted_content: "opaque-checkpoint" },
+      { type: "message", id: "msg_remote", role: "assistant", content: [] },
+    ]
+    const messages = toLLMMessages(
+      [
+        SessionMessage.Compaction.make({
+          id: id("remote-compaction"),
+          type: "compaction",
+          status: "completed",
+          reason: "auto",
+          summary: "",
+          recent: "",
+          remote,
+          time: { created },
+        }),
+      ],
+      model,
+    )
+
+    expect(messages).toEqual([
+      Message.make({
+        id: id("remote-compaction"),
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "[OpenCode remote compaction checkpoint]",
+            providerMetadata: { opencode: { remoteCompaction: { output: remote } } },
+          },
+        ],
+      }),
+    ])
+  })
+
+  test("pairs local tool outputs with remote compaction function calls", () => {
+    const remote = [
+      { type: "compaction", id: "cmp_1", encrypted_content: "opaque-checkpoint" },
+      {
+        type: "function_call",
+        id: "fc_yfu7VPkdtvv2d0aHKRZ2c7Ls",
+        call_id: "call_yfu7VPkdtvv2d0aHKRZ2c7Ls",
+        name: "read",
+        arguments: "{\"path\":\"README.md\"}",
+      },
+    ]
+    const messages = toLLMMessages(
+      [
+        SessionMessage.Compaction.make({
+          id: id("remote-compaction"),
+          type: "compaction",
+          status: "completed",
+          reason: "auto",
+          summary: "",
+          recent: "",
+          remote,
+          time: { created },
+        }),
+        SessionMessage.Assistant.make({
+          id: id("tools"),
+          type: "assistant",
+          agent: build,
+          model: { id: Model.ID.make("model"), providerID: Provider.ID.make("provider") },
+          content: [
+            SessionMessage.AssistantTool.make({
+              type: "tool",
+              id: "call_yfu7VPkdtvv2d0aHKRZ2c7Ls",
+              name: "read",
+              state: SessionMessage.ToolStateCompleted.make({
+                status: "completed",
+                input: { path: "README.md" },
+                content: [{ type: "text", text: "Hello" }],
+              }),
+              time: { created, completed: created },
+            }),
+          ],
+          time: { created, completed: created },
+        }),
+      ],
+      model,
+    )
+
+    expect(messages).toHaveLength(2)
+    expect(messages[0]).toEqual(
+      Message.make({
+        id: id("remote-compaction"),
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "[OpenCode remote compaction checkpoint]",
+            providerMetadata: { opencode: { remoteCompaction: { output: remote } } },
+          },
+        ],
+      }),
+    )
+    expect(messages[1]).toMatchObject({
+      role: "tool",
+      content: [
+        {
+          type: "tool-result",
+          id: "call_yfu7VPkdtvv2d0aHKRZ2c7Ls",
+          name: "read",
+          result: { type: "text", value: "Hello" },
+        },
+      ],
+    })
+    expect(messages.flatMap((message) => message.content).some((part) => part.type === "tool-call")).toBe(false)
+  })
+
   test("omits empty assistant turns", () => {
     const assistant = (value: string, content: SessionMessage.Assistant["content"]) =>
       SessionMessage.Assistant.make({

@@ -5,12 +5,14 @@ import { Keymap } from "../context/keymap"
 import { useTheme } from "../context/theme"
 import { useDialog, type DialogContext } from "../ui/dialog"
 import { useConfig } from "../config"
+import { useI18n } from "../context/i18n"
 
 export function DialogWorktreeName(props: { onConfirm: (name: string) => void }) {
   const dialog = useDialog()
   const theme = useTheme("elevated")
   const shortcuts = Keymap.useShortcuts()
   const config = useConfig().data
+  const { t } = useI18n()
   const [inputTarget, setInputTarget] = createSignal<InputRenderable>()
   let input: InputRenderable
 
@@ -31,8 +33,8 @@ export function DialogWorktreeName(props: { onConfirm: (name: string) => void })
     commands: [
       {
         id: "dialog.worktree.generate",
-        title: "Generate worktree name",
-        group: "Dialog",
+        title: t("dialog.worktreeName.generateCommand"),
+        group: t("dialog.group"),
         run: generate,
       },
     ],
@@ -50,7 +52,7 @@ export function DialogWorktreeName(props: { onConfirm: (name: string) => void })
     <box paddingLeft={2} paddingRight={2} gap={1}>
       <box flexDirection="row" justifyContent="space-between">
         <text attributes={TextAttributes.BOLD} fg={theme.text.default}>
-          Name worktree
+          {t("dialog.worktreeName.title")}
         </text>
         <text fg={theme.text.subdued} onMouseUp={() => dialog.clear()}>
           esc
@@ -63,7 +65,7 @@ export function DialogWorktreeName(props: { onConfirm: (name: string) => void })
           setInputTarget(value)
         }}
         onSubmit={confirm}
-        placeholder="Worktree name"
+        placeholder={t("dialog.worktreeName.placeholder")}
         placeholderColor={theme.text.subdued}
         textColor={theme.text.formfield.default}
         focusedTextColor={theme.text.formfield.default}
@@ -71,10 +73,10 @@ export function DialogWorktreeName(props: { onConfirm: (name: string) => void })
       />
       <box paddingBottom={1} flexDirection="row" gap={2}>
         <text fg={theme.text.default}>
-          enter <span style={{ fg: theme.text.subdued }}>submit</span>
+          enter <span style={{ fg: theme.text.subdued }}>{t("dialog.worktreeName.submit")}</span>
         </text>
         <text fg={theme.text.default}>
-          {shortcuts.get("dialog.worktree.generate")} <span style={{ fg: theme.text.subdued }}>generate one</span>
+          {shortcuts.get("dialog.worktree.generate")} <span style={{ fg: theme.text.subdued }}>{t("dialog.worktreeName.generateOne")}</span>
         </text>
       </box>
     </box>

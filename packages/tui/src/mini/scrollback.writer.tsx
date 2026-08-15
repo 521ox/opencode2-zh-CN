@@ -6,7 +6,8 @@ import {
   type ScrollbackRenderContext,
   type ScrollbackWriter,
 } from "@opentui/core"
-import { Match, Switch, createMemo } from "solid-js"
+import { Match, Switch, createComponent, createMemo } from "solid-js"
+import { I18nProvider, useI18n } from "../context/i18n"
 import { entryBody, entryFlags } from "./entry.body"
 import { monoMarkdownRenderable, monoMarkdownTableOptions } from "./mono"
 import { entryColor, entryLook, entrySyntax } from "./scrollback.shared"
@@ -81,8 +82,9 @@ export function RunEntryContent(props: {
   theme?: RunTheme
   opts?: ScrollbackOptions
 }) {
+  const { locale, t } = useI18n()
   const theme = createMemo(() => props.theme ?? RUN_THEME_FALLBACK)
-  const body = createMemo(() => props.body ?? entryBody(props.commit, props.opts))
+  const body = createMemo(() => props.body ?? entryBody(props.commit, { ...props.opts, locale: locale() }))
   const style = createMemo(() => entryLook(props.commit, theme().entry))
   const syntax = createMemo(() => entrySyntax(theme()))
   const color = createMemo(() => entryColor(props.commit, theme()))
@@ -124,15 +126,6 @@ export function RunEntryContent(props: {
 
   return (
     <Switch fallback={null}>
-      <Match when={props.commit.compaction}>
-        <box width="100%" flexDirection="row" alignItems="center">
-          <box border={["top"]} borderColor={theme().block.muted} flexGrow={1} />
-          <box paddingLeft={1} paddingRight={1}>
-            <text fg={theme().block.muted}>{props.commit.text}</text>
-          </box>
-          <box border={["top"]} borderColor={theme().block.muted} flexGrow={1} />
-        </box>
-      </Match>
       <Match when={text()}>
         <text width="100%" wrapMode="word" fg={style().fg} attributes={style().attrs}>
           {text()!.content}
@@ -231,7 +224,7 @@ export function RunEntryContent(props: {
       <Match when={question_snapshot()}>
         <box width="100%" flexDirection="column" gap={1}>
           <text width="100%" wrapMode="word" fg={theme().block.muted}>
-            # Questions
+            {t("mini.scrollback.questions")}
           </text>
           <box width="100%" flexDirection="column" gap={1}>
             {question_snapshot()!.items.map((item) => (
@@ -276,14 +269,20 @@ export function entryWriter(input: {
   opts?: ScrollbackOptions
 }): ScrollbackWriter {
   return createScrollbackWriter(
-    () => (
-      <RunEntryContent
-        commit={input.commit}
-        body={input.body}
-        theme={input.theme}
-        opts={{ ...input.opts, suppressBackgrounds: true }}
-      />
-    ),
+    () =>
+      createComponent(I18nProvider, {
+        locale: input.opts?.locale ?? "en",
+        get children() {
+          return (
+            <RunEntryContent
+              commit={input.commit}
+              body={input.body}
+              theme={input.theme}
+              opts={{ ...input.opts, suppressBackgrounds: true }}
+            />
+          )
+        },
+      }),
     entryFlags(input.commit),
   )
 }

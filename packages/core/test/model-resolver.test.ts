@@ -210,7 +210,7 @@ describe("ModelResolver", () => {
     ),
   )
 
-  it.effect("uses the API modelID instead of the catalog ID for native OpenAI routes", () =>
+  it.effect("uses the API modelID instead of the catalog ID for compatible OpenAI Responses routes", () =>
     Effect.gen(function* () {
       const catalog = model(Provider.aisdk("@ai-sdk/openai"), {
         settings: { baseURL: "https://openai.example/v1" },
@@ -221,8 +221,8 @@ describe("ModelResolver", () => {
       expect(catalog.id).toBe(ID.make("test-model"))
       expect(resolved).toMatchObject({ id: "api-test-model", provider: "test-provider" })
       expect(resolved.route).toMatchObject({
-        id: "openai-responses",
-        providerMetadataKey: "openai",
+        id: "openai-compatible-responses",
+        providerMetadataKey: "openresponses",
         endpoint: { baseURL: "https://openai.example/v1" },
         defaults: {
           headers: { "x-test": "header" },
@@ -372,7 +372,36 @@ describe("ModelResolver", () => {
         temperature: 0.2,
       })
       expect(resolved.route.defaults.providerOptions).toEqual({
-        openai: { store: false, reasoningEffort: "high" },
+        openresponses: { reasoningEffort: "high" },
+      })
+    }),
+  )
+
+  it.effect("lowers a selected native OpenAI variant into the Responses request", () =>
+    Effect.gen(function* () {
+      const catalog = model("@opencode-ai/ai/providers/openai", {
+        modelID: "gpt-5.6-sol",
+        settings: { apiKey: "fixture", baseURL: "https://openai.example/v1" },
+        variants: [
+          {
+            id: VariantID.make("max"),
+            settings: {
+              reasoningEffort: "max",
+              reasoningSummary: "auto",
+              textVerbosity: "high",
+            },
+            headers: {},
+            body: {},
+          },
+        ],
+      })
+      const resolved = yield* ModelResolver.resolveModel(catalog, VariantID.make("max"))
+      const prepared = yield* compileRequest(LLM.request({ model: resolved, prompt: "Hello" }))
+
+      expect(prepared.body).toMatchObject({
+        store: false,
+        reasoning: { effort: "max", summary: "auto" },
+        text: { verbosity: "high" },
       })
     }),
   )

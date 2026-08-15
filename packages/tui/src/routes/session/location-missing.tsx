@@ -5,6 +5,7 @@ import { Locale } from "../../util/locale"
 import { abbreviateHome } from "../../util/path-format"
 import { SessionQuestion } from "./permission"
 import { usePromptMove } from "../../component/prompt/move"
+import { useI18n } from "../../context/i18n"
 
 export function SessionLocationMissing(props: { directory: string; projectID: string; sessionID: string }) {
   const move = usePromptMove({ projectID: () => props.projectID, sessionID: () => props.sessionID })
@@ -14,22 +15,23 @@ export function SessionLocationMissing(props: { directory: string; projectID: st
 export function SessionLocationUnavailable(props: { directory: string; onMove: () => void }) {
   const paths = useTuiPaths()
   const theme = useTheme("elevated")
+  const i18n = useI18n()
   const directory = createMemo(() => Locale.truncateMiddle(abbreviateHome(props.directory, paths.home), 72))
 
   return (
     <SessionQuestion
       id="session.location-missing"
-      group="Session recovery"
-      choicesLabel="Recovery actions"
+      group={i18n.t("session.location.recovery")}
+      choicesLabel={i18n.t("session.location.recoveryActions")}
       instance={props.directory}
-      title="Session location unavailable"
+      title={i18n.t("session.location.unavailable")}
       body={
         <box paddingLeft={1} gap={1}>
           <text fg={theme.text.subdued}>{directory()}</text>
-          <text fg={theme.text.default}>Choose another directory to continue this session.</text>
+          <text fg={theme.text.default}>{i18n.t("session.location.chooseDirectory")}</text>
         </box>
       }
-      options={{ move: "Choose directory" }}
+      options={{ move: i18n.t("session.location.chooseDirectoryAction") }}
       onSelect={props.onMove}
     />
   )

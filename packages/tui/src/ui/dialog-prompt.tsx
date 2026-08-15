@@ -1,5 +1,6 @@
 import { TextareaRenderable, TextAttributes } from "@opentui/core"
 import { Keymap } from "../context/keymap"
+import { useI18n } from "../context/i18n"
 import { useTheme } from "../context/theme"
 import { useDialog } from "./dialog"
 import { Show, createEffect, createSignal, onMount, type JSX } from "solid-js"
@@ -19,6 +20,7 @@ export type DialogPromptProps = {
 
 export function DialogPrompt(props: DialogPromptProps) {
   const dialog = useDialog()
+  const { t } = useI18n()
   const theme = useTheme("elevated")
   const shortcuts = Keymap.useShortcuts()
   const config = useConfig().data
@@ -39,8 +41,8 @@ export function DialogPrompt(props: DialogPromptProps) {
     commands: [
       {
         id: "dialog.prompt.submit",
-        title: "Submit dialog prompt",
-        group: "Dialog",
+        title: t("ui.dialog.prompt.submit"),
+        group: t("ui.group.dialog"),
         run: confirm,
       },
     ],
@@ -92,7 +94,7 @@ export function DialogPrompt(props: DialogPromptProps) {
             setTextareaTarget(val)
           }}
           initialValue={props.value}
-          placeholder={props.placeholder ?? "Enter text"}
+          placeholder={props.placeholder ?? t("ui.dialog.prompt.enterText")}
           placeholderColor={theme.text.subdued}
           textColor={props.busy ? theme.text.formfield.disabled : theme.text.formfield.default}
           focusedTextColor={props.busy ? theme.text.formfield.disabled : theme.text.formfield.default}
@@ -100,14 +102,14 @@ export function DialogPrompt(props: DialogPromptProps) {
           cursorStyle={config.cursor}
         />
         <Show when={props.busy}>
-          <Spinner color={theme.text.subdued}>{props.busyText ?? "Working..."}</Spinner>
+          <Spinner color={theme.text.subdued}>{props.busyText ?? t("ui.dialog.prompt.working")}</Spinner>
         </Show>
       </box>
       <box paddingBottom={1} gap={1} flexDirection="row">
-        <Show when={!props.busy} fallback={<text fg={theme.text.subdued}>processing...</text>}>
+        <Show when={!props.busy} fallback={<text fg={theme.text.subdued}>{t("ui.dialog.prompt.processing")}</text>}>
           <Show when={shortcuts.get("dialog.prompt.submit")}>
             <text fg={theme.text.default}>
-              {shortcuts.get("dialog.prompt.submit")} <span style={{ fg: theme.text.subdued }}>submit</span>
+              {shortcuts.get("dialog.prompt.submit")} <span style={{ fg: theme.text.subdued }}>{t("ui.dialog.prompt.submitLabel")}</span>
             </text>
           </Show>
         </Show>

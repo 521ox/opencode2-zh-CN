@@ -6,6 +6,7 @@ import { SplitBorder } from "../../../ui/border"
 import { Keymap } from "../../../context/keymap"
 import { SubagentsTab } from "./subagents-tab"
 import { ShellTab } from "./shell-tab"
+import { useI18n } from "../../../context/i18n"
 
 export interface ComposerHint {
   label: string
@@ -40,6 +41,7 @@ export type ComposerProps = {
 
 export function Composer(props: ComposerProps) {
   const theme = useTheme("elevated")
+  const i18n = useI18n()
 
   const [store, setStore] = createStore({
     tabs: {} as Record<string, Tab>,
@@ -96,9 +98,24 @@ export function Composer(props: ComposerProps) {
     enabled: () => props.open,
     priority: 1,
     commands: [
-      { bind: "left", title: "Previous tab", group: "Composer", run: () => switchTab(-1) },
-      { bind: "right", title: "Next tab", group: "Composer", run: () => switchTab(1) },
-      { bind: "escape", title: "Close composer", group: "Composer", run: close },
+      {
+        bind: "left",
+        title: i18n.t("session.composer.command.previousTab"),
+        group: i18n.t("session.group.composer"),
+        run: () => switchTab(-1),
+      },
+      {
+        bind: "right",
+        title: i18n.t("session.composer.command.nextTab"),
+        group: i18n.t("session.group.composer"),
+        run: () => switchTab(1),
+      },
+      {
+        bind: "escape",
+        title: i18n.t("session.composer.command.close"),
+        group: i18n.t("session.group.composer"),
+        run: close,
+      },
     ],
   }))
 
@@ -161,7 +178,7 @@ export function Composer(props: ComposerProps) {
               <Show when={tabList().length > 1}>
                 <text>
                   <span style={{ fg: theme.text.default }}>
-                    <b>tabs</b>{" "}
+                    <b>{i18n.t("session.composer.tabs")}</b>{" "}
                   </span>
                   <span style={{ fg: theme.text.subdued }}>←/→</span>
                 </text>

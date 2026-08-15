@@ -19,6 +19,7 @@ import { stringWidth } from "../util/string-width"
 import { withTimestampedFallback } from "@opencode-ai/util/session-title-fallback"
 import { Spinner } from "./spinner"
 import { projectName } from "../util/project"
+import { useI18n } from "../context/i18n"
 
 const RECENT_LIMIT = 8
 export const DialogOpenKey = Symbol("DialogOpen")
@@ -49,8 +50,21 @@ export function DialogOpen(props: { sessions: SessionInfo[] }) {
   const paths = useTuiPaths()
   const dimensions = useTerminalDimensions()
   const shortcuts = Keymap.useShortcuts()
+  const { t } = useI18n()
   const [filter, setFilter] = createSignal("")
   const [selectionMoved, setSelectionMoved] = createSignal(false)
+  const timeAgo = (timestamp: number) => {
+    const minutes = Math.floor((Date.now() - timestamp) / 60_000)
+    if (minutes < 1) return t("dialog.open.now")
+    if (minutes < 60) return t("dialog.open.minutes", { count: minutes })
+    const hours = Math.floor(minutes / 60)
+    if (hours < 24) return t("dialog.open.hours", { count: hours })
+    const days = Math.floor(hours / 24)
+    if (days < 30) return t("dialog.open.days", { count: days })
+    const months = Math.floor(days / 30)
+    if (months < 12) return t("dialog.open.months", { count: months })
+    return t("dialog.open.years", { count: Math.floor(days / 365) })
+  }
 
   const [matched] = createResource(
     () => {
@@ -102,7 +116,7 @@ export function DialogOpen(props: { sessions: SessionInfo[] }) {
         title: withTimestampedFallback(session),
         searchText: session.id,
         value: { type: "session", sessionID: session.id } as OpenTarget,
-        category: "Sessions",
+        category: t("dialog.open.sessions"),
         footer: `${name ? `${Locale.truncate(name, 20)} · ` : ""}${timeAgo(session.time.updated)}`,
         onSelect: () => location.set(session.location),
         gutter: running
@@ -132,7 +146,7 @@ export function DialogOpen(props: { sessions: SessionInfo[] }) {
           footer: truncateFilePath(footer, width),
           searchText: footer,
           value: { type: "project", directory: project.canonical } as OpenTarget,
-          category: "Projects",
+          category: t("dialog.open.projects"),
           gutter:
             project.canonical === current?.canonical
               ? () => <text fg={theme.text.formfield.selected}>●</text>
@@ -145,8 +159,8 @@ export function DialogOpen(props: { sessions: SessionInfo[] }) {
 
   return (
     <DialogSelect
-      title="Open"
-      placeholder="Search sessions and projects…"
+      title={t("dialog.open.title")}
+      placeholder={t("dialog.open.placeholder")}
       options={options()}
       current={currentSessionID() ? ({ type: "session", sessionID: currentSessionID()! } as OpenTarget) : undefined}
       focusCurrent={false}
@@ -158,8 +172,8 @@ export function DialogOpen(props: { sessions: SessionInfo[] }) {
         <box paddingLeft={4} paddingRight={4}>
           <text fg={theme.text.subdued}>
             {shortcuts.get("session.list")
-              ? `No matches · search all sessions with ${shortcuts.get("session.list")}`
-              : "No matches"}
+              ? t("dialog.open.noMatchesWithShortcut", { shortcut: shortcuts.get("session.list") ?? "" })
+              : t("dialog.open.noMatches")}
           </text>
         </box>
       }
@@ -175,17 +189,4 @@ export function DialogOpen(props: { sessions: SessionInfo[] }) {
       }}
     />
   )
-}
-
-function timeAgo(timestamp: number) {
-  const minutes = Math.floor((Date.now() - timestamp) / 60_000)
-  if (minutes < 1) return "now"
-  if (minutes < 60) return `${minutes}m`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h`
-  const days = Math.floor(hours / 24)
-  if (days < 30) return `${days}d`
-  const months = Math.floor(days / 30)
-  if (months < 12) return `${months}mo`
-  return `${Math.floor(days / 365)}y`
 }

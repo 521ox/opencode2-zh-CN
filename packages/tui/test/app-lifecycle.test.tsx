@@ -312,6 +312,7 @@ test("configured app bindings execute settings and permission commands", async (
         config: {
           get: async () => ({
             animations: false,
+            locale: "en" as const,
             keybinds: { "opencode.settings": "f6", "permission.mode": "f7" },
           }),
           update: async () => ({}),

@@ -1,9 +1,10 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
 import { BoxRenderable, RGBA, type RootRenderable } from "@opentui/core"
-import { testRender } from "@opentui/solid"
-import { createSignal } from "solid-js"
+import { testRender as testRenderBase } from "@opentui/solid"
+import { createSignal, type JSX } from "solid-js"
 import type { FormInfo } from "@opencode-ai/client/promise"
+import { I18nProvider } from "../../src/context/i18n"
 import { Keymap } from "../../src/context/keymap"
 import {
   RUN_COMMAND_PANEL_ROWS,
@@ -41,6 +42,10 @@ import { RejectField } from "../../src/mini/footer.permission"
 import { createTuiResolvedConfig } from "../fixture/tui-runtime"
 
 const tuiConfig = createTuiResolvedConfig()
+
+function testRender(component: () => JSX.Element, options: Parameters<typeof testRenderBase>[1]) {
+  return testRenderBase(() => <I18nProvider locale="en">{component()}</I18nProvider>, options)
+}
 
 function command(input: { name: string; description: string; source?: "command" | "mcp" | "skill" }) {
   return {

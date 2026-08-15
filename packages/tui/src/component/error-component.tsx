@@ -4,12 +4,14 @@ import { createSignal, For, Show } from "solid-js"
 import { getScrollAcceleration } from "../util/scroll"
 import { useClipboard } from "../context/clipboard"
 import { useExit } from "../context/exit"
+import { useI18n } from "../context/i18n"
 import { useTuiApp } from "../context/runtime"
 import { describeOS, describeTerminal } from "../util/system"
 
 export function ErrorComponent(props: { error: Error; reset: () => void; mode?: "dark" | "light" }) {
   const term = useTerminalDimensions()
   const exit = useExit()
+  const { t } = useI18n()
   const clipboard = useClipboard()
   const app = useTuiApp()
   const [copyState, setCopyState] = createSignal<"idle" | "copied" | "failed">("idle")
@@ -41,8 +43,8 @@ export function ErrorComponent(props: { error: Error; reset: () => void; mode?: 
         success: "#7fd88f",
       }
 
-  const message = props.error.message || "An unknown error occurred."
-  const stack = props.error.stack || "No stack trace available."
+  const message = props.error.message || t("ui.error.unknown")
+  const stack = props.error.stack || t("ui.error.noStack")
   const issueURL = buildIssueURL(message, stack, app.version)
 
   const copyReport = () => {
@@ -55,12 +57,17 @@ export function ErrorComponent(props: { error: Error; reset: () => void; mode?: 
   const actions = [
     {
       key: "c",
-      label: () => ({ idle: "Copy report", copied: "✓ Copied", failed: "Copy failed" })[copyState()],
+      label: () =>
+        ({
+          idle: t("ui.error.copyReport"),
+          copied: t("ui.error.copied"),
+          failed: t("ui.error.copyFailed"),
+        })[copyState()],
       copy: true,
       onUse: copyReport,
     },
-    { key: "r", label: () => "Restart", onUse: props.reset },
-    { key: "q", label: () => "Quit", onUse: () => exit() },
+    { key: "r", label: () => t("ui.error.restart"), onUse: props.reset },
+    { key: "q", label: () => t("ui.error.quit"), onUse: () => exit() },
   ]
   const [selected, setSelected] = createSignal(0)
   const move = (delta: number) => setSelected((prev) => (prev + delta + actions.length) % actions.length)
@@ -117,10 +124,10 @@ export function ErrorComponent(props: { error: Error; reset: () => void; mode?: 
         {/* Headline */}
         <box flexDirection="column" alignItems="center" flexShrink={0}>
           <text attributes={TextAttributes.BOLD} fg={colors.text}>
-            OpenCode crashed
+            {t("ui.error.crashed")}
           </text>
           <Show when={showSubtext()}>
-            <text fg={colors.muted}>An unexpected error stopped the session.</text>
+            <text fg={colors.muted}>{t("ui.error.unexpected")}</text>
           </Show>
         </box>
 
@@ -130,7 +137,7 @@ export function ErrorComponent(props: { error: Error; reset: () => void; mode?: 
           border
           borderStyle="rounded"
           borderColor={colors.error}
-          title=" Error "
+          title={` ${t("ui.error.error")} `}
           titleColor={colors.error}
           paddingLeft={2}
           paddingRight={2}
@@ -184,9 +191,9 @@ export function ErrorComponent(props: { error: Error; reset: () => void; mode?: 
           border
           borderStyle="rounded"
           borderColor={colors.borderSubtle}
-          title=" Stack trace "
+          title={` ${t("ui.error.stackTrace")} `}
           titleColor={colors.muted}
-          bottomTitle=" ↑↓ scroll "
+          bottomTitle={` ${t("ui.error.scroll")} `}
           bottomTitleAlignment="right"
           paddingLeft={1}
           paddingRight={1}
@@ -205,10 +212,10 @@ export function ErrorComponent(props: { error: Error; reset: () => void; mode?: 
           <box flexDirection="column" alignItems="center" flexShrink={0}>
             <text fg={colors.muted}>
               {copyState() === "copied"
-                ? "Report copied — paste it into a new GitHub issue."
+                ? t("ui.error.reportCopied")
                 : copyState() === "failed"
-                  ? "Clipboard write failed. Try again or report the crash manually."
-                  : "Copy the report and open a GitHub issue to help us fix this."}
+                  ? t("ui.error.clipboardWriteFailed")
+                  : t("ui.error.reportHelp")}
             </text>
             <text fg={colors.muted}>OpenCode {app.version}</text>
           </box>

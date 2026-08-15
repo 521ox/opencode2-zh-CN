@@ -10,6 +10,7 @@
 // Resolves when the footer closes and all in-flight work finishes.
 import { SessionMessage } from "@opencode-ai/schema/session-message"
 import { Locale } from "../util/locale"
+import type { Translator } from "../i18n"
 import { isCompactCommand, isExitCommand, isNewCommand } from "./prompt.shared"
 import type { FooterApi, FooterEvent, RunDelivery, RunPrompt } from "./types"
 
@@ -18,6 +19,7 @@ type Trace = {
 }
 
 export type QueueInput = {
+  t: Translator
   footer: FooterApi
   initialInput?: string
   trace?: Trace
@@ -98,11 +100,11 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
                 {
                   type: "stream.patch",
                   patch: {
-                    status: "new sessions unavailable",
+                    status: input.t("mini.queue.status.newSessionsUnavailable"),
                   },
                 },
                 {
-                  status: "new sessions unavailable",
+                  status: input.t("mini.queue.status.newSessionsUnavailable"),
                 },
               )
               continue
@@ -113,12 +115,12 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
                 type: "stream.patch",
                 patch: {
                   phase: "running",
-                  status: "starting new session",
+                  status: input.t("mini.queue.status.startingNewSession"),
                 },
               },
               {
                 phase: "running",
-                status: "starting new session",
+                status: input.t("mini.queue.status.startingNewSession"),
               },
             )
             await input.onNewSession()
@@ -131,12 +133,12 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
                 type: "stream.patch",
                 patch: {
                   phase: "running",
-                  status: "compacting session",
+                  status: input.t("mini.transport.status.compactingSession"),
                 },
               },
               {
                 phase: "running",
-                status: "compacting session",
+                status: input.t("mini.transport.status.compactingSession"),
               },
             )
             await input.onCompact?.()
@@ -156,7 +158,7 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
             { type: "turn.send" },
             {
               phase: "running",
-              status: "sending prompt",
+              status: input.t("mini.footer.status.sendingPrompt"),
             },
           )
           const start = Date.now()

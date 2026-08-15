@@ -3,6 +3,8 @@ import { useConfig } from "../config"
 import { useThemes } from "../context/theme"
 import { DialogSelect } from "../ui/dialog-select"
 import { useToast } from "../ui/toast"
+import { useI18n } from "../context/i18n"
+import type { Translator } from "../i18n"
 
 type Setting = {
   title: string
@@ -19,6 +21,15 @@ type Setting = {
 }
 
 export const settings: Setting[] = [
+  {
+    title: "Language",
+    category: "Appearance",
+    path: ["locale"],
+    default: "zh",
+    values: ["zh", "en"],
+    labels: ["Simplified Chinese", "English"],
+    keywords: ["locale", "translation", "English", "Chinese"],
+  },
   {
     title: "Theme",
     category: "Appearance",
@@ -297,16 +308,81 @@ export function settingID(setting: Setting) {
   return setting.path.join(".")
 }
 
+export function localizeSettings(t: Translator): Setting[] {
+  const titles: Record<string, string> = {
+    locale: t("dialog.config.setting.language"),
+    "theme.name": t("dialog.config.setting.themeName"),
+    "theme.mode": t("dialog.config.setting.colorMode"),
+    animations: t("dialog.config.setting.animations"),
+    "session.sidebar": t("dialog.config.setting.sidebar"),
+    "session.scrollbar": t("dialog.config.setting.scrollbar"),
+    "session.thinking": t("dialog.config.setting.thinking"),
+    "session.markdown": t("dialog.config.setting.markdown"),
+    "session.grouping": t("dialog.config.setting.grouping"),
+    "session.image_preview": t("dialog.config.setting.transcriptImages"),
+    "session.new_location": t("dialog.config.setting.newSessionLocation"),
+    "tabs.enabled": t("dialog.config.setting.tabsEnabled"),
+    "tabs.scope": t("dialog.config.setting.tabsScope"),
+    "tabs.layout": t("dialog.config.setting.tabsLayout"),
+    "diffs.view": t("dialog.config.setting.diffsLayout"),
+    "diffs.wrap": t("dialog.config.setting.diffsWrapping"),
+    "diffs.tree": t("dialog.config.setting.diffsFileTree"),
+    "diffs.single": t("dialog.config.setting.diffsSinglePatch"),
+    "scroll.speed": t("dialog.config.setting.scrollSpeed"),
+    "scroll.acceleration": t("dialog.config.setting.scrollAcceleration"),
+    mouse: t("dialog.config.setting.mouse"),
+    "prompt.editor": t("dialog.config.setting.editorContext"),
+    "prompt.paste": t("dialog.config.setting.largePastes"),
+    "prompt.image_preview": t("dialog.config.setting.imagePreviews"),
+    "leader.timeout": t("dialog.config.setting.leaderTimeout"),
+    "attention.enabled": t("dialog.config.setting.attention"),
+    "attention.notifications": t("dialog.config.setting.notifications"),
+    "attention.sound": t("dialog.config.setting.sounds"),
+    "attention.volume": t("dialog.config.setting.volume"),
+    "terminal.title": t("dialog.config.setting.windowTitle"),
+    "terminal.copy_on_select": t("dialog.config.setting.copyOnSelect"),
+    "debug.devtools": t("dialog.config.setting.developerTools"),
+  }
+  const categories: Record<string, string> = {
+    Appearance: t("dialog.config.category.appearance"),
+    Session: t("dialog.config.category.session"),
+    Tabs: t("dialog.config.category.tabs"),
+    Diffs: t("dialog.config.category.diffs"),
+    Input: t("dialog.config.category.input"),
+    Alerts: t("dialog.config.category.alerts"),
+    Terminal: t("dialog.config.category.terminal"),
+    Debug: t("dialog.config.category.debug"),
+  }
+  const labels: Record<string, string> = {
+    off: t("dialog.config.value.off"),
+    on: t("dialog.config.value.on"),
+    "Simplified Chinese": t("dialog.config.value.simplifiedChinese"),
+    English: t("dialog.config.value.english"),
+    "launch directory": t("dialog.config.value.launchDirectory"),
+    "active session": t("dialog.config.value.activeSession"),
+    "current directory": t("dialog.config.value.currentDirectory"),
+    global: t("dialog.config.value.global"),
+  }
+  return settings.map((setting) => ({
+    ...setting,
+    title: titles[settingID(setting)],
+    category: categories[setting.category],
+    labels: setting.labels?.map((label) => labels[label] ?? label),
+  }))
+}
+
 export function DialogConfig(props: { current?: string }) {
   const config = useConfig()
   const toast = useToast()
   const themes = useThemes()
+  const { t } = useI18n()
   const current = Math.max(
     0,
     settings.findIndex((setting) => settingID(setting) === props.current),
   )
   const [selected, setSelected] = createSignal(current)
   const [saving, setSaving] = createSignal(false)
+  const localizedSettings = createMemo(() => localizeSettings(t))
 
   const value = (setting: Setting) => {
     const current = setting.path.reduce<unknown>((result, key) => {
@@ -327,7 +403,7 @@ export function DialogConfig(props: { current?: string }) {
     return index === undefined || index < 0 ? String(current) : (setting.labels?.[index] ?? String(current))
   }
   const options = createMemo(() =>
-    settings.map((setting, index) => ({
+    localizedSettings().map((setting, index) => ({
       title: setting.title,
       category: setting.category,
       searchText: setting.keywords?.join(" "),
@@ -360,24 +436,24 @@ export function DialogConfig(props: { current?: string }) {
 
   return (
     <DialogSelect
-      title="Settings"
+      title={t("dialog.config.title")}
       options={options()}
       current={current}
       filterThreshold={0.7}
       onMove={(option) => setSelected(option.value)}
       onSelect={(option) => void change(1, option.value)}
-      footerHints={[{ title: "←/→", label: "change" }]}
+      footerHints={[{ title: "←/→", label: t("dialog.config.change") }]}
       bindings={[
         {
           bind: "left",
-          title: "Previous value",
-          group: "Settings",
+          title: t("dialog.config.previousValue"),
+          group: t("dialog.config.title"),
           run: () => void change(-1),
         },
         {
           bind: "right",
-          title: "Next value",
-          group: "Settings",
+          title: t("dialog.config.nextValue"),
+          group: t("dialog.config.title"),
           run: () => void change(1),
         },
       ]}

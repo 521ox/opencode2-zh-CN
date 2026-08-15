@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import { LLMClient, LLMEvent, LanguageModel, type LLMRequest } from "@opencode-ai/ai"
-import { OpenAIChat } from "@opencode-ai/ai/protocols"
+import { OpenAIChat, OpenAICompatibleResponses, OpenAIResponses } from "@opencode-ai/ai/protocols"
+import type { AnyRoute } from "@opencode-ai/ai/route"
 import { Config } from "@opencode-ai/core/config"
 import { Database } from "@opencode-ai/core/database/database"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
@@ -151,6 +152,7 @@ it.effect("auto compaction reserves a buffer below the prompt ceiling", () =>
         provider: "test-provider",
         route: OpenAIChat.route.with({ limits }),
       }),
+      providerPackage: "@opencode-ai/ai/providers/test",
       cost: [],
       messages: [
         Schema.decodeUnknownSync(SessionMessage.Assistant)({
@@ -176,6 +178,60 @@ it.effect("auto compaction reserves a buffer below the prompt ceiling", () =>
     const outputLimited = { context: 100_000, output: 30_000 }
     expect(compaction.required(input(69_999, outputLimited))).toBe(false)
     expect(compaction.required(input(70_000, outputLimited))).toBe(true)
+  }),
+)
+
+it.effect("remote compaction requires the native OpenAI Responses route owner", () =>
+  Effect.gen(function* () {
+    const compaction = yield* SessionCompaction.Service
+    const session = Session.Info.make({
+      id: Session.ID.make("ses_remote_compaction_owner"),
+      projectID: Project.ID.global,
+      cost: Money.USD.zero,
+      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      time: { created: DateTime.makeUnsafe(0), updated: DateTime.makeUnsafe(0) },
+      location: Location.Ref.make({ directory: AbsolutePath.make("/tmp") }),
+    })
+    const limits = { context: 400_000, input: 380_000, output: 128_000 }
+    const message = Schema.decodeUnknownSync(SessionMessage.Assistant)({
+      id: SessionMessage.ID.make("msg_remote_compaction_owner"),
+      type: "assistant",
+      agent: Agent.defaultID,
+      model: { id: "gpt-5", providerID: "openai" },
+      content: [],
+      tokens: { input: 360_000, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      time: { created: 0, completed: 0 },
+    })
+    const input = (
+      provider: string,
+      route: AnyRoute = OpenAIResponses.route,
+      providerPackage = "@opencode-ai/ai/providers/openai",
+    ) => ({
+      session,
+      model: LanguageModel.make({
+        id: "gpt-5",
+        provider,
+        route: route.with({ provider, limits, endpoint: { baseURL: "https://api.openai.test/v1" } }),
+      }),
+      providerPackage,
+      cost: [],
+      messages: [message],
+    })
+
+    expect(compaction.remoteThreshold(input("openai"))).toBe(360_000)
+    expect(compaction.required(input("openai"))).toBe(false)
+    expect(compaction.remoteThreshold(input("xai"))).toBeUndefined()
+    const collision = OpenAICompatibleResponses.route.with({ id: "openai-responses", provider: "openai" })
+    expect(compaction.remoteThreshold(input("openai", collision))).toBeUndefined()
+    expect(compaction.required(input("openai", collision))).toBe(true)
+    expect(
+      compaction.remoteThreshold(
+        input("openai", OpenAIResponses.route, "@opencode-ai/ai/providers/custom-openai"),
+      ),
+    ).toBeUndefined()
+    expect(
+      compaction.required(input("openai", OpenAIResponses.route, "@opencode-ai/ai/providers/custom-openai")),
+    ).toBe(true)
   }),
 )
 

@@ -89,7 +89,11 @@ const OpenResponsesFunctionCallOutput = Schema.Union([
   Schema.Array(OpenResponsesFunctionCallOutputContent),
 ])
 
-export const InputItem = Schema.Union([
+const OpaqueInputItem = Schema.StructWithRest(Schema.Struct({ type: Schema.String }), [
+  Schema.Record(Schema.String, Schema.Json),
+])
+
+const InputItemShape = Schema.Union([
   Schema.Struct({ role: Schema.tag("system"), content: Schema.String }),
   Schema.Struct({ role: Schema.tag("user"), content: Schema.Array(OpenResponsesInputContent) }),
   Schema.Struct({
@@ -110,10 +114,20 @@ export const InputItem = Schema.Union([
     call_id: Schema.String,
     output: OpenResponsesFunctionCallOutput,
   }),
+  OpaqueInputItem,
 ])
-type OpenResponsesInputItem = Schema.Schema.Type<typeof InputItem>
+type OpenResponsesInputItem = Schema.Schema.Type<typeof InputItemShape>
+const isInputItemShape = Schema.is(InputItemShape)
+const isJson = Schema.is(Schema.Json)
+// Opaque remote checkpoint items must be validated without projecting away
+// provider-owned fields that OpenCode does not interpret.
+export const InputItem = Schema.declare<OpenResponsesInputItem>(
+  (value): value is OpenResponsesInputItem => isInputItemShape(value) && isJson(value),
+  { expected: "Open Responses JSON input item" },
+)
 type LoweredInputItem =
   | OpenResponsesInputItem
+  | StreamItem
   | {
       readonly role: "assistant"
       readonly content: ReadonlyArray<{ readonly type: "output_text"; readonly text: string }>
@@ -156,6 +170,12 @@ export const coreFields = {
   store: Schema.optional(Schema.Boolean),
   service_tier: Schema.optional(OpenResponsesOptions.ServiceTierSchema),
   prompt_cache_key: Schema.optional(Schema.String),
+  context_management: optionalArray(
+    Schema.Struct({
+      type: Schema.tag("compaction"),
+      compact_threshold: Schema.Number,
+    }),
+  ),
   include: optionalArray(OpenResponsesOptions.ResponseIncludableSchema),
   reasoning: Schema.optional(
     Schema.Struct({
@@ -253,6 +273,14 @@ export interface Extension {
     readonly media: ProviderShared.ValidatedMedia
     readonly request: LLMRequest
   }) => MediaInput | undefined
+  readonly lowerProviderExecutedTool?: (input: {
+    readonly part: ToolResultPart
+    readonly providerMetadataKey: string
+  }) => StreamItem | undefined
+  readonly lowerUserMessage?: (input: {
+    readonly message: LLMRequest["messages"][number]
+    readonly providerMetadataKey: string
+  }) => ReadonlyArray<StreamItem> | undefined
   readonly messagePhase?: (value: unknown) => MessagePhase | null | undefined
 }
 
@@ -270,6 +298,7 @@ export interface ParserState {
   readonly messagePhases: Readonly<Record<string, MessagePhase | null>>
   readonly reasoningItems: Readonly<Record<string, ReasoningStreamItem>>
   readonly store: boolean | undefined
+  readonly hasCheckpoint: boolean
 }
 
 type ReasoningSummaryStatus = "active" | "can-conclude" | "concluded"
@@ -401,13 +430,20 @@ const lowerMessages = Effect.fn("OpenResponses.lowerMessages")(function* (reques
     request.system.length === 0 ? [] : [{ role: "system", content: ProviderShared.joinText(request.system) }]
   const input: LoweredInputItem[] = [...system]
   const store = OpenResponsesOptions.resolve(request).store
+  const portableInline = store === false
   const providerMetadataKey = request.model.route.providerMetadataKey ?? "openresponses"
 
   for (const message of request.messages) {
     if (message.role === "system") {
       const part = yield* ProviderShared.wrappedSystemUpdate(extension.name, message)
       const previous = input.at(-1)
-      if (previous && "role" in previous && previous.role === "user")
+      if (
+        previous &&
+        "role" in previous &&
+        previous.role === "user" &&
+        "content" in previous &&
+        Array.isArray(previous.content)
+      )
         input[input.length - 1] = {
           role: "user",
           content: [...previous.content, { type: "input_text", text: part.text }],
@@ -417,6 +453,11 @@ const lowerMessages = Effect.fn("OpenResponses.lowerMessages")(function* (reques
     }
 
     if (message.role === "user") {
+      const remote = extension.lowerUserMessage?.({ message, providerMetadataKey })
+      if (remote) {
+        input.push(...remote)
+        continue
+      }
       input.push({
         role: "user",
         content: yield* Effect.forEach(message.content, (part) => lowerUserContent(part, request, extension)),
@@ -460,7 +501,7 @@ const lowerMessages = Effect.fn("OpenResponses.lowerMessages")(function* (reques
           flushText()
           const reasoning = lowerReasoning(part, providerMetadataKey)
           if (!reasoning) continue
-          if (store !== false) {
+          if (!portableInline) {
             if (!reasoningReferences.has(reasoning.id)) input.push({ type: "item_reference", id: reasoning.id })
             reasoningReferences.add(reasoning.id)
             continue
@@ -490,9 +531,12 @@ const lowerMessages = Effect.fn("OpenResponses.lowerMessages")(function* (reques
         if (part.type === "tool-result" && part.providerExecuted === true) {
           flushText()
           const itemID = hostedToolItemID(part, providerMetadataKey)
-          if (store !== false && itemID && !hostedToolReferences.has(itemID))
+          if (!portableInline && itemID && !hostedToolReferences.has(itemID))
             input.push({ type: "item_reference", id: itemID })
-          if (store === false && part.result.type === "content") {
+          const replay =
+            portableInline ? extension.lowerProviderExecutedTool?.({ part, providerMetadataKey }) : undefined
+          if (replay && itemID && !hostedToolReferences.has(itemID)) input.push(replay)
+          if (!replay && portableInline && part.result.type === "content") {
             const content: ReadonlyArray<Content> = part.result.value
             input.push({
               role: "user",
@@ -527,7 +571,7 @@ const lowerMessages = Effect.fn("OpenResponses.lowerMessages")(function* (reques
   // With store:false, Responses APIs only accept previous reasoning items when the
   // complete item has encrypted state. Summary blocks for one item may carry
   // that state only on the last block, so filter after they have been joined.
-  return store === false
+  return portableInline
     ? input.filter(
         (item) => !("type" in item) || item.type !== "reasoning" || typeof item.encrypted_content === "string",
       )
@@ -540,6 +584,9 @@ const lowerOptions = (request: LLMRequest) => {
     ...(options.instructions ? { instructions: options.instructions } : {}),
     ...(options.store !== undefined ? { store: options.store } : {}),
     ...(request.promptCacheKey ? { prompt_cache_key: request.promptCacheKey } : {}),
+    ...(options.compactThreshold !== undefined
+      ? { context_management: [{ type: "compaction" as const, compact_threshold: options.compactThreshold }] }
+      : {}),
     ...(options.include ? { include: options.include } : {}),
     ...(options.reasoningEffort || options.reasoningSummary
       ? { reasoning: { effort: options.reasoningEffort, summary: options.reasoningSummary } }
@@ -962,6 +1009,7 @@ const providerErrorMessage = (event: Event, fallback: string): string => {
   const nested = event.error ?? event.response?.error ?? undefined
   const message = event.message || nested?.message || undefined
   const code = event.code || nested?.code || undefined
+  if (message && code === message) return message
   if (message && code) return `${code}: ${message}`
   return message || code || fallback
 }
@@ -1038,6 +1086,7 @@ export const initial = (request: LLMRequest, extension: Extension = BASE): Parse
   messagePhases: {},
   reasoningItems: {},
   store: OpenResponsesOptions.resolve(request).store,
+  hasCheckpoint: false,
 })
 
 const messagePhase = (value: unknown, extension: Extension): MessagePhase | null | undefined => {

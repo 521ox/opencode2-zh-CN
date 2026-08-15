@@ -3,6 +3,7 @@ import type { ScrollBoxRenderable } from "@opentui/core"
 import { useKeyboard } from "@opentui/solid"
 import { registerOpencodeSpinner } from "../component/register-spinner"
 import { Show, createMemo, indexArray } from "solid-js"
+import { useI18n } from "../context/i18n"
 import { SPINNER_FRAMES } from "../component/spinner-frames"
 import { RunEntryContent, separatorRows } from "./scrollback.writer"
 import type { FooterSubagentDetail, FooterSubagentTab } from "./types"
@@ -59,6 +60,7 @@ export function RunFooterSubagentBody(props: {
   shellOutput?: () => boolean
   mono?: boolean
 }) {
+  const { t } = useI18n()
   const theme = createMemo(() => props.theme())
   const footer = createMemo(() => theme().footer)
   const tab = createMemo(() => props.tab())
@@ -160,13 +162,13 @@ export function RunFooterSubagentBody(props: {
               <Show when={interruptHint()}>
                 {(hint) => (
                   <text fg={footer().muted} wrapMode="none" truncate flexShrink={0}>
-                    {hint()} interrupt
+                    {hint()} {t("mini.subagent.interrupt")}
                   </text>
                 )}
               </Show>
               <Show when={props.total() > 1 && props.index() > 0}>
                 <text fg={footer().muted} wrapMode="none" truncate flexShrink={0}>
-                  {props.index()} of {props.total()}
+                  {t("mini.subagent.position", { index: props.index(), total: props.total() })}
                 </text>
               </Show>
             </box>
@@ -187,7 +189,7 @@ export function RunFooterSubagentBody(props: {
               rows()
             ) : (
               <text fg={footer().muted} wrapMode="word">
-                No subagent activity yet
+                {t("mini.subagent.noActivity")}
               </text>
             )}
           </box>

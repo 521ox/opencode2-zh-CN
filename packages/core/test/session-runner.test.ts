@@ -13,6 +13,8 @@ import {
   RateLimitReason,
 } from "@opencode-ai/ai"
 import * as OpenAIChat from "@opencode-ai/ai/protocols/openai-chat"
+import * as OpenAIResponses from "@opencode-ai/ai/protocols/openai-responses"
+import { RequestExecutor } from "@opencode-ai/ai/route"
 import { TestLLM } from "@opencode-ai/ai/testing"
 import { Catalog } from "@opencode-ai/core/catalog"
 import { Database } from "@opencode-ai/core/database/database"
@@ -71,6 +73,7 @@ import { ID } from "@opencode-ai/core/model"
 import { Location } from "@opencode-ai/core/location"
 import { Provider } from "@opencode-ai/core/provider"
 import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema, Scope, Stream } from "effect"
+import { HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { TestClock } from "effect/testing"
 import { asc, desc, eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
@@ -80,6 +83,9 @@ import PROMPT_DEFAULT from "../src/session/runner/prompt/base.txt"
 import { CodeModeInstructions } from "@opencode-ai/core/codemode/instructions"
 
 let requests: LLMRequest[] = []
+let compactRequests: Array<{ readonly url: string; readonly body: unknown }> = []
+let compactFailure: AIError | undefined
+let compactOutput: Array<Record<string, unknown>> = []
 const emptyCodeMode = `\n\n${CodeModeInstructions.render({ total: 0, shown: 0, namespaces: [] })}`
 type ToolBarrier = {
   readonly count: number
@@ -154,6 +160,27 @@ const recoveryModel = LanguageModel.make({
   id: "recovery",
   provider: "fake",
   route: OpenAIChat.route.with({ limits: { context: 20_000, output: 1_000 } }),
+})
+const nativeResponsesModel = LanguageModel.make({
+  id: "gpt-5.2",
+  provider: "openai",
+  route: OpenAIResponses.route.with({ limits: { context: 20_000, input: 19_000, output: 1_000 } }),
+})
+
+const compactHttp = Layer.mock(RequestExecutor.Service)({
+  execute: (request) =>
+    Effect.gen(function* () {
+      const web = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie)
+      const text = yield* Effect.promise(() => web.text())
+      compactRequests.push({ url: web.url, body: JSON.parse(text) })
+      if (compactFailure) return yield* Effect.fail(compactFailure)
+      return HttpClientResponse.fromWeb(
+        request,
+        new Response(JSON.stringify({ object: "response.compaction", output: compactOutput }), {
+          headers: { "content-type": "application/json" },
+        }),
+      )
+    }),
 })
 
 test("calculates step cost using the matching context tier", () => {
@@ -265,16 +292,22 @@ const echoNode = makeLocationNode({ name: "test/session-runner-tools", layer: ec
 let modelResolveHook = Effect.void
 let currentModel = model
 const models = Layer.mock(SessionRunnerModel.Service)({
-  resolve: (session) =>
-    modelResolveHook.pipe(
+  resolve: (session) => {
+    const resolvedModel = session.model?.id === "replacement" ? replacementModel : currentModel
+    return modelResolveHook.pipe(
       Effect.as(
-        SessionRunnerModel.resolved(session.model?.id === "replacement" ? replacementModel : currentModel, {
+        SessionRunnerModel.resolved(resolvedModel, {
           capabilities: { tools: true, input: ["text", "image"], output: ["text"] },
           cost: [],
+          providerPackage:
+            resolvedModel === nativeResponsesModel
+              ? "@opencode-ai/ai/providers/openai"
+              : "@opencode-ai/ai/providers/test",
           variant: session.model?.variant,
         }),
       ),
-    ),
+    )
+  },
 })
 const systemContextKey = Instructions.Key.make("test/context")
 let systemBaseline = "Initial context"
@@ -363,6 +396,7 @@ const promptCatalog = Layer.mock(Catalog.Service, {
 const runnerLayer = AppNodeBuilder.build(SessionRunnerLLM.node, [
   [Snapshot.node, Snapshot.noopLayer],
   [LayerNodePlatform.llmClient, client],
+  [LayerNodePlatform.requestExecutor, compactHttp],
   [SessionRunnerModel.node, models],
   [InstructionBuiltIns.node, systemContext],
   [InstructionDiscovery.node, instructionContext],
@@ -433,6 +467,7 @@ const it = testEffect(
     [
       [Bus.node, Bus.configured({ persist: true })],
       [LayerNodePlatform.llmClient, client],
+      [LayerNodePlatform.requestExecutor, compactHttp],
       [Permission.node, permission],
       [Catalog.node, promptCatalog],
       [SessionRunnerModel.node, models],
@@ -489,6 +524,16 @@ const setup = Effect.gen(function* () {
     discard: true,
   })
   requests = (yield* TestLLM.Service).requests
+  compactRequests = []
+  compactFailure = undefined
+  compactOutput = [
+    {
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: "Retain the latest user turn." }],
+    },
+    { type: "compaction", id: "cmp_explicit", encrypted_content: "opaque-explicit" },
+  ]
   authorizations.length = 0
   executions.length = 0
   systemBaseline = "Initial context"
@@ -533,6 +578,17 @@ const incompleteStream = () =>
     reason: new InvalidProviderOutputReason({
       classification: "incomplete-stream",
       message: "The provider response ended unexpectedly.",
+    }),
+  })
+
+const interruptedRead = () =>
+  new AIError({
+    module: "test",
+    method: "stream",
+    reason: new TransportReason({
+      message: "Response body stream was interrupted",
+      transport: "http",
+      operation: "read",
     }),
   })
 
@@ -612,6 +668,27 @@ const recordedStepSettlementTypes = (id: Session.ID, assistantMessageID: Session
 
 const hostedCall = (id: string, query: string) =>
   LLMEvent.toolCall({ id, name: "web_search", input: { query }, providerExecuted: true })
+
+const remoteCheckpoint = () => {
+  const output = [
+    { type: "compaction", id: "cmp_runner", encrypted_content: "opaque-runner" },
+    { type: "message", id: "msg_runner", role: "assistant", content: [] },
+  ]
+  return {
+    output,
+    events: [
+      LLMEvent.stepStart({ index: 0 }),
+      LLMEvent.providerCompactionStart({}),
+      LLMEvent.providerCheckpoint({ reset: true, item: output[0]! }),
+      LLMEvent.providerCheckpoint({ reset: false, item: output[1]! }),
+      LLMEvent.textStart({ id: "text-remote" }),
+      LLMEvent.textDelta({ id: "text-remote", text: "Compacted" }),
+      LLMEvent.textEnd({ id: "text-remote" }),
+      LLMEvent.stepFinish({ index: 0, reason: { normalized: "stop" } }),
+      LLMEvent.finish({ reason: { normalized: "stop" } }),
+    ],
+  }
+}
 
 const requireAssistant = (messages: readonly SessionMessage.Info[]) => {
   const assistant = messages.find((message) => message.type === "assistant")
@@ -2133,6 +2210,183 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("uses native remote compaction for a manual compact request", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      yield* TestLLM.push(TestLLM.text("Earlier answer", "text-remote-manual-history"))
+      yield* runPrompt(session, "Earlier exact question")
+      currentModel = nativeResponsesModel
+      requests.length = 0
+
+      const compaction = yield* session.compact({ sessionID })
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(0)
+      expect(compactRequests).toHaveLength(1)
+      expect(compactRequests[0]?.url).toBe("https://api.openai.com/v1/responses/compact")
+      expect(JSON.stringify(compactRequests[0]?.body)).toContain("Earlier exact question")
+      expect(JSON.stringify(compactRequests[0]?.body)).toContain("Earlier answer")
+      expect((yield* session.messages({ sessionID })).find((message) => message.id === compaction.id)).toMatchObject({
+        type: "compaction",
+        status: "completed",
+        reason: "manual",
+        remote: compactOutput,
+      })
+    }),
+  )
+
+  it.effect("replaces local websearch with hosted web search for native OpenAI Responses", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      currentModel = LanguageModel.make({ id: "gpt-5", provider: "mycodex", route: OpenAIResponses.route })
+      const registry = yield* Tool.Service
+      yield* transformTools(
+        registry,
+        {
+          websearch: {
+            name: "websearch",
+            description: "Search locally",
+            input: Schema.Struct({ query: Schema.String }),
+            output: Schema.Struct({}),
+            execute: () => Effect.succeed({ output: {} }),
+          },
+        },
+        { codemode: false },
+      )
+      const hooks = yield* PluginHooks.Service
+      yield* hooks.register("session", "context", (event) =>
+        Effect.sync(() => {
+          event.tools.renamed_websearch = event.tools.websearch!
+          delete event.tools.websearch
+        }),
+      )
+      yield* TestLLM.push([])
+
+      yield* runPrompt(session, "Search for current information")
+
+      expect(requests).toHaveLength(1)
+      expect(requests[0]?.tools.map((tool) => tool.name)).toContain("web_search")
+      expect(requests[0]?.tools.map((tool) => tool.name)).not.toContain("websearch")
+      expect(requests[0]?.tools.map((tool) => tool.name)).not.toContain("renamed_websearch")
+      expect(requests[0]?.tools.find((tool) => tool.name === "web_search")?.native).toEqual({
+        openai: { type: "web_search" },
+      })
+    }),
+  )
+
+  it.effect("does not expose hosted or local search when native search requires permission", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      currentModel = LanguageModel.make({ id: "gpt-5", provider: "mycodex", route: OpenAIResponses.route })
+      const agents = yield* Agent.Service
+      yield* agents.transform((draft) =>
+        draft.update(Agent.ID.make("build"), (agent) => {
+          agent.permissions.push({ action: "websearch", resource: "*", effect: "ask" })
+        }),
+      )
+      const registry = yield* Tool.Service
+      yield* transformTools(
+        registry,
+        {
+          websearch: {
+            name: "websearch",
+            description: "Search locally",
+            input: Schema.Struct({ query: Schema.String }),
+            output: Schema.Struct({}),
+            execute: () => Effect.succeed({ output: {} }),
+          },
+        },
+        { codemode: false },
+      )
+      yield* TestLLM.push([])
+
+      yield* runPrompt(session, "Do not bypass permission")
+
+      expect(requests[0]?.tools.map((tool) => tool.name)).not.toContain("web_search")
+      expect(requests[0]?.tools.map((tool) => tool.name)).not.toContain("websearch")
+    }),
+  )
+
+  it.effect("keeps local websearch on non-Responses routes", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const registry = yield* Tool.Service
+      yield* transformTools(
+        registry,
+        {
+          websearch: {
+            name: "websearch",
+            description: "Search locally",
+            input: Schema.Struct({ query: Schema.String }),
+            output: Schema.Struct({}),
+            execute: () => Effect.succeed({ output: {} }),
+          },
+        },
+        { codemode: false },
+      )
+      yield* TestLLM.push([])
+
+      yield* runPrompt(session, "Use the local search route")
+
+      expect(requests[0]?.tools.map((tool) => tool.name)).toContain("websearch")
+      expect(requests[0]?.tools.map((tool) => tool.name)).not.toContain("web_search")
+    }),
+  )
+
+  it.effect("persists and replays a provider remote compaction checkpoint", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const checkpoint = remoteCheckpoint()
+      yield* TestLLM.push(checkpoint.events, TestLLM.text("After checkpoint", "text-after-remote"))
+
+      yield* runPrompt(session, "Create a remote checkpoint")
+      const compacted = (yield* session.messages({ sessionID })).find((message) => message.type === "compaction")
+      expect(compacted).toMatchObject({
+        type: "compaction",
+        status: "completed",
+        remote: checkpoint.output,
+      })
+
+      yield* runPrompt(session, "Continue from the checkpoint")
+      const replay = requests[1]?.messages
+        .flatMap((message) => message.content)
+        .find(
+          (part) =>
+            part.type === "text" &&
+            part.providerMetadata?.opencode?.remoteCompaction !== undefined,
+        )
+      expect(replay).toMatchObject({
+        providerMetadata: { opencode: { remoteCompaction: { output: checkpoint.output } } },
+      })
+    }),
+  )
+
+  it.effect("fails a provider compaction boundary without a checkpoint", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      yield* TestLLM.push([
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.providerCompactionStart({}),
+        LLMEvent.stepFinish({ index: 0, reason: { normalized: "stop" } }),
+        LLMEvent.finish({ reason: { normalized: "stop" } }),
+      ])
+
+      yield* admit(session, "Interrupt remote compaction")
+      expect(yield* Effect.result(session.resume(sessionID))).toMatchObject({
+        _tag: "Failure",
+        failure: { _tag: "Session.StepFailedError" },
+      })
+      expect((yield* session.messages({ sessionID })).find((message) => message.type === "compaction")).toMatchObject({
+        type: "compaction",
+        status: "failed",
+        error: {
+          type: "provider.invalid-output",
+          message: "Provider compaction boundary ended without a replayable checkpoint",
+        },
+      })
+    }),
+  )
+
   it.effect("automatically compacts into a completed summary and retained recent turn", () =>
     Effect.gen(function* () {
       const session = yield* setup
@@ -2250,6 +2504,68 @@ describe("SessionRunnerLLM", () => {
         { type: "compaction" },
         { type: "assistant", finish: "stop" },
       ])
+    }),
+  )
+
+  it.effect("recovers native OpenAI Responses overflow through remote compact without a local summary", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      yield* TestLLM.push(TestLLM.text("Earlier answer", "text-native-overflow-history"))
+      yield* runPrompt(session, "Earlier question")
+      currentModel = nativeResponsesModel
+      requests.length = 0
+      yield* TestLLM.push(
+        [LLMEvent.providerError({ message: "prompt too long", classification: "context-overflow" })],
+        TestLLM.text("Recovered remotely", "text-native-overflow-final"),
+      )
+
+      yield* runPrompt(session, "Continue after overflow")
+
+      expect(requests).toHaveLength(2)
+      expect(compactRequests).toHaveLength(1)
+      expect(JSON.stringify(compactRequests[0]?.body)).toContain("Continue after overflow")
+      const replay = requests[1]?.messages
+        .flatMap((message) => message.content)
+        .find(
+          (part) =>
+            part.type === "text" && part.providerMetadata?.opencode?.remoteCompaction !== undefined,
+        )
+      expect(replay).toMatchObject({
+        providerMetadata: { opencode: { remoteCompaction: { output: compactOutput } } },
+      })
+      expect(yield* session.context(sessionID)).toMatchObject([
+        { type: "compaction", status: "completed", remote: compactOutput },
+        { type: "assistant", finish: "stop" },
+      ])
+    }),
+  )
+
+  it.effect("does not fall back to a local summary when native remote compact fails", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      yield* TestLLM.push(TestLLM.text("Earlier answer", "text-native-overflow-failure-history"))
+      yield* runPrompt(session, "Earlier question")
+      currentModel = nativeResponsesModel
+      requests.length = 0
+      compactFailure = providerUnavailable()
+      yield* TestLLM.push(
+        [LLMEvent.providerError({ message: "prompt too long", classification: "context-overflow" })],
+        TestLLM.text("Must not run", "text-native-overflow-fallback"),
+      )
+
+      yield* admit(session, "Continue after failed remote compact")
+      expect((yield* session.resume(sessionID).pipe(Effect.flip)).message).toBe("prompt too long")
+
+      expect(requests).toHaveLength(1)
+      expect(compactRequests).toHaveLength(1)
+      expect(yield* session.context(sessionID)).toContainEqual(
+        expect.objectContaining({
+          type: "compaction",
+          status: "failed",
+          reason: "auto",
+          error: expect.objectContaining({ message: "Provider unavailable" }),
+        }),
+      )
     }),
   )
 
@@ -4185,6 +4501,38 @@ describe("SessionRunnerLLM", () => {
       expect(yield* recordedEventTypes(sessionID)).toContain("session.retry.scheduled.1")
       yield* replaySessionProjection(sessionID)
       expect(yield* session.context(sessionID)).toMatchObject(context)
+    }),
+  )
+
+  it.effect("continues an interrupted HTTP response body after observable text", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      yield* admit(session, "Continue after a response body interruption")
+      yield* TestLLM.push(
+        TestLLM.failAfter(
+          interruptedRead(),
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.textStart({ id: "partial-http-read" }),
+          LLMEvent.textDelta({ id: "partial-http-read", text: "Partial" }),
+        ),
+      )
+      yield* TestLLM.push(TestLLM.text(" continuation", "continued-http-read"))
+
+      const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      yield* TestLLM.wait(1)
+      yield* TestClock.adjust("2400 millis")
+      yield* Fiber.join(run)
+
+      expect(requests).toHaveLength(2)
+      expect(requests[1]?.messages.at(-2)).toMatchObject({
+        role: "assistant",
+        content: [{ type: "text", text: "Partial" }],
+      })
+      expect(requests[1]?.messages.at(-1)).toMatchObject({
+        role: "user",
+        content: [{ type: "text", text: INCOMPLETE_STREAM_CONTINUATION }],
+      })
+      expect(yield* recordedEventTypes(sessionID)).toContain("session.retry.scheduled.1")
     }),
   )
 

@@ -9,6 +9,7 @@ import { useToast } from "../../ui/toast"
 import { errorMessage } from "../../util/error"
 import { Locale } from "../../util/locale"
 import { projectedPromptInput } from "../../prompt/codec"
+import { useI18n } from "../../context/i18n"
 
 export function DialogFork(props: { sessionID: string; messageID?: string; onMove?: (messageID?: string) => void }) {
   const data = useData()
@@ -16,6 +17,7 @@ export function DialogFork(props: { sessionID: string; messageID?: string; onMov
   const client = useClient()
   const route = useRoute()
   const toast = useToast()
+  const i18n = useI18n()
   const [pending, setPending] = createSignal(!!props.messageID)
 
   const fork = async (messageID?: string) => {
@@ -44,7 +46,7 @@ export function DialogFork(props: { sessionID: string; messageID?: string; onMov
         : undefined,
     })
     dialog.clear()
-    toast.show({ message: "Forked session", variant: "success", duration: 4000 })
+    toast.show({ message: i18n.t("session.dialog.forked"), variant: "success", duration: 4000 })
   }
 
   onMount(() => {
@@ -54,7 +56,7 @@ export function DialogFork(props: { sessionID: string; messageID?: string; onMov
 
   const options = createMemo((): DialogSelectOption<string | undefined>[] => [
     {
-      title: "Full session",
+      title: i18n.t("session.dialog.fullSession"),
       value: undefined,
       onSelect: () => fork(),
     },
@@ -75,11 +77,15 @@ export function DialogFork(props: { sessionID: string; messageID?: string; onMov
       when={!pending()}
       fallback={
         <box paddingLeft={2} paddingRight={2} paddingBottom={1}>
-          <Spinner>Forking session...</Spinner>
+          <Spinner>{i18n.t("session.dialog.forking")}</Spinner>
         </box>
       }
     >
-      <DialogSelect onMove={(option) => props.onMove?.(option.value)} title="Fork session" options={options()} />
+      <DialogSelect
+        onMove={(option) => props.onMove?.(option.value)}
+        title={i18n.t("session.dialog.fork")}
+        options={options()}
+      />
     </Show>
   )
 }
