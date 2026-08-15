@@ -206,9 +206,7 @@ export const Plugin = {
                 })
 
               const background = input.background === true
-              yield* context.progress({
-                metadata: { sessionID: child.id, status: "running" },
-              })
+              yield* context.progress({ sessionID: child.id, status: "running" })
 
               const active = input.sessionID ? yield* runtime.job.get(child.id) : undefined
               const continuingActive = active?.status === "running"
