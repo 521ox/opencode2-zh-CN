@@ -11,15 +11,26 @@ import { UpdatePreflight } from "../../services/update-preflight"
 import { Npm } from "@opencode-ai/util/npm"
 import { OPENCODE_CHANNEL, OPENCODE_VERSION } from "../../version"
 
+export function interactiveServerArgs(input: {
+  readonly server: Option.Option<string>
+  readonly standalone: boolean
+}) {
+  const server = Option.getOrUndefined(input.server)
+  return {
+    server,
+    standalone: server === undefined || input.standalone,
+  }
+}
+
 export default Runtime.handler(Commands, (input) =>
   Effect.gen(function* () {
     const requestedDirectory = Option.getOrUndefined(input.directory)
     if (requestedDirectory !== undefined) process.chdir(requestedDirectory)
     const preflight = UpdatePreflight.make()
     yield* Effect.addFinalizer(() => Effect.promise(() => preflight.close()))
+    const connection = interactiveServerArgs(input)
     const server = yield* ServerConnection.resolve({
-      server: Option.getOrUndefined(input.server),
-      standalone: input.standalone,
+      ...connection,
       mismatch: "replace",
       onStart: (reason, previousVersion) => {
         if (reason === "version-mismatch" && preflight.begin(previousVersion)) return

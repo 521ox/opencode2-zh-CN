@@ -5,7 +5,7 @@ declare const OPENCODE_CLI_NAME: string | undefined
 
 const ServerParams = {
   standalone: Flag.boolean("standalone").pipe(
-    Flag.withDescription("Run with a private server instead of the background service"),
+    Flag.withDescription("Run with a private server instead of the background service (default with no subcommand)"),
     Flag.withDefault(false),
   ),
   server: Flag.string("server").pipe(
