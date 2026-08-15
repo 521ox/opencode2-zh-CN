@@ -113,6 +113,7 @@ Any unclassified path, unknown stable ID, or unknown bucket rejects the sync.
 | `CUST-RULES-001`     | Protected Session rules location context                          | `PRESERVE`            | `24307f8ee`              | Core Session persistence and request preparation            |
 | `CUST-TUI-001`       | English/Simplified Chinese TUI localization                       | `PRESERVE`            | `42c0c9b96`              | `packages/tui/src/i18n`                                     |
 | `CUST-TUI-002`       | Compaction status and notification UX without transcript dividers | `PRESERVE`            | `42c0c9b96`              | Main and Mini TUI Session projections                       |
+| `CUST-TUI-003`       | Shared TUI dialog and composer close icon                         | `PRESERVE`            | `a6efdab9f`              | TUI dialog shell and Session composer                       |
 | `CUST-MIGRATION-001` | V1 configuration and built-in database migration compatibility    | `PRESERVE`            | `42c0c9b96`, `24307f8ee` | Core V1 normalization and migration boundary                |
 | `CUST-MIGRATION-002` | Copy-only rehearsal, native context repair, and VACUUM safety     | `OPERATIONS`          | `42c0c9b96`              | Migration scripts and handoff documents                     |
 | `CUST-OPS-001`       | Windows build, export identity, and compiled-service smoke        | `OPERATIONS`          | `42c0c9b96`              | Build wrapper and CLI service smoke                         |
@@ -587,6 +588,44 @@ Automatic interruption may still use the durable
 `aborted`. During an upstream sync, do not treat failure-colored interruption
 feedback as the intended contract; preserve or improve cancellation semantics.
 
+## `CUST-TUI-003`: Shared Dialog And Composer Close Icon
+
+### Required behavior
+
+- Right-aligned TUI dialog and Session composer header close controls render a
+  shared `×` icon instead of a clickable `esc` label.
+- The control retains a three-cell `"  ×"` mouse target so replacing the label
+  does not reduce usability.
+- Generic callers preserve their original close callback. Dialog callers use
+  `dialog.clear()`, while custom flows such as export completion preserve their
+  additional completion callback.
+- Keyboard Escape bindings remain unchanged and continue to close the same
+  surfaces.
+- Textual `esc` remains for non-close semantics such as back, cancel, dismiss,
+  permission choices, and keyboard-only full-screen hints.
+
+### Owners
+
+- `packages/tui/src/ui/dialog.tsx`
+- `packages/tui/src/ui/dialog-*.tsx`
+- `packages/tui/src/component/dialog-*.tsx`
+- `packages/tui/src/routes/session/composer/index.tsx`
+- `packages/tui/test/ui/dialog-close-button.test.tsx`
+- `packages/tui/test/cli/tui/dialog-select.test.tsx`
+- `packages/tui/test/cli/tui/composer-keymap.test.tsx`
+
+### Acceptance evidence
+
+- The shared control renders exactly `"  ×"`, and clicking its first cell invokes
+  the supplied callback once.
+- A DialogSelect integration test clicks the first leading-space cell and
+  observes the dialog close.
+- The Session composer renders `×` without a visible `esc` close label.
+- Source inspection finds no remaining clickable header close rendered as
+  `esc`; retained instances are explicitly back, cancel, dismiss, or
+  keyboard-only semantics.
+- TUI typecheck and the complete TUI test suite pass.
+
 ## `CUST-MIGRATION-001`: V1 Configuration And Database Compatibility
 
 ### Required behavior
@@ -816,6 +855,7 @@ Copy this table into the synchronization change record and fill every row:
 | `CUST-RULES-001`     | pending |          |          |       |
 | `CUST-TUI-001`       | pending |          |          |       |
 | `CUST-TUI-002`       | pending |          |          |       |
+| `CUST-TUI-003`       | pending |          |          |       |
 | `CUST-MIGRATION-001` | pending |          |          |       |
 | `CUST-MIGRATION-002` | pending |          |          |       |
 | `CUST-OPS-001`       | pending |          |          |       |

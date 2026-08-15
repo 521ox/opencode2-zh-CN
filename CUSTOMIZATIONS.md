@@ -81,6 +81,12 @@ accepted.
     or falls back to the legacy `/responses/compact` endpoint. Automatic remote
     compaction remains the separate normal-request
     `context_management.compaction.compact_threshold` contract.
+15. TUI dialog and composer header close controls use the shared `×` icon with
+    the original three-cell mouse target instead of a clickable `esc` label.
+    Mouse clicks preserve each caller's existing close callback, and keyboard
+    Escape behavior remains unchanged. Textual `esc` hints remain only where
+    they mean back, cancel, dismiss, or a keyboard-only action rather than a
+    window close control.
 
 ## Porting Rules
 
