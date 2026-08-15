@@ -71,6 +71,7 @@ import {
 import { DialogImagePreview } from "../dialog-image-preview"
 import { useDirectoryRecents } from "../../prompt/directory-recents"
 import { directoryRecentValue } from "../../prompt/directory-completion"
+import { truncateFilePath } from "../../ui/file-path"
 
 export type PromptProps = {
   sessionID?: string
@@ -1583,6 +1584,12 @@ export function Prompt(props: PromptProps) {
     const branch = data.location.vcs.info(location)?.branch.current
     return branch ? `${directory}:${branch}` : directory
   })
+  const [locationWidth, setLocationWidth] = createSignal(dimensions().width)
+  const locationLabelDisplay = createMemo(() => {
+    const label = locationLabel()
+    if (!label) return
+    return truncateFilePath(label, locationWidth())
+  })
 
   const spinnerDef = createMemo(() => {
     const agent = status() === "running" ? local.agent.current() : local.agent.current()
@@ -1864,7 +1871,15 @@ export function Prompt(props: PromptProps) {
         <box width="100%" flexDirection="row" justifyContent="space-between" gap={2}>
           <Slot path="prompt.footer" input={footerInput()}>
             <Slot path="prompt.footer.status" input={footerInput()}>
-              <box flexGrow={1} flexShrink={1} minWidth={0}>
+              <box
+                flexGrow={1}
+                flexShrink={1}
+                minWidth={0}
+                onSizeChange={function (this: BoxRenderable) {
+                  const width = this.width
+                  queueMicrotask(() => setLocationWidth(width))
+                }}
+              >
                 <Switch>
                   <Match when={compacting()}>
                     <box flexDirection="row" gap={1} flexGrow={1} justifyContent="flex-start">
@@ -1919,7 +1934,7 @@ export function Prompt(props: PromptProps) {
                     </box>
                   </Match>
                   <Match when={true}>
-                    <Show when={!props.hint && locationLabel()} fallback={props.hint ?? <text />}>
+                    <Show when={!props.hint && locationLabelDisplay()} fallback={props.hint ?? <text />}>
                       {(location) => (
                         <text fg={theme.text.subdued} wrapMode="none" truncate flexGrow={1} flexShrink={1}>
                           {location()}
