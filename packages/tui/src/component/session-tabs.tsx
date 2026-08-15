@@ -347,6 +347,7 @@ function VerticalSessionTabs(props: { controller?: SessionTabsController; animat
   let rail: { screenX: number; screenY: number } | undefined
   let scroll: ScrollBoxRenderable | undefined
   let didDrag = false
+  let addPressed = false
   // A captured drag ends with a synthetic up on its drop target; do not turn that into a click.
   let suppressClick = false
 
@@ -765,7 +766,8 @@ function VerticalSessionTabs(props: { controller?: SessionTabsController; animat
               onMouseDown={(event: MouseEvent) => {
                 didDrag = false
                 setDragging(undefined)
-                if (event.button !== RIGHT_MOUSE_BUTTON) return
+                addPressed = event.button !== RIGHT_MOUSE_BUTTON
+                if (addPressed) return
                 if (!rail) return
                 setContextMenu({ x: event.x, y: event.y })
                 event.preventDefault()
@@ -774,8 +776,11 @@ function VerticalSessionTabs(props: { controller?: SessionTabsController; animat
               onMouseUp={(event: MouseEvent) => {
                 if (event.button === RIGHT_MOUSE_BUTTON) return
                 if (suppressClick) return
+                if (!addPressed) return
+                addPressed = false
                 if (!newTab()) tabs.add?.()
               }}
+              onMouseDragEnd={() => (addPressed = false)}
             >
               <text
                 width={2}
@@ -843,6 +848,7 @@ function HorizontalSessionTabs(props: { controller?: SessionTabsController; anim
   const [contextMenu, setContextMenu] = createSignal<TabContextMenuState>()
   let strip: { screenX: number; screenY: number } | undefined
   let didDrag = false
+  let addPressed = false
   // A captured drag ends with a synthetic up on its drop target; do not turn that into a click.
   let suppressClick = false
   const hueStep = () => (mode() === "light" ? 800 : 200)
@@ -1212,7 +1218,8 @@ function HorizontalSessionTabs(props: { controller?: SessionTabsController; anim
           onMouseDown={(event) => {
             didDrag = false
             setDragging(undefined)
-            if (event.button !== RIGHT_MOUSE_BUTTON) return
+            addPressed = event.button !== RIGHT_MOUSE_BUTTON
+            if (addPressed) return
             setContextMenu({ x: event.x, y: event.y })
             event.preventDefault()
             event.stopPropagation()
@@ -1220,8 +1227,11 @@ function HorizontalSessionTabs(props: { controller?: SessionTabsController; anim
           onMouseUp={(event) => {
             if (event.button === RIGHT_MOUSE_BUTTON) return
             if (suppressClick) return
+            if (!addPressed) return
+            addPressed = false
             tabs.add?.()
           }}
+          onMouseDragEnd={() => (addPressed = false)}
         >
           {" + "}
         </text>
