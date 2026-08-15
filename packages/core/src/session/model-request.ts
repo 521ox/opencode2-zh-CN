@@ -1,6 +1,6 @@
 export * as SessionModelRequest from "./model-request.js"
 
-import { LLM, Message, SystemPart, type LLMRequest } from "@opencode-ai/ai"
+import { LLM, LLMRequest, Message, SystemPart } from "@opencode-ai/ai"
 import { webSearch as openAIWebSearch } from "@opencode-ai/ai/providers/openai"
 import type { StreamOptions } from "@opencode-ai/ai/route"
 import type { Entry } from "@opencode-ai/schema/config"
@@ -20,6 +20,8 @@ import { SessionModelHeaders } from "./model-headers.js"
 import { SessionModelHttp } from "./model-http.js"
 import { SessionPromptCacheKey } from "./prompt-cache-key.js"
 import { PromptCacheDiagnostics } from "./prompt-cache-diagnostics.js"
+import { SessionRulesLocation } from "./rules-location.js"
+import { SessionStore } from "./store.js"
 import { MAX_STEPS_PROMPT } from "./runner/max-steps.js"
 import PROMPT_DEFAULT from "./runner/prompt/base.txt"
 import { toolResultTokenBudget, toLLMMessages } from "./runner/to-llm-message.js"
@@ -75,6 +77,7 @@ interface PrepareInput {
   readonly context: SessionContext.Loaded
   readonly step: number
   readonly compactThreshold?: number
+  readonly includeSessionRules?: boolean
 }
 
 const mimeToModality = (mime: string) => {
@@ -165,6 +168,13 @@ export const boundImages = (messages: LLMRequest["messages"]) => {
   )
 }
 
+/** Removes only the final Core-owned Session rules system part from one prepared request. */
+export const withoutSessionRules = (request: LLMRequest) => {
+  const last = request.system.at(-1)
+  if (!last || !SessionRulesLocation.isContext(last.text)) return request
+  return LLMRequest.update(request, { system: request.system.slice(0, -1) })
+}
+
 /**
  * Builds an outbound model request and captures the tool-call capability that
  * must remain paired with it. It does not execute the request or mutate
@@ -184,6 +194,7 @@ export const layer = Layer.effect(
     const hooks = yield* PluginHooks.Service
     const app = yield* App.Metadata
     const config = yield* Config.Service
+    const store = yield* SessionStore.Service
     const diagnostics = yield* EffectConfig.boolean("OPENCODE_PROMPT_CACHE_DIAGNOSTICS").pipe(
       EffectConfig.withDefault(false),
       Effect.orDie,
@@ -200,7 +211,7 @@ export const layer = Layer.effect(
       // The final Step keeps definitions available to protocols with native "none",
       // preserving their prompt cache prefix. Calls are still rejected at execution.
       const tools = input.context.tools
-      const system = [agent.info.system ? agent.info.system : PROMPT_DEFAULT, input.context.initial]
+      const hookSystem = [agent.info.system ? agent.info.system : PROMPT_DEFAULT, input.context.initial]
         .filter((part) => part.length > 0)
         .map(SystemPart.make)
       const toolResultTokens = pruneToolResults(yield* config.entries())
@@ -221,10 +232,19 @@ export const layer = Layer.effect(
         sessionID: session.id,
         agent: agent.id,
         model: resolved.ref,
-        system,
+        system: hookSystem,
         messages,
         tools: Object.fromEntries(Array.from(given, ([definition, tool]) => [tool.name, definition])),
       })
+      let requestSystem = context.system
+      if (input.includeSessionRules !== false) {
+        const rules = yield* SessionRulesLocation.resolve({
+          currentSessionID: session.id,
+          currentSession: yield* store.rulesParent(session.id),
+          getSession: store.rulesParent,
+        })
+        requestSystem = [...requestSystem, SystemPart.make(SessionRulesLocation.render(rules))]
+      }
       // Match each surviving entry back to its tool, by recognizing a moved definition or
       // by key. Identity wins so a definition moved onto another tool's name still executes
       // the tool it describes. Entries matching neither were invented by a hook and dropped.
@@ -257,7 +277,7 @@ export const layer = Layer.effect(
           headers: SessionModelHeaders.make(session, app),
         },
         promptCacheKey: SessionPromptCacheKey.make(session.id),
-        system: context.system,
+        system: requestSystem,
         messages: boundImages(unsupportedParts(context.messages, resolved.capabilities)),
         tools: [
           ...Array.from(hooked, ([name, tool]) => ({ ...tool, name })),
@@ -314,5 +334,5 @@ export const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [PluginHooks.node, App.node, Config.node],
+  deps: [PluginHooks.node, App.node, Config.node, SessionStore.node],
 })

@@ -24,6 +24,7 @@ import type { Info, Ref } from "../model.js"
 import { SessionUsage } from "./usage.js"
 import { PluginHooks } from "../plugin/hooks.js"
 import { Agent } from "../agent.js"
+import { SessionModelRequest } from "./model-request.js"
 
 const DEFAULT_BUFFER = 20_000
 const DEFAULT_KEEP_TOKENS = 15_000
@@ -383,7 +384,11 @@ const make = (dependencies: Dependencies) => {
         inputID: plan.inputID,
       })
 
-    const compacted = yield* OpenAIResponses.compact(plan.request, dependencies.http.execute, plan.options).pipe(
+    const compacted = yield* OpenAIResponses.compact(
+      SessionModelRequest.withoutSessionRules(plan.request),
+      dependencies.http.execute,
+      plan.options,
+    ).pipe(
       Effect.map((output) => ({ output } as const)),
       Effect.catchTag("AI.Error", (error) => Effect.succeed({ error: toSessionError(error) } as const)),
       Effect.onInterrupt(() =>

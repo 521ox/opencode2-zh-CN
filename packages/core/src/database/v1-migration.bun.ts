@@ -15,6 +15,7 @@ import path from "node:path"
 import type { Database as SQLiteDatabase } from "bun:sqlite"
 import { Project } from "@opencode-ai/schema/project"
 import { PersistedRevert } from "@opencode-ai/schema/session-revert"
+import { SessionStartDirectory } from "../session/start-directory.js"
 
 export type SourceMessage = {
   readonly id: string
@@ -128,6 +129,7 @@ type NextSession = {
   readonly fork_boundary: string | null
   readonly slug: string
   readonly directory: string
+  readonly start_directory?: string | null
   readonly path: string | null
   readonly title: string | null
   readonly version: string
@@ -472,6 +474,10 @@ function errorText(input: unknown): string {
   return cause === undefined ? input.message : `${input.message}\nCaused by: ${errorText(cause)}`
 }
 
+function storedStartDirectory(input: unknown) {
+  return SessionStartDirectory.storage(input) ?? null
+}
+
 function updateProgress(progress: Progress) {
   if (runtimeState.status === "running") runtimeState = { status: "running", progress }
 }
@@ -487,6 +493,10 @@ export function run(options: Options = {}): Effect.Effect<RunResult, never, Data
       const hasLegacyPartSequence =
         (yield* db.get<{ value: number }>(
           sql`SELECT 1 AS value FROM pragma_table_info('part') WHERE name = 'seq' LIMIT 1`,
+        )) !== undefined
+      const hasLegacyStartDirectory =
+        (yield* db.get<{ value: number }>(
+          sql`SELECT 1 AS value FROM pragma_table_info('session') WHERE name = 'start_directory' LIMIT 1`,
         )) !== undefined
       const migrate = Effect.gen(function* () {
         const now = Date.now()
@@ -551,10 +561,14 @@ export function run(options: Options = {}): Effect.Effect<RunResult, never, Data
         while (true) {
           const state = yield* readState(db)
           const cursorValue = state?.phase === "sessions" ? state.cursor : undefined
-          const nextID = yield* db.get<{ id: string; project_id: string }>(
-            cursorValue === undefined
-              ? sql`SELECT id, project_id FROM session ORDER BY id DESC LIMIT 1`
-              : sql`SELECT id, project_id FROM session WHERE id < ${cursorValue} ORDER BY id DESC LIMIT 1`,
+          const nextID = yield* db.get<{ id: string; project_id: string; start_directory: string | null }>(
+            hasLegacyStartDirectory
+              ? cursorValue === undefined
+                ? sql`SELECT id, project_id, start_directory FROM session ORDER BY id DESC LIMIT 1`
+                : sql`SELECT id, project_id, start_directory FROM session WHERE id < ${cursorValue} ORDER BY id DESC LIMIT 1`
+              : cursorValue === undefined
+                ? sql`SELECT id, project_id, NULL AS start_directory FROM session ORDER BY id DESC LIMIT 1`
+                : sql`SELECT id, project_id, NULL AS start_directory FROM session WHERE id < ${cursorValue} ORDER BY id DESC LIMIT 1`,
           )
           if (!nextID) break
           yield* db
@@ -569,6 +583,7 @@ export function run(options: Options = {}): Effect.Effect<RunResult, never, Data
                   })
                   .run()
                 const projectID = projects.has(nextID.project_id) ? nextID.project_id : Project.ID.global
+                const startDirectory = storedStartDirectory(nextID.start_directory)
                 if (projectID !== nextID.project_id)
                   yield* Effect.logWarning("Reassigned V1 session with missing project", {
                     sessionID: nextID.id,
@@ -576,13 +591,13 @@ export function run(options: Options = {}): Effect.Effect<RunResult, never, Data
                   })
                 yield* tx.run(sql`
                   INSERT OR IGNORE INTO session_v2 (
-                    id, project_id, workspace_id, parent_id, slug, directory, path, title, version, share_url,
+                    id, project_id, workspace_id, parent_id, slug, directory, start_directory, path, title, version, share_url,
                     summary_additions, summary_deletions, summary_files, summary_diffs, metadata, cost,
                     tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write,
                     revert, permission, agent, model, time_created, time_updated, time_compacting, time_archived
                   )
                   SELECT
-                    id, ${projectID}, workspace_id, parent_id, slug, directory, path, title, version, share_url,
+                    id, ${projectID}, workspace_id, parent_id, slug, directory, ${startDirectory}, path, title, version, share_url,
                     summary_additions, summary_deletions, summary_files, summary_diffs, metadata, cost,
                     tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write,
                     revert, permission, agent, model, time_created, time_updated, time_compacting, time_archived
@@ -796,6 +811,7 @@ function importNextDatabase(
       for (const [index, session] of sessions.entries()) {
         const project = projects.get(session.project_id)
         const projectID = project ? session.project_id : Project.ID.global
+        const startDirectory = storedStartDirectory(session.start_directory)
         if (!project) {
           yield* Effect.logWarning("Reassigned previous V2 session with missing project", {
             sessionID: session.id,
@@ -830,14 +846,14 @@ function importNextDatabase(
               if (existing) return
               yield* tx.run(sql`
                 INSERT INTO session_v2 (
-                  id, project_id, workspace_id, parent_id, fork_session_id, fork_boundary, slug, directory,
+                  id, project_id, workspace_id, parent_id, fork_session_id, fork_boundary, slug, directory, start_directory,
                   path, title, version, share_url, summary_additions, summary_deletions, summary_files,
                   summary_diffs, metadata, cost, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read,
                   tokens_cache_write, revert, permission, agent, model, time_created, time_updated, time_compacting,
                   time_archived, time_suspended
                 ) VALUES (
                   ${session.id}, ${projectID}, ${session.workspace_id}, ${session.parent_id},
-                  ${session.fork_session_id}, ${session.fork_boundary}, ${session.slug}, ${session.directory},
+                  ${session.fork_session_id}, ${session.fork_boundary}, ${session.slug}, ${session.directory}, ${startDirectory},
                   ${session.path}, ${session.title}, ${session.version}, ${session.share_url},
                   ${session.summary_additions}, ${session.summary_deletions}, ${session.summary_files},
                   ${session.summary_diffs}, ${session.metadata}, ${session.cost}, ${session.tokens_input},

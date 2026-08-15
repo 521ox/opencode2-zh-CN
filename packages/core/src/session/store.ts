@@ -8,11 +8,15 @@ import { SessionHistory } from "./history.js"
 import { MessageDecodeError } from "./error.js"
 import { SessionMessage } from "./message.js"
 import { Session } from "@opencode-ai/schema/session"
+import { AbsolutePath } from "../schema.js"
 import { SessionMessageTable, SessionTable } from "./sql.js"
 import { fromRow } from "./info.js"
+import { SessionRulesLocation } from "./rules-location.js"
 
 export interface Interface {
   readonly get: (sessionID: Session.ID) => Effect.Effect<Session.Info | undefined>
+  /** Reads immutable lineage facts used to derive one Session rules directory. */
+  readonly rulesParent: (sessionID: Session.ID) => Effect.Effect<SessionRulesLocation.SessionParent | undefined>
   readonly context: (sessionID: Session.ID) => Effect.Effect<SessionMessage.Info[], MessageDecodeError>
   readonly message: (
     messageID: SessionMessage.ID,
@@ -57,6 +61,25 @@ const layer = Layer.effect(
       get: Effect.fn("SessionStore.get")(function* (sessionID) {
         const row = yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie)
         return row ? fromRow(row) : undefined
+      }),
+      rulesParent: Effect.fn("SessionStore.rulesParent")(function* (sessionID) {
+        const row = yield* db
+          .select({
+            id: SessionTable.id,
+            parentID: SessionTable.parent_id,
+            startDirectory: SessionTable.start_directory,
+          })
+          .from(SessionTable)
+          .where(eq(SessionTable.id, sessionID))
+          .get()
+          .pipe(Effect.orDie)
+        return row
+          ? {
+              id: Session.ID.make(row.id),
+              parentID: row.parentID ? Session.ID.make(row.parentID) : undefined,
+              startDirectory: row.startDirectory ? AbsolutePath.make(row.startDirectory) : undefined,
+            }
+          : undefined
       }),
       context: Effect.fn("SessionStore.context")(function* (sessionID) {
         return yield* SessionHistory.load(db, sessionID)

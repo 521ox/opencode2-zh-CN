@@ -56,6 +56,16 @@ architecture. It must not recreate the former mixed V1/V2 runtime.
     checkpoints remain unchanged. The projection must preserve tool call/result
     pairing and produce byte-stable output for identical Session state and
     configuration.
+13. Every normal Agent request receives protected Session rules location context
+    after the `session.context` hook. The directory is derived only from the
+    immutable root Session `start_directory` and readable root Session ID, and
+    all descendant subagents share it. Missing or unsafe lineage fails closed;
+    Core never guesses from the current directory and never accesses the rules
+    directory while resolving context. Persisted Windows and POSIX paths survive
+    cross-host migration. Forks without an explicit creation Location remain
+    unavailable instead of copying the source Session's start directory.
+    Auxiliary title, compaction, and generate requests remain unchanged. See
+    `specs/session-rules-context.md`.
 
 ## Porting Rules
 

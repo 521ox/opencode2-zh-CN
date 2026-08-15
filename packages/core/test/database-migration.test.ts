@@ -13,6 +13,7 @@ import { tmpdir } from "./fixture/tmpdir"
 import type { SqlClient } from "effect/unstable/sql/SqlClient"
 import legacyCredentialsMigration from "@opencode-ai/core/database/migration/20260805200742_import_legacy_credentials"
 import worktreeMigration from "@opencode-ai/core/database/migration/20260812213948_worktree"
+import sessionStartDirectoryMigration from "@opencode-ai/core/database/migration/20260815081049_session_start_directory"
 import { Global } from "@opencode-ai/util/global"
 
 const run = <A, E>(
@@ -149,6 +150,59 @@ describe("DatabaseMigration", () => {
           { directory: "/strategy", strategy: "git" },
         ])
         expect(yield* db.get(sql`SELECT count(*) AS count FROM project_directory`)).toEqual({ count: 4 })
+      }),
+    )
+  })
+
+  test("backfills immutable Session start directories only from exact persisted creation facts", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`CREATE TABLE session_v2 (id text PRIMARY KEY)`)
+        yield* db.run(
+          sql`CREATE TABLE event (aggregate_id text NOT NULL, seq integer NOT NULL, type text NOT NULL, data text NOT NULL)`,
+        )
+        yield* db.run(sql`CREATE TABLE session (id text PRIMARY KEY, start_directory text)`)
+        const direct = path.resolve("legacy-direct-start")
+        const created = path.resolve("v2-created-start")
+        const oldCreated = path.resolve("v1-created-start")
+        const normalize = (value: string) => (process.platform === "win32" ? value.replaceAll("\\", "/") : value)
+        yield* db.run(sql`
+          INSERT INTO session_v2 (id) VALUES
+            ('ses_direct'), ('ses_created'), ('ses_old_created'), ('ses_invalid'), ('ses_duplicate'),
+            ('ses_late'), ('ses_mismatch'), ('ses_info_mismatch'), ('ses_external')
+        `)
+        yield* db.run(sql`
+          INSERT INTO session (id, start_directory) VALUES
+            ('ses_direct', ${direct}),
+            ('ses_invalid', 'relative/path')
+        `)
+        yield* db.run(sql`
+          INSERT INTO event (aggregate_id, seq, type, data) VALUES
+            ('ses_created', 0, 'session.created.1', ${JSON.stringify({ sessionID: "ses_created", location: { directory: created } })}),
+            ('ses_old_created', 0, 'session.created.1', ${JSON.stringify({ sessionID: "ses_old_created", info: { id: "ses_old_created", directory: oldCreated } })}),
+            ('ses_invalid', 0, 'session.created.1', ${JSON.stringify({ sessionID: "ses_invalid", location: { directory: "relative/path" } })}),
+            ('ses_duplicate', 0, 'session.created.1', ${JSON.stringify({ sessionID: "ses_duplicate", location: { directory: created } })}),
+            ('ses_duplicate', 0, 'session.created.1', ${JSON.stringify({ sessionID: "ses_duplicate", location: { directory: created } })}),
+            ('ses_late', 1, 'session.created.1', ${JSON.stringify({ sessionID: "ses_late", location: { directory: created } })}),
+            ('ses_mismatch', 0, 'session.created.1', ${JSON.stringify({ sessionID: "ses_other", location: { directory: created } })}),
+            ('ses_info_mismatch', 0, 'session.created.1', ${JSON.stringify({ sessionID: "ses_info_mismatch", info: { id: "ses_other", directory: oldCreated } })}),
+            ('outside', 0, 'session.created.1', ${JSON.stringify({ sessionID: "ses_external", location: { directory: created } })})
+        `)
+
+        yield* DatabaseMigration.applyOnly(db, [sessionStartDirectoryMigration])
+
+        expect(yield* db.all(sql`SELECT id, start_directory FROM session_v2 ORDER BY id`)).toEqual([
+          { id: "ses_created", start_directory: normalize(created) },
+          { id: "ses_direct", start_directory: normalize(direct) },
+          { id: "ses_duplicate", start_directory: null },
+          { id: "ses_external", start_directory: null },
+          { id: "ses_info_mismatch", start_directory: null },
+          { id: "ses_invalid", start_directory: null },
+          { id: "ses_late", start_directory: null },
+          { id: "ses_mismatch", start_directory: null },
+          { id: "ses_old_created", start_directory: normalize(oldCreated) },
+        ])
       }),
     )
   })

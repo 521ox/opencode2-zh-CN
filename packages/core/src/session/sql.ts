@@ -32,6 +32,7 @@ export const SessionTable = sqliteTable(
     fork_boundary: text({ mode: "json" }).$type<Session.ForkBoundary>(),
     slug: text().notNull(),
     directory: directoryColumn().notNull(),
+    start_directory: directoryColumn(),
     path: pathColumn(),
     title: text(),
     version: text().notNull(),

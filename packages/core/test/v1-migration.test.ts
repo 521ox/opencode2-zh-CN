@@ -39,6 +39,7 @@ const session = (
   fork_boundary: null,
   slug: "test",
   directory: "/tmp/test",
+  start_directory: null,
   path: null,
   title: "Test",
   version: "1",
@@ -957,9 +958,11 @@ describe("V1Migration database workflow", () => {
       Effect.gen(function* () {
         const { db } = yield* Database.Service
         yield* db.run(sql`ALTER TABLE part ADD COLUMN seq integer`)
+        yield* db.run(sql`ALTER TABLE session ADD COLUMN start_directory text`)
+        const startDirectory = path.resolve("legacy-session-start")
         yield* db.run(sql`
-          INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated)
-          VALUES ('ses_test', 'global', 'test', '/tmp/test', 'Test', '1', 1, 2)
+          INSERT INTO session (id, project_id, slug, directory, start_directory, title, version, time_created, time_updated)
+          VALUES ('ses_test', 'global', 'test', '/tmp/test', ${startDirectory}, 'Test', '1', 1, 2)
         `)
         const message = user("msg_000000000061aaaaaaaaaaaaaa")
         const first = part("prt_z", message.id, { type: "text", text: "first" }, 10)
@@ -975,6 +978,9 @@ describe("V1Migration database workflow", () => {
         )
 
         expect(yield* V1Migration.run()).toEqual({ status: "completed" })
+        expect(yield* db.get(sql`SELECT start_directory FROM session_v2 WHERE id = 'ses_test'`)).toEqual({
+          start_directory: process.platform === "win32" ? startDirectory.replaceAll("\\", "/") : startDirectory,
+        })
         const migrated = yield* db.get<{ data: string }>(
           sql`SELECT data FROM session_message WHERE session_id = 'ses_test'`,
         )
@@ -1065,7 +1071,7 @@ describe("V1Migration database workflow", () => {
       );
       CREATE TABLE session (
         id text PRIMARY KEY, project_id text NOT NULL, workspace_id text, parent_id text, fork_session_id text,
-        fork_boundary text, slug text NOT NULL, directory text NOT NULL, path text, title text, version text NOT NULL,
+        fork_boundary text, slug text NOT NULL, directory text NOT NULL, start_directory text, path text, title text, version text NOT NULL,
         share_url text, summary_additions integer, summary_deletions integer, summary_files integer, summary_diffs text,
         metadata text, cost real DEFAULT 0 NOT NULL, tokens_input integer DEFAULT 0 NOT NULL,
         tokens_output integer DEFAULT 0 NOT NULL, tokens_reasoning integer DEFAULT 0 NOT NULL,
@@ -1081,12 +1087,12 @@ describe("V1Migration database workflow", () => {
         'next-project', 'C:/Users/sewer', 'git', 'Source project', NULL, NULL, NULL, 1, 2, NULL, '[]', NULL
       );
       INSERT INTO session (
-        id, project_id, slug, directory, title, version, agent, model, time_created, time_updated
+        id, project_id, slug, directory, start_directory, title, version, agent, model, time_created, time_updated
       ) VALUES
-        ('ses_next', 'next-project', 'next', 'C:/Users/sewer', 'Imported', '2', 'build',
+        ('ses_next', 'next-project', 'next', 'C:/Users/sewer', 'C:/Users/sewer', 'Imported', '2', 'build',
           '{"id":"model","providerID":"provider"}', 10, 20),
-        ('ses_existing', 'next-project', 'source-existing', '/tmp/next', 'Source existing', '2', NULL, NULL, 11, 21),
-        ('ses_orphan', 'missing-project', 'orphan', '/tmp/orphan', 'Orphan', '2', NULL, NULL, 12, 22);
+        ('ses_existing', 'next-project', 'source-existing', '/tmp/next', NULL, 'Source existing', '2', NULL, NULL, 11, 21),
+        ('ses_orphan', 'missing-project', 'orphan', '/tmp/orphan', NULL, 'Orphan', '2', NULL, NULL, 12, 22);
       INSERT INTO session_message VALUES
         ('msg_next', 'ses_next', 'user', 4, 12, 13, '{"text":"from next''s history","time":{"created":12}}'),
         ('msg_source_existing', 'ses_existing', 'user', 2, 12, 13, '{"text":"source","time":{"created":12}}'),
@@ -1124,11 +1130,14 @@ describe("V1Migration database workflow", () => {
         })
         expect(
           yield* db
-            .select({ directory: SessionTable.directory })
+            .select({ directory: SessionTable.directory, startDirectory: SessionTable.start_directory })
             .from(SessionTable)
             .where(eq(SessionTable.id, SessionSchema.ID.make("ses_next")))
             .get(),
-        ).toEqual({ directory: process.platform === "win32" ? "C:\\Users\\sewer" : "C:/Users/sewer" })
+        ).toEqual({
+          directory: process.platform === "win32" ? "C:\\Users\\sewer" : "C:/Users/sewer",
+          startDirectory: process.platform === "win32" ? "C:\\Users\\sewer" : "C:/Users/sewer",
+        })
         expect(yield* db.all(sql`SELECT id, seq, data FROM session_message WHERE session_id = 'ses_next'`)).toEqual([
           {
             id: "msg_next",

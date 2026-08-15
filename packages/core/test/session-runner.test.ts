@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import path from "path"
 import {
   AIError,
   LLMEvent,
@@ -63,6 +64,7 @@ import {
 } from "@opencode-ai/core/session/sql"
 import { InstructionEntry } from "@opencode-ai/core/session/instruction-entry"
 import { SessionStore } from "@opencode-ai/core/session/store"
+import { SessionRulesLocation } from "@opencode-ai/core/session/rules-location"
 import { Instructions } from "@opencode-ai/core/instructions/index"
 import { InstructionBuiltIns } from "@opencode-ai/core/instructions/builtins"
 import { InstructionDiscovery } from "@opencode-ai/core/instruction-discovery"
@@ -83,6 +85,7 @@ import PROMPT_DEFAULT from "../src/session/runner/prompt/base.txt"
 import { CodeModeInstructions } from "@opencode-ai/core/codemode/instructions"
 
 let requests: LLMRequest[] = []
+let preserveRulesContext = false
 let compactRequests: Array<{ readonly url: string; readonly body: unknown }> = []
 let compactFailure: AIError | undefined
 let compactOutput: Array<Record<string, unknown>> = []
@@ -130,10 +133,12 @@ const testLLM = TestLLM.layer({
   fallback: [],
   transformRequest: (request) =>
     LLMRequest.update(request, {
-      system: request.system.map((part) => ({
-        ...part,
-        text: part.text.replace(emptyCodeMode, ""),
-      })),
+      system: request.system
+        .filter((part) => preserveRulesContext || !SessionRulesLocation.isContext(part.text))
+        .map((part) => ({
+          ...part,
+          text: part.text.replace(emptyCodeMode, ""),
+        })),
       tools: request.tools.filter((tool) => tool.name !== "execute"),
     }),
 })
@@ -502,6 +507,7 @@ const insertSession = (id: Session.ID) =>
         project_id: Project.ID.global,
         slug: id,
         directory: "/project",
+        start_directory: "/project",
         title: "test",
         version: "test",
       })
@@ -542,6 +548,7 @@ const setup = Effect.gen(function* () {
   systemLoadHook = Effect.void
   modelResolveHook = Effect.void
   pluginFlushHook = Effect.void
+  preserveRulesContext = false
   currentModel = model
   skillBaselines.clear()
   toolBarrier = undefined
@@ -1021,6 +1028,53 @@ describe("SessionRunnerLLM", () => {
           ],
         },
       ])
+    }),
+  )
+
+  it.effect("appends the root Session rules directory after context hooks", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const hooks = yield* PluginHooks.Service
+      const { db } = yield* Database.Service
+      const rootID = Session.ID.make("ses_runner_rules_root")
+      const rootStartDirectory = AbsolutePath.make(path.resolve("runner-rules-root"))
+      yield* db
+        .insert(SessionTable)
+        .values({
+          id: rootID,
+          project_id: Project.ID.global,
+          slug: rootID,
+          directory: path.resolve("runner-rules-moved-root"),
+          start_directory: rootStartDirectory,
+          title: "root",
+          version: "test",
+        })
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .update(SessionTable)
+        .set({ parent_id: rootID })
+        .where(eq(SessionTable.id, sessionID))
+        .run()
+        .pipe(Effect.orDie)
+      yield* hooks.register("session", "context", (event) =>
+        Effect.sync(() => {
+          event.system = []
+        }),
+      )
+      preserveRulesContext = true
+      yield* TestLLM.push(TestLLM.text("Done", "text-rules-context"))
+
+      yield* runPrompt(session, "Use the Session rules context")
+
+      expect(requests).toHaveLength(1)
+      expect(requests[0]?.system).toHaveLength(1)
+      const text = requests[0]?.system[0]?.text ?? ""
+      expect(text).toContain(`"current_session_id":"${sessionID}"`)
+      expect(text).toContain(`"root_session_id":"${rootID}"`)
+      expect(text).toContain(
+        `"rules_directory":"${path.join(rootStartDirectory, ".opencode", "rules", rootID).replaceAll("\\", "\\\\")}"`,
+      )
     }),
   )
 
@@ -2226,6 +2280,7 @@ describe("SessionRunnerLLM", () => {
       expect(compactRequests[0]?.url).toBe("https://api.openai.com/v1/responses/compact")
       expect(JSON.stringify(compactRequests[0]?.body)).toContain("Earlier exact question")
       expect(JSON.stringify(compactRequests[0]?.body)).toContain("Earlier answer")
+      expect(JSON.stringify(compactRequests[0]?.body)).not.toContain(SessionRulesLocation.Header)
       expect((yield* session.messages({ sessionID })).find((message) => message.id === compaction.id)).toMatchObject({
         type: "compaction",
         status: "completed",
@@ -2524,6 +2579,7 @@ describe("SessionRunnerLLM", () => {
       expect(requests).toHaveLength(2)
       expect(compactRequests).toHaveLength(1)
       expect(JSON.stringify(compactRequests[0]?.body)).toContain("Continue after overflow")
+      expect(JSON.stringify(compactRequests[0]?.body)).not.toContain(SessionRulesLocation.Header)
       const replay = requests[1]?.messages
         .flatMap((message) => message.content)
         .find(

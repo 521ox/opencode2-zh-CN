@@ -211,10 +211,21 @@ describe("Session.create", () => {
   it.effect("inherits location from an existing parent when omitted", () =>
     Effect.gen(function* () {
       const session = yield* Session.Service
+      const store = yield* SessionStore.Service
       const parent = yield* session.create({ location })
       const child = yield* session.create({ parentID: parent.id, title: "child" })
 
       expect(child).toMatchObject({ parentID: parent.id, location })
+      expect(yield* store.rulesParent(parent.id)).toEqual({
+        id: parent.id,
+        parentID: undefined,
+        startDirectory: location.directory,
+      })
+      expect(yield* store.rulesParent(child.id)).toEqual({
+        id: child.id,
+        parentID: parent.id,
+        startDirectory: location.directory,
+      })
     }),
   )
 
@@ -323,6 +334,7 @@ describe("Session.create", () => {
   it.effect("forks a session by replaying a durable fork event into copied projected rows", () =>
     Effect.gen(function* () {
       const session = yield* Session.Service
+      const store = yield* SessionStore.Service
       const bus = yield* Bus.Service
       const { db } = yield* Database.Service
       const parent = yield* session.create({ location, title: "Parent" })
@@ -334,6 +346,8 @@ describe("Session.create", () => {
       yield* SessionInbox.promote(db, bus, parent.id, "steer")
       yield* session.synthetic({ sessionID: parent.id, text: "parent note", resume: false })
       yield* SessionInbox.promote(db, bus, parent.id, "steer")
+      const movedDirectory = AbsolutePath.make(path.resolve("fork-moved-source"))
+      yield* db.update(SessionTable).set({ directory: movedDirectory }).where(eq(SessionTable.id, parent.id)).run()
 
       const forked = yield* session.fork({ sessionID: parent.id, boundary: { type: "through" } })
       const parentContext = yield* session.context(parent.id)
@@ -341,7 +355,13 @@ describe("Session.create", () => {
       const history = Array.from(yield* Stream.runCollect(logEvents(session, forked.id)))
 
       expect(forked).toMatchObject({ title: "Parent (fork #1)", fork: { sessionID: parent.id } })
+      expect(forked.location.directory).toBe(movedDirectory)
       expect(forked.parentID).toBeUndefined()
+      expect(yield* store.rulesParent(forked.id)).toEqual({
+        id: forked.id,
+        parentID: undefined,
+        startDirectory: undefined,
+      })
       expect(forkContext).toMatchObject([
         { type: "user", text: "First" },
         { type: "synthetic", text: "parent note" },

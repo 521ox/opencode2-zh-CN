@@ -188,6 +188,7 @@ const schema: Omit<DatabaseMigration.Migration, "id"> = {
           \`fork_boundary\` text,
           \`slug\` text NOT NULL,
           \`directory\` text NOT NULL,
+          \`start_directory\` text,
           \`path\` text,
           \`title\` text,
           \`version\` text NOT NULL,

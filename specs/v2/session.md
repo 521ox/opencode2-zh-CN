@@ -51,6 +51,16 @@ Before `runStep` assembles its provider request, orphan reconciliation fails too
 
 After a local outcome, continuation reloads projected history and begins a new Step. The runner never delegates orchestration to an in-memory tool loop.
 
+## Session Rules Location Is Protected Context
+
+Each normal Agent Step receives a protected system part naming the preferred Session-scoped rules directory. The directory is derived from the immutable root Session creation directory and readable root Session ID: `<root-start-directory>/.opencode/rules/<root-session-id>`. Direct and nested descendant Sessions share the same root directory even after Session movement.
+
+Core persists the root creation directory as `session_v2.start_directory`. The value is written from `session.created.1`, is not exposed as mutable Session location state, and is never reconstructed from the current working directory, project, worktree, drive root, or child subpath. Historical backfill accepts only exact legacy `start_directory` facts or one matching sequence-zero creation event.
+
+Windows drive and UNC paths and POSIX absolute paths remain valid across host-platform imports. Forks are new roots, not lineage descendants; because the current fork event has no authoritative creation Location, a fork keeps `start_directory` unavailable instead of copying the source Session's value.
+
+The `session.context` plugin hook runs before Core appends this system part, so plugins cannot remove it. Title generation, compaction summaries, and other auxiliary model requests do not use the normal Agent request path and do not receive this context. Resolution performs no filesystem access and fails closed when lineage, IDs, or the root creation directory are unsafe or unavailable. See [Session Rules Location Context](../session-rules-context.md).
+
 ## Retry Is Narrow And Observable
 
 Core retries typed rate-limit, provider-internal, and transport failures only before durable assistant content, tool-call, tool-output, or tool-execution evidence exists. The initial request plus at most four retries use exponential backoff, increased when the provider supplies a longer retry delay.

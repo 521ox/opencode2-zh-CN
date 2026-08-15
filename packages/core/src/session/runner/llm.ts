@@ -545,7 +545,11 @@ const layer = Layer.effect(
                     const selected = yield* context.select(sessionID)
                     yield* InstructionState.prepare(db, bus, selected.instructions, selected.session.id)
                     const loaded = yield* context.load(selected)
-                    const prepared = yield* modelRequests.prepare({ context: loaded, step: 0 })
+                    const prepared = yield* modelRequests.prepare({
+                      context: loaded,
+                      step: 0,
+                      includeSessionRules: false,
+                    })
                     return { request: prepared.request, options: prepared.options }
                   }),
               })
