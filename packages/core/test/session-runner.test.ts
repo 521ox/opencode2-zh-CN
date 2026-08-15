@@ -2248,15 +2248,21 @@ describe("SessionRunnerLLM", () => {
         LLMEvent.providerCompactionStart({}),
         LLMEvent.providerCheckpoint({ reset: true, item: checkpoint }),
       ])
+      const bus = yield* Bus.Service
+      const cancelOnTerminal = yield* bus.subscribe(SessionEvent.Compaction.RemoteItem).pipe(
+        Stream.filter((event) => event.data.sessionID === sessionID),
+        Stream.take(1),
+        Stream.runForEach(() => session.interrupt(sessionID)),
+        Effect.forkScoped({ startImmediately: true }),
+      )
 
       const compaction = yield* session.compact({ sessionID })
-      yield* session.resume(sessionID)
+      yield* session.resume(sessionID).pipe(Effect.exit)
+      yield* Fiber.join(cancelOnTerminal)
 
       expect(requests).toHaveLength(1)
       expect(requests[0]?.tools).toEqual([])
-      expect(requests[0]?.providerOptions).toMatchObject({
-        "opencode-internal": { responsesCompactionTrigger: true },
-      })
+      expect(requests[0]?.providerOptions).not.toHaveProperty("opencode-internal")
       expect(requests[0]?.providerOptions?.openai).not.toHaveProperty("compactThreshold")
       expect(JSON.stringify(requests[0]?.messages)).toContain("Earlier exact question")
       expect(JSON.stringify(requests[0]?.messages)).toContain("Earlier answer")
@@ -2267,6 +2273,21 @@ describe("SessionRunnerLLM", () => {
         reason: "manual",
         remote: [checkpoint],
       })
+      const terminalTypes = new Set([
+        Bus.versionedType(SessionEvent.Compaction.RemoteItem.type, 1),
+        Bus.versionedType(SessionEvent.Compaction.Ended.type, 1),
+        Bus.versionedType(SessionEvent.Compaction.Failed.type, 1),
+      ])
+      const terminal = (yield* (yield* Database.Service).db
+        .select({ seq: EventTable.seq, type: EventTable.type })
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, sessionID))
+        .orderBy(asc(EventTable.seq))).filter((event) => terminalTypes.has(event.type))
+      expect(terminal.map((event) => event.type)).toEqual([
+        Bus.versionedType(SessionEvent.Compaction.RemoteItem.type, 1),
+        Bus.versionedType(SessionEvent.Compaction.Ended.type, 1),
+      ])
+      expect(terminal[1]?.seq).toBe((terminal[0]?.seq ?? -1) + 1)
     }),
   )
 

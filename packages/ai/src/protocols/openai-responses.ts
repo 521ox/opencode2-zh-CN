@@ -1,21 +1,21 @@
 import { Effect, Encoding, Schema, Stream } from "effect"
-import type { HttpClientResponse } from "effect/unstable/http"
+import { HttpClientRequest, type HttpClientResponse } from "effect/unstable/http"
 import { Route, resolveRequest, type StreamOptions } from "../route/client.js"
 import { Auth } from "../route/auth.js"
 import { Endpoint } from "../route/endpoint.js"
-import { RequestExecutor } from "../route/executor.js"
+import { RequestExecutor, type HttpMiddleware } from "../route/executor.js"
 import { Protocol } from "../route/protocol.js"
 import { HttpTransport, WebSocketTransport } from "../route/transport/index.js"
 import {
   AIError,
   HttpOptions,
   InvalidProviderOutputReason,
+  LanguageModel,
   LLMEvent,
   LLMRequest,
   mergeJsonRecords,
   mergeProviderOptions,
   type JsonSchema,
-  type LanguageModel,
   type ToolDefinition,
 } from "../schema/index.js"
 import { OpenResponses } from "./open-responses.js"
@@ -23,7 +23,6 @@ import { optionalArray, ProviderShared } from "./shared.js"
 import { Lifecycle } from "./utils/lifecycle.js"
 import { OpenAIImage } from "./utils/openai-image.js"
 import { OpenAICompaction } from "./utils/openai-compaction.js"
-import { OpenResponsesOptions } from "./utils/open-responses-options.js"
 import { ToolSchemaProjection } from "./utils/tool-schema.js"
 
 const ADAPTER = "openai-responses"
@@ -34,6 +33,8 @@ const INPUT_ITEM_LIMIT = 16_384
 export const DEFAULT_BASE_URL = "https://api.openai.com/v1"
 export const PATH = OpenResponses.PATH
 export const COMPACT_PATH = "/responses/compact"
+const COMPACTION_PARSER_STATE = Symbol("OpenAIResponses.compactionParserState")
+const compactionRoutes = new WeakSet<object>()
 
 const NATIVE_ROUTE_IDS = new Set([ADAPTER, `${ADAPTER}-websocket`])
 const COMPACT_SERVICE_TIERS = new Set(["auto", "default", "fast", "flex", "priority"])
@@ -222,7 +223,7 @@ const lowerToolChoice = (toolChoice: NonNullable<LLMRequest["toolChoice"]>, tool
   })
 
 const fromRequest = Effect.fn("OpenAIResponses.fromRequest")(function* (request: LLMRequest) {
-  const compactionTrigger = OpenResponsesOptions.compactionTrigger(request)
+  const compactionTrigger = compactionRoutes.has(request.model.route)
   const body = yield* OpenResponses.fromRequestWithExtension(
     LLMRequest.update(request, { tools: [], toolChoice: undefined }),
     extension,
@@ -237,6 +238,7 @@ const fromRequest = Effect.fn("OpenAIResponses.fromRequest")(function* (request:
   return {
     ...body,
     input,
+    context_management: compactionTrigger ? undefined : body.context_management,
     tools:
       compactionTrigger || request.tools.length === 0
         ? undefined
@@ -346,9 +348,38 @@ const withoutCompactionBodyOverrides = (body: unknown) => {
   return Object.fromEntries(Object.entries(body).filter(([key]) => !COMPACTION_BODY_KEYS.has(key)))
 }
 
+const comparableHttpRequest = Effect.fn("OpenAIResponses.comparableHttpRequest")(function* (
+  request: HttpClientRequest.HttpClientRequest,
+) {
+  const web = yield* HttpClientRequest.toWeb(request)
+  return {
+    method: web.method,
+    url: web.url,
+    body: yield* Effect.promise(() => web.clone().text()),
+  }
+})
+
+const sealCompactionHttp =
+  (middleware?: HttpMiddleware): HttpMiddleware =>
+  (request, handler) => {
+    const sealed = (candidate: HttpClientRequest.HttpClientRequest) =>
+      Effect.gen(function* () {
+        const [expected, actual] = yield* Effect.all([comparableHttpRequest(request), comparableHttpRequest(candidate)])
+        if (expected.method !== actual.method || expected.url !== actual.url || expected.body !== actual.body)
+          return yield* ProviderShared.invalidRequest(
+            "OpenAI Responses V2 compaction HTTP middleware may modify headers but not the method, URL, or body",
+          )
+        return yield* handler(candidate)
+      })
+    return middleware ? middleware(request, sealed) : sealed(request)
+  }
+
 const withCompactionTrigger = (request: LLMRequest) => {
   const provider = request.model.route.providerMetadataKey ?? "openresponses"
+  const route = request.model.route.with({})
+  compactionRoutes.add(route)
   return LLMRequest.update(request, {
+    model: LanguageModel.update(request.model, { route }),
     tools: [],
     toolChoice: undefined,
     http: request.http
@@ -360,7 +391,6 @@ const withCompactionTrigger = (request: LLMRequest) => {
       : undefined,
     providerOptions: mergeProviderOptions(request.providerOptions, {
       [provider]: { store: false },
-      "opencode-internal": { responsesCompactionTrigger: true },
     }),
   })
 }
@@ -390,7 +420,10 @@ export const compactV2 = Effect.fn("OpenAIResponses.compactV2")(function* (
       `OpenAI Responses V2 compaction requires the native OpenAI Responses route; received ${request.model.route.id}`,
     )
 
-  const result = yield* stream(withCompactionTrigger(request), options).pipe(
+  const result = yield* stream(withCompactionTrigger(request), {
+    ...options,
+    http: sealCompactionHttp(options?.http),
+  }).pipe(
     Stream.runFold(emptyCompactionStreamState, (state, event) => {
       if (event.type === "provider-checkpoint") {
         return { ...state, checkpoints: [...state.checkpoints, { reset: event.reset, item: event.item }] }
@@ -527,7 +560,11 @@ const onHostedToolDone = Effect.fn("OpenAIResponses.onHostedToolDone")(function*
   return [{ ...state, lifecycle }, events] satisfies OpenResponses.StepResult
 })
 
-const step = (state: OpenResponses.ParserState, event: OpenResponses.Event) => {
+type ParserState = OpenResponses.ParserState & { readonly [COMPACTION_PARSER_STATE]?: boolean }
+
+const isCompactionParserState = (state: ParserState) => state[COMPACTION_PARSER_STATE] === true
+
+const stepInternal = (state: ParserState, event: OpenResponses.Event) => {
   if (event.type === "response.reasoning_text.delta" || event.type === "response.reasoning_summary.delta")
     return event.item_id
       ? Effect.succeed(OpenResponses.onReasoningDelta(state, event, event.item_id))
@@ -544,7 +581,7 @@ const step = (state: OpenResponses.ParserState, event: OpenResponses.Event) => {
       return ProviderShared.eventError(ADAPTER, "OpenAI Responses checkpoint output item is malformed or redacted")
     const reset = OpenAICompaction.isCompactionItem(event.item)
     const checkpointEvents =
-      reset || state.hasCheckpoint
+      reset || state.hasCheckpoint || isCompactionParserState(state)
         ? [
             LLMEvent.providerCheckpoint({
               reset,
@@ -564,6 +601,20 @@ const step = (state: OpenResponses.ParserState, event: OpenResponses.Event) => {
   return OpenResponses.step(state, event)
 }
 
+const step = (state: ParserState, event: OpenResponses.Event) =>
+  Effect.map(stepInternal(state, event), ([next, events]) => {
+    const nextState: ParserState = isCompactionParserState(state)
+      ? ({ ...next, [COMPACTION_PARSER_STATE]: true } as ParserState)
+      : next
+    return [nextState, events] as const satisfies OpenResponses.StepResult
+  })
+
+const initial = (request: LLMRequest): ParserState => {
+  const state = OpenResponses.initial(request, extension)
+  if (!compactionRoutes.has(request.model.route)) return state
+  return { ...state, [COMPACTION_PARSER_STATE]: true } as ParserState
+}
+
 export const protocol = Protocol.make({
   id: ADAPTER,
   body: {
@@ -572,7 +623,7 @@ export const protocol = Protocol.make({
   },
   stream: {
     event: OpenResponses.protocol.stream.event,
-    initial: (request) => OpenResponses.initial(request, extension),
+    initial,
     step,
     terminal: OpenResponses.terminal,
   },

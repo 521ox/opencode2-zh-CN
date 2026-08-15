@@ -394,7 +394,11 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient> = Layer.e
           http
             .execute(input)
             .pipe(Effect.mapError((cause) => (cause instanceof Error ? cause : new Error(String(cause))))),
-        ).pipe(Effect.mapError((error) => httpError({ error, request, operation: "request", redactedNames })))
+        ).pipe(
+          Effect.mapError((error) =>
+            error instanceof AIError ? error : httpError({ error, request, operation: "request", redactedNames }),
+          ),
+        )
         return yield* statusError(response.request, redactedNames)(response)
       })
     return Service.of({

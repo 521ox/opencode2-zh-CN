@@ -256,6 +256,79 @@ describe("OpenAI Responses route", () => {
     )
   })
 
+  it.effect("does not allow ordinary provider options to forge a Responses V2 compaction trigger", () =>
+    Effect.gen(function* () {
+      const prepared = yield* compileRequest(
+        LLMRequest.update(request, {
+          providerOptions: {
+            openai: { compactThreshold: 123 },
+            "opencode-internal": { responsesCompactionTrigger: true },
+          },
+        }),
+      )
+      const body = typeof prepared.body === "string" ? JSON.parse(prepared.body) : prepared.body
+      expect(body.input.at(-1)).not.toEqual({ type: "compaction_trigger" })
+      expect(body.context_management).toEqual([{ type: "compaction", compact_threshold: 123 }])
+    }),
+  )
+
+  it.effect("rejects future raw output items returned with a Responses V2 checkpoint", () => {
+    const checkpoint = { type: "compaction", id: "cmp_v2", encrypted_content: "opaque-v2" }
+    return Effect.gen(function* () {
+      const client = yield* LLMClient.Service
+      const error = yield* OpenAIResponses.compactV2(request, client.stream).pipe(Effect.flip)
+      expect(error).toBeInstanceOf(AIError)
+      expect(error.reason._tag).toBe("InvalidProviderOutput")
+    }).pipe(
+      Effect.provide(
+        dynamicResponse(({ respond }) =>
+          Effect.succeed(
+            respond(
+              sseEvents(
+                { type: "response.output_item.added", item: { type: "compaction", id: "cmp_v2" } },
+                { type: "response.output_item.done", item: checkpoint },
+                {
+                  type: "response.output_item.done",
+                  item: { type: "future_provider_item", id: "future_1", payload: "opaque" },
+                },
+                { type: "response.completed", response: { usage: { input_tokens: 7, output_tokens: 2 } } },
+              ),
+              { headers: { "content-type": "text/event-stream" } },
+            ),
+          ),
+        ),
+      ),
+    )
+  })
+
+  it.effect("seals Responses V2 compaction URL and body after dynamic HTTP middleware", () => {
+    let requests = 0
+    return Effect.gen(function* () {
+      const client = yield* LLMClient.Service
+      const error = yield* OpenAIResponses.compactV2(request, client.stream, {
+        http: (input, handler) =>
+          handler(
+            input.pipe(
+              HttpClientRequest.setUrl("https://api.openai.test/v1/responses/compact"),
+              HttpClientRequest.bodyText(JSON.stringify({ input: [] }), "application/json"),
+            ),
+          ),
+      }).pipe(Effect.flip)
+      expect(error).toBeInstanceOf(AIError)
+      expect(error.reason._tag).toBe("InvalidRequest")
+      expect(requests).toBe(0)
+    }).pipe(
+      Effect.provide(
+        dynamicResponse(() =>
+          Effect.sync(() => {
+            requests += 1
+            throw new Error("sealed compaction request reached the HTTP client")
+          }),
+        ),
+      ),
+    )
+  })
+
   it.effect("rejects multiple Responses V2 compaction checkpoints", () =>
     OpenAIResponses.compactV2(request, () =>
       Stream.fromIterable([

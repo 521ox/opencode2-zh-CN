@@ -103,6 +103,7 @@ export type ManualInput = {
   readonly inputID: SessionMessage.ID
   readonly started?: boolean
   readonly prepareRemote?: () => Effect.Effect<RemoteRequest, unknown>
+  readonly onTerminal?: Effect.Effect<void>
 }
 
 type RequiredInput = Omit<AutoInput, "ref">
@@ -120,6 +121,7 @@ type Plan = {
   readonly recent: string
   readonly inputID?: SessionMessage.ID
   readonly started?: boolean
+  readonly onTerminal?: Effect.Effect<void>
 }
 
 type RemotePlan = {
@@ -129,6 +131,7 @@ type RemotePlan = {
   readonly reason: SessionMessage.Compaction["reason"]
   readonly inputID?: SessionMessage.ID
   readonly started?: boolean
+  readonly onTerminal?: Effect.Effect<void>
 }
 
 export type Outcome =
@@ -364,12 +367,17 @@ const make = (dependencies: Dependencies) => {
         inputID: plan.inputID,
       })
     }
-    yield* dependencies.bus.publish(SessionEvent.Compaction.Ended, {
-      sessionID: plan.session.id,
-      reason: plan.reason,
-      text: summary,
-      recent: plan.recent,
-    })
+    yield* Effect.uninterruptible(
+      Effect.gen(function* () {
+        yield* dependencies.bus.publish(SessionEvent.Compaction.Ended, {
+          sessionID: plan.session.id,
+          reason: plan.reason,
+          text: summary,
+          recent: plan.recent,
+        })
+        if (plan.onTerminal) yield* plan.onTerminal
+      }),
+    )
     return { status: "completed" as const }
   })
   const executeRemote = Effect.fn("SessionCompaction.executeRemote")(function* (plan: RemotePlan) {
@@ -408,22 +416,31 @@ const make = (dependencies: Dependencies) => {
         inputID: plan.inputID,
       })
 
-    yield* Effect.forEach(
-      compacted.output,
-      (item, index) =>
-        dependencies.bus.publish(SessionEvent.Compaction.RemoteItem, {
-          sessionID: plan.session.id,
-          reset: index === 0,
-          item,
-        }),
-      { discard: true },
+    const item = compacted.output[0]
+    yield* Effect.uninterruptible(
+      Effect.gen(function* () {
+        yield* dependencies.bus.publishAll([
+          [
+            SessionEvent.Compaction.RemoteItem,
+            {
+              sessionID: plan.session.id,
+              reset: true,
+              item,
+            },
+          ],
+          [
+            SessionEvent.Compaction.Ended,
+            {
+              sessionID: plan.session.id,
+              reason: plan.reason,
+              text: "",
+              recent: "",
+            },
+          ],
+        ])
+        if (plan.onTerminal) yield* plan.onTerminal
+      }),
     )
-    yield* dependencies.bus.publish(SessionEvent.Compaction.Ended, {
-      sessionID: plan.session.id,
-      reason: plan.reason,
-      text: "",
-      recent: "",
-    })
     return { status: "completed" as const }
   })
   const compact = Effect.fn("SessionCompaction.compact")(function* (input: AutoInput) {
@@ -531,6 +548,7 @@ const make = (dependencies: Dependencies) => {
         reason: "manual",
         inputID: input.inputID,
         started: input.started,
+        onTerminal: input.onTerminal,
       })
     }
     return yield* execute({
@@ -541,6 +559,7 @@ const make = (dependencies: Dependencies) => {
       reason: "manual",
       inputID: input.inputID,
       started: input.started,
+      onTerminal: input.onTerminal,
       ...content,
     })
   })

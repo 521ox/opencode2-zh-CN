@@ -585,7 +585,7 @@ const lowerOptions = (request: LLMRequest) => {
     ...(options.instructions ? { instructions: options.instructions } : {}),
     ...(options.store !== undefined ? { store: options.store } : {}),
     ...(request.promptCacheKey ? { prompt_cache_key: request.promptCacheKey } : {}),
-    ...(!OpenResponsesOptions.compactionTrigger(request) && options.compactThreshold !== undefined
+    ...(options.compactThreshold !== undefined
       ? { context_management: [{ type: "compaction" as const, compact_threshold: options.compactThreshold }] }
       : {}),
     ...(options.include ? { include: options.include } : {}),

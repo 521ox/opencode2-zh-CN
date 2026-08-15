@@ -8,7 +8,7 @@ import {
   type ProviderErrorEvent,
   type ToolCall,
 } from "@opencode-ai/ai"
-import { Cause, Data, Effect, Exit, Fiber, FiberSet, Layer, Option, Pull, Schedule, Stream } from "effect"
+import { Cause, Data, Effect, Exit, Fiber, FiberSet, Layer, Option, Pull, Ref, Schedule, Stream } from "effect"
 import { Database } from "../../database/database.js"
 import { Bus } from "../../bus.js"
 import { Permission } from "../../permission.js"
@@ -519,7 +519,7 @@ const layer = Layer.effect(
             Effect.gen(function* () {
               const selected =
                 (yield* SessionInbox.nextSteer(db, sessionID)) ?? (yield* SessionInbox.nextQueued(db, sessionID))
-              if (selected?.type !== "compaction") return
+              if (selected?.type !== "compaction") return undefined
               yield* bus.publishAll([
                 [SessionEvent.InboxDelivered, { sessionID, inboxID: selected.id }],
                 [SessionEvent.Compaction.Started, { sessionID, reason: "manual", recent: "", inputID: selected.id }],
@@ -529,6 +529,7 @@ const layer = Layer.effect(
           )
           if (pending?.type !== "compaction") return false
           const session = yield* getSession(sessionID)
+          const terminalCommitted = yield* Ref.make(false)
           const compacted = yield* restore(
             Effect.gen(function* () {
               return yield* compaction.compactManual({
@@ -536,6 +537,7 @@ const layer = Layer.effect(
                 messages: yield* store.context(sessionID),
                 inputID: pending.id,
                 started: true,
+                onTerminal: Ref.set(terminalCommitted, true),
                 prepareRemote: () =>
                   Effect.gen(function* () {
                     const selected = yield* context.select(sessionID)
@@ -552,6 +554,12 @@ const layer = Layer.effect(
             }),
           ).pipe(Effect.exit)
           if (Exit.isSuccess(compacted)) return true
+          if (yield* Ref.get(terminalCommitted)) return true
+          const terminal = yield* store.message(pending.id)
+          if (terminal?.sessionID === sessionID && terminal.message.type === "compaction") {
+            if (terminal.message.status === "completed") return true
+            if (terminal.message.status === "failed") return yield* Effect.failCause(compacted.cause)
+          }
           yield* bus.publish(SessionEvent.Compaction.Failed, {
             sessionID,
             reason: "manual",
