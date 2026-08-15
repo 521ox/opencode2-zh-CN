@@ -27,7 +27,6 @@ test("exposes every standard HTTP API group", () => {
     "event",
     "pty",
     "shell",
-    "question",
     "reference",
     "worktree",
     "vcs",
