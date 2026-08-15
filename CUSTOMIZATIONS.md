@@ -215,3 +215,12 @@ requires a fresh stopped-process migration from the latest source database.
 
 See `specs/v2/custom-port-plan.md` for the port matrix and release gates once
 the protocol and database inventories are finalized.
+
+## Upstream Synchronization
+
+- Product preservation contract:
+  `specs/v2/upstream-sync-preservation.md`
+- Executable synchronization procedure:
+  `specs/v2/upstream-sync-runbook.md`
+- Completed synchronization records:
+  `specs/v2/upstream-sync-records/`

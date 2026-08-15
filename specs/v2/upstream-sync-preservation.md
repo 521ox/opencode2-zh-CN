@@ -687,6 +687,11 @@ The following historical behavior must not return during an upstream sync:
 
 ## Upstream Sync Procedure
 
+Use `specs/v2/upstream-sync-runbook.md` as the executable procedure. This
+manifest remains the source of truth for product behavior and stable IDs.
+Completed synchronization evidence belongs under
+`specs/v2/upstream-sync-records/`.
+
 1. Record the current custom HEAD, official upstream HEAD, merge base, and a
    clean worktree check.
 2. Refresh official refs without merging.
