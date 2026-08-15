@@ -225,13 +225,11 @@ it.effect("remote compaction requires the native OpenAI Responses route owner", 
     expect(compaction.remoteThreshold(input("openai", collision))).toBeUndefined()
     expect(compaction.required(input("openai", collision))).toBe(true)
     expect(
-      compaction.remoteThreshold(
-        input("openai", OpenAIResponses.route, "@opencode-ai/ai/providers/custom-openai"),
-      ),
+      compaction.remoteThreshold(input("openai", OpenAIResponses.route, "@opencode-ai/ai/providers/custom-openai")),
     ).toBeUndefined()
-    expect(
-      compaction.required(input("openai", OpenAIResponses.route, "@opencode-ai/ai/providers/custom-openai")),
-    ).toBe(true)
+    expect(compaction.required(input("openai", OpenAIResponses.route, "@opencode-ai/ai/providers/custom-openai"))).toBe(
+      true,
+    )
   }),
 )
 

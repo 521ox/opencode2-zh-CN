@@ -409,14 +409,10 @@ const layer = Layer.effect(
           // restart the step instead of surfacing the provider error.
           if (
             recoverOverflow &&
+            compactThreshold === undefined &&
             !publisher.record().outputStarted &&
             isContextOverflowFailure(overflowFailure ?? streamFailure) &&
-            (yield* restore(
-              compaction.compact({
-                ...compactionInput,
-                remote: { request: prepared.request, options: prepared.options },
-              }),
-            )).status === "completed"
+            (yield* restore(compaction.compact(compactionInput))).status === "completed"
           )
             return CallOutcome.Restart({ step: currentStep, recoveredOverflow: true })
 

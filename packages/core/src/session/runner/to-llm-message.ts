@@ -11,9 +11,9 @@ const imageMimes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"
 const TOOL_RESULT_CONTEXT_RATIO = 0.1
 const TOOL_RESULT_MIN_TOKENS = 10_000
 const TOOL_RESULT_MAX_TOKENS = 64_000
+const TOOL_RESULT_BLOCK_SIZE = 32
+const TOOL_RESULT_ARCHIVED_TOKENS = 64
 const TOOL_RESULT_TRIMMED = "[... earlier tool result trimmed for context ...]"
-const TOOL_RESULT_OMITTED =
-  "[Earlier tool result omitted from this request to reduce context. Re-run the tool if the exact result is needed.]"
 
 type ToolContent = SessionMessage.ToolStateCompleted["content"]
 
@@ -50,13 +50,10 @@ const replaceToolText = (content: ToolContent, text: string): ToolContent => {
   return first ? [first, ...next.slice(1)] : content
 }
 
-const recoveryNotice = (tool: SessionMessage.AssistantTool, mode: "trimmed" | "omitted") => {
+const recoveryNotice = (tool: SessionMessage.AssistantTool) => {
   const file = outputPath(tool)
-  if (file)
-    return mode === "trimmed"
-      ? `[... earlier tool result trimmed for context; full content is available at ${file} ...]`
-      : `[Earlier tool result omitted from this request to reduce context. Full content is available at ${file}. Use Read or Grep with a narrow range or pattern if the exact result is needed.]`
-  return mode === "trimmed" ? TOOL_RESULT_TRIMMED : TOOL_RESULT_OMITTED
+  if (file) return `[... earlier tool result trimmed for context; full content is available at ${file} ...]`
+  return TOOL_RESULT_TRIMMED
 }
 
 const minimumPreviewTokens = (value: string, marker: string) => {
@@ -115,60 +112,45 @@ const boundedToolContent = (messages: readonly SessionMessage.Info[], tokenBudge
   const replacements = new Map<string, ToolContent>()
   if (tokenBudget === undefined) return replacements
   const candidates: Array<{
-    tool: SessionMessage.AssistantTool
-    content: ToolContent
-    text: string
-    tokens: number
-    marker: string
-    previewTokens: number
+    readonly tool: SessionMessage.AssistantTool
+    readonly content: ToolContent
+    readonly text: string
+    readonly tokens: number
+    readonly marker: string
   }> = []
 
-  for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex--) {
-    const message = messages[messageIndex]
+  // Fixed-size blocks make pruning deterministic across restarts and append-stable
+  // within a block. Only a block rollover archives the previous block, so cache
+  // invalidation is batched instead of shifting on every completed tool result.
+  for (const message of messages) {
     if (!message || message.type !== "assistant") continue
-    for (let contentIndex = message.content.length - 1; contentIndex >= 0; contentIndex--) {
-      const tool = message.content[contentIndex]
+    for (const tool of message.content) {
       if (!tool || tool.type !== "tool" || tool.executed === true || tool.state.status !== "completed") continue
       const text = toolText(tool.state.content)
       if (!text) continue
-      const marker = recoveryNotice(tool, "trimmed")
       candidates.push({
         tool,
         content: tool.state.content,
         text,
         tokens: Token.estimate(text),
-        marker,
-        previewTokens: minimumPreviewTokens(text, marker),
+        marker: recoveryNotice(tool),
       })
     }
   }
+  if (candidates.length === 0) return replacements
 
-  const budget = Math.max(0, tokenBudget)
-  if (candidates.reduce((total, candidate) => total + candidate.tokens, 0) <= budget) return replacements
-  let retained = 0
-  let boundary: { index: number; tokens: number } | undefined
-
+  const activeStart = Math.floor((candidates.length - 1) / TOOL_RESULT_BLOCK_SIZE) * TOOL_RESULT_BLOCK_SIZE
+  const activeLimit = Math.max(TOOL_RESULT_ARCHIVED_TOKENS, Math.floor(tokenBudget / TOOL_RESULT_BLOCK_SIZE))
   for (let index = 0; index < candidates.length; index++) {
     const candidate = candidates[index]
-    if (!candidate || retained + candidate.previewTokens > budget) break
-    boundary = { index, tokens: budget - retained }
-    retained += candidate.tokens
-  }
-
-  if (!boundary) return replacements
-  for (let index = boundary.index; index < candidates.length; index++) {
-    const candidate = candidates[index]
     if (!candidate) continue
-    if (index === boundary.index) {
-      replacements.set(
-        candidate.tool.id,
-        replaceToolText(candidate.content, truncateMiddle(candidate.text, boundary.tokens, candidate.marker)),
-      )
-      continue
-    }
+    const limit = index < activeStart ? TOOL_RESULT_ARCHIVED_TOKENS : activeLimit
+    if (candidate.tokens <= limit) continue
+    const marker = candidate.marker
+    const previewLimit = Math.max(limit, minimumPreviewTokens(candidate.text, marker))
     replacements.set(
       candidate.tool.id,
-      replaceToolText(candidate.content, recoveryNotice(candidate.tool, "omitted")),
+      replaceToolText(candidate.content, truncateMiddle(candidate.text, previewLimit, marker)),
     )
   }
   return replacements

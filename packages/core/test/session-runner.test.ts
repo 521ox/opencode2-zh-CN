@@ -171,6 +171,11 @@ const nativeResponsesModel = LanguageModel.make({
   provider: "openai",
   route: OpenAIResponses.route.with({ limits: { context: 20_000, input: 19_000, output: 1_000 } }),
 })
+const nativeAutomaticCompactionModel = LanguageModel.make({
+  id: "gpt-5.2-auto-compaction",
+  provider: "openai",
+  route: OpenAIResponses.route.with({ limits: { context: 400_000, input: 380_000, output: 128_000 } }),
+})
 
 const compactHttp = Layer.mock(RequestExecutor.Service)({
   execute: (request) =>
@@ -305,7 +310,7 @@ const models = Layer.mock(SessionRunnerModel.Service)({
           capabilities: { tools: true, input: ["text", "image"], output: ["text"] },
           cost: [],
           providerPackage:
-            resolvedModel === nativeResponsesModel
+            resolvedModel === nativeResponsesModel || resolvedModel === nativeAutomaticCompactionModel
               ? "@opencode-ai/ai/providers/openai"
               : "@opencode-ai/ai/providers/test",
           variant: session.model?.variant,
@@ -2405,14 +2410,24 @@ describe("SessionRunnerLLM", () => {
       yield* runPrompt(session, "Continue from the checkpoint")
       const replay = requests[1]?.messages
         .flatMap((message) => message.content)
-        .find(
-          (part) =>
-            part.type === "text" &&
-            part.providerMetadata?.opencode?.remoteCompaction !== undefined,
-        )
+        .find((part) => part.type === "text" && part.providerMetadata?.opencode?.remoteCompaction !== undefined)
       expect(replay).toMatchObject({
         providerMetadata: { opencode: { remoteCompaction: { output: checkpoint.output } } },
       })
+    }),
+  )
+
+  it.effect("sends provider-managed automatic compaction through the normal Responses request", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      currentModel = nativeAutomaticCompactionModel
+      yield* TestLLM.push(TestLLM.text("Provider-managed response", "text-provider-managed-compaction"))
+
+      yield* runPrompt(session, "Use the automatic compaction threshold")
+
+      expect(requests).toHaveLength(1)
+      expect(requests[0]?.providerOptions).toEqual({ openai: { compactThreshold: 368_000 } })
+      expect(compactRequests).toHaveLength(0)
     }),
   )
 
@@ -2562,48 +2577,13 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect("recovers native OpenAI Responses overflow through remote compact without a local summary", () =>
-    Effect.gen(function* () {
-      const session = yield* setup
-      yield* TestLLM.push(TestLLM.text("Earlier answer", "text-native-overflow-history"))
-      yield* runPrompt(session, "Earlier question")
-      currentModel = nativeResponsesModel
-      requests.length = 0
-      yield* TestLLM.push(
-        [LLMEvent.providerError({ message: "prompt too long", classification: "context-overflow" })],
-        TestLLM.text("Recovered remotely", "text-native-overflow-final"),
-      )
-
-      yield* runPrompt(session, "Continue after overflow")
-
-      expect(requests).toHaveLength(2)
-      expect(compactRequests).toHaveLength(1)
-      expect(JSON.stringify(compactRequests[0]?.body)).toContain("Continue after overflow")
-      expect(JSON.stringify(compactRequests[0]?.body)).not.toContain(SessionRulesLocation.Header)
-      const replay = requests[1]?.messages
-        .flatMap((message) => message.content)
-        .find(
-          (part) =>
-            part.type === "text" && part.providerMetadata?.opencode?.remoteCompaction !== undefined,
-        )
-      expect(replay).toMatchObject({
-        providerMetadata: { opencode: { remoteCompaction: { output: compactOutput } } },
-      })
-      expect(yield* session.context(sessionID)).toMatchObject([
-        { type: "compaction", status: "completed", remote: compactOutput },
-        { type: "assistant", finish: "stop" },
-      ])
-    }),
-  )
-
-  it.effect("does not fall back to a local summary when native remote compact fails", () =>
+  it.effect("does not call the manual compact endpoint to recover native automatic overflow", () =>
     Effect.gen(function* () {
       const session = yield* setup
       yield* TestLLM.push(TestLLM.text("Earlier answer", "text-native-overflow-failure-history"))
       yield* runPrompt(session, "Earlier question")
-      currentModel = nativeResponsesModel
+      currentModel = nativeAutomaticCompactionModel
       requests.length = 0
-      compactFailure = providerUnavailable()
       yield* TestLLM.push(
         [LLMEvent.providerError({ message: "prompt too long", classification: "context-overflow" })],
         TestLLM.text("Must not run", "text-native-overflow-fallback"),
@@ -2613,15 +2593,9 @@ describe("SessionRunnerLLM", () => {
       expect((yield* session.resume(sessionID).pipe(Effect.flip)).message).toBe("prompt too long")
 
       expect(requests).toHaveLength(1)
-      expect(compactRequests).toHaveLength(1)
-      expect(yield* session.context(sessionID)).toContainEqual(
-        expect.objectContaining({
-          type: "compaction",
-          status: "failed",
-          reason: "auto",
-          error: expect.objectContaining({ message: "Provider unavailable" }),
-        }),
-      )
+      expect(requests[0]?.providerOptions).toEqual({ openai: { compactThreshold: 368_000 } })
+      expect(compactRequests).toHaveLength(0)
+      expect((yield* session.context(sessionID)).some((message) => message.type === "compaction")).toBeFalse()
     }),
   )
 

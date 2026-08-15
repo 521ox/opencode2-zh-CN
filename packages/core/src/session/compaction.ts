@@ -96,7 +96,6 @@ export type AutoInput = {
   readonly providerPackage: string
   readonly ref: Ref
   readonly cost: Info["cost"]
-  readonly remote?: RemoteRequest
 }
 
 export type ManualInput = {
@@ -389,7 +388,7 @@ const make = (dependencies: Dependencies) => {
       dependencies.http.execute,
       plan.options,
     ).pipe(
-      Effect.map((output) => ({ output } as const)),
+      Effect.map((output) => ({ output }) as const),
       Effect.catchTag("AI.Error", (error) => Effect.succeed({ error: toSessionError(error) } as const)),
       Effect.onInterrupt(() =>
         plan.reason === "auto"
@@ -429,20 +428,15 @@ const make = (dependencies: Dependencies) => {
     return { status: "completed" as const }
   })
   const compact = Effect.fn("SessionCompaction.compact")(function* (input: AutoInput) {
-    if (supportsRemoteCompaction(input)) {
-      if (!input.remote)
-        return yield* failed({
-          sessionID: input.session.id,
-          reason: "auto",
-          error: { type: "compaction.failed", message: "Remote compaction request was not prepared" },
-        })
-      return yield* executeRemote({
-        session: input.session,
-        request: input.remote.request,
-        options: input.remote.options,
+    if (supportsRemoteCompaction(input))
+      return yield* failed({
+        sessionID: input.session.id,
         reason: "auto",
+        error: {
+          type: "compaction.failed",
+          message: "Automatic remote compaction is provider-managed through the Responses context threshold",
+        },
       })
-    }
     const content = planContent(input.messages, config.tokens)
     if (content)
       return yield* execute({
@@ -521,7 +515,7 @@ const make = (dependencies: Dependencies) => {
           inputID: input.inputID,
         })
       const prepared = yield* input.prepareRemote().pipe(
-        Effect.map((remote) => ({ remote } as const)),
+        Effect.map((remote) => ({ remote }) as const),
         Effect.catch((error) => Effect.succeed({ error: toSessionError(error) } as const)),
       )
       if ("error" in prepared)

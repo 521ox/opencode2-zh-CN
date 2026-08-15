@@ -21,14 +21,91 @@ const model = Model.Ref.make({ id: Model.ID.make("model"), providerID: Provider.
 const build = Agent.defaultID
 
 describe("toLLMMessages", () => {
-  test("scales the aggregate tool result budget with the model context window", () => {
+  test("scales the active tool-result block budget with the model context window", () => {
     expect(toolResultTokenBudget(undefined)).toBe(64_000)
     expect(toolResultTokenBudget(50_000)).toBe(10_000)
     expect(toolResultTokenBudget(380_000)).toBe(38_000)
     expect(toolResultTokenBudget(1_000_000)).toBe(64_000)
   })
 
-  test("bounds oldest local tool results without mutating history or hosted outputs", () => {
+  test("keeps projected history byte-stable when a new tool result is appended", () => {
+    const assistant = (suffix: string, toolID: string, text: string) =>
+      SessionMessage.Assistant.make({
+        id: id(suffix),
+        type: "assistant",
+        agent: build,
+        model: { id: Model.ID.make("model"), providerID: Provider.ID.make("provider") },
+        content: [
+          SessionMessage.AssistantTool.make({
+            type: "tool",
+            id: toolID,
+            name: "read",
+            state: SessionMessage.ToolStateCompleted.make({
+              status: "completed",
+              input: { path: `${toolID}.txt` },
+              content: [{ type: "text", text }],
+            }),
+            time: { created, completed: created },
+          }),
+        ],
+        time: { created, completed: created },
+      })
+    const older = assistant("cache-old", "call_cache_old", "O".repeat(1_200))
+    const recent = assistant("cache-recent", "call_cache_recent", "R".repeat(200))
+    const appended = assistant("cache-appended", "call_cache_appended", "N".repeat(200))
+    const first = toLLMMessages([older, recent], model, model.providerID, { toolResultTokens: 100 })
+    const second = toLLMMessages([older, recent, appended], model, model.providerID, { toolResultTokens: 100 })
+    const firstResults = first
+      .flatMap((message) => message.content)
+      .filter((part) => part.type === "tool-result")
+      .flatMap((part) =>
+        part.result.type === "text" && typeof part.result.value === "string" ? [part.result.value] : [],
+      )
+
+    expect(second.slice(0, first.length)).toEqual(first)
+    expect(firstResults.every((value) => Token.estimate(value) <= 100)).toBeTrue()
+  })
+
+  test("batches prompt-prefix invalidation at a 32-result block rollover", () => {
+    const assistant = (index: number) =>
+      SessionMessage.Assistant.make({
+        id: id(`cache-block-${index}`),
+        type: "assistant",
+        agent: build,
+        model: { id: Model.ID.make("model"), providerID: Provider.ID.make("provider") },
+        content: [
+          SessionMessage.AssistantTool.make({
+            type: "tool",
+            id: `call_cache_block_${index}`,
+            name: "read",
+            state: SessionMessage.ToolStateCompleted.make({
+              status: "completed",
+              input: { path: `${index}.txt` },
+              content: [{ type: "text", text: `${index}:${"X".repeat(800)}` }],
+            }),
+            time: { created, completed: created },
+          }),
+        ],
+        time: { created, completed: created },
+      })
+    const source = Array.from({ length: 34 }, (_, index) => assistant(index))
+    const beforeRollover = toLLMMessages(source.slice(0, 32), model, model.providerID, { toolResultTokens: 3_200 })
+    const atRollover = toLLMMessages(source.slice(0, 33), model, model.providerID, { toolResultTokens: 3_200 })
+    const afterRollover = toLLMMessages(source, model, model.providerID, { toolResultTokens: 3_200 })
+    const projectedTokens = afterRollover
+      .flatMap((message) => message.content)
+      .filter((part) => part.type === "tool-result")
+      .flatMap((part) =>
+        part.result.type === "text" && typeof part.result.value === "string" ? [Token.estimate(part.result.value)] : [],
+      )
+      .reduce((total, tokens) => total + tokens, 0)
+
+    expect(atRollover.slice(0, beforeRollover.length)).not.toEqual(beforeRollover)
+    expect(afterRollover.slice(0, atRollover.length)).toEqual(atRollover)
+    expect(projectedTokens).toBeLessThanOrEqual(2_248)
+  })
+
+  test("bounds oversized local tool results independently without mutating history or hosted outputs", () => {
     const completed = (input: {
       toolID: string
       text: string
@@ -63,7 +140,7 @@ describe("toLLMMessages", () => {
       })
     const old = completed({
       toolID: "call_old",
-      text: "A".repeat(100),
+      text: "A".repeat(400),
       outputPath: "C:\\tool-output\\call_old",
     })
     const middle = completed({
@@ -82,23 +159,25 @@ describe("toLLMMessages", () => {
       time: { created, completed: created },
     })
 
-    const project = () => toLLMMessages([source], model, model.providerID, { toolResultTokens: 30 })
+    const project = () => toLLMMessages([source], model, model.providerID, { toolResultTokens: 50 })
     const messages = project()
     const parts = messages.flatMap((message) => message.content)
     const calls = parts.filter((part) => part.type === "tool-call")
     const results = parts.filter((part) => part.type === "tool-result")
     const byID = new Map(results.map((part) => [part.id, part]))
-    const text = (toolID: string) => {
+    const text = (toolID: string): string => {
       const result = byID.get(toolID)?.result
       if (!result) return ""
-      if (result.type === "text") return result.value
+      if (result.type === "text") return typeof result.value === "string" ? result.value : ""
       if (result.type !== "content") return ""
       return result.value.flatMap((item) => (item.type === "text" ? [item.text] : [])).join("\n")
     }
 
     expect(calls).toHaveLength(4)
     expect(results).toHaveLength(4)
-    expect(text("call_old")).toContain("Earlier tool result omitted")
+    expect(text("call_old")).toStartWith("A")
+    expect(text("call_old")).toEndWith("A")
+    expect(text("call_old")).toContain("trimmed for context")
     expect(text("call_old")).toContain("C:\\tool-output\\call_old")
     expect(text("call_middle")).toContain("HEAD-")
     expect(text("call_middle")).toContain("-TAIL")
@@ -111,9 +190,11 @@ describe("toLLMMessages", () => {
     })
     expect(text("call_newest")).toBe("newest result")
     expect(text("call_hosted")).toBe("H".repeat(400))
+    expect(Token.estimate(text("call_old"))).toBeLessThan(Token.estimate("A".repeat(400)))
+    expect(Token.estimate(text("call_middle"))).toBeLessThan(Token.estimate(`HEAD-${"x".repeat(300)}-TAIL`))
     expect(old.state.status === "completed" ? old.state.content[0] : undefined).toEqual({
       type: "text",
-      text: "A".repeat(100),
+      text: "A".repeat(400),
     })
     expect(project()).toEqual(messages)
   })
@@ -152,7 +233,7 @@ describe("toLLMMessages", () => {
     expect(projected).toContain("trimmed for context")
   })
 
-  test("reserves a marked boundary preview when the newest result would consume the budget", () => {
+  test("trims every oversized result without shifting a shared boundary", () => {
     const completed = (toolID: string, text: string) =>
       SessionMessage.AssistantTool.make({
         type: "tool",
@@ -165,8 +246,8 @@ describe("toLLMMessages", () => {
         }),
         time: { created, completed: created },
       })
-    const older = completed("call_boundary_old", `OLD-HEAD-${"o".repeat(400)}-OLD-TAIL`)
-    const newest = completed("call_boundary_new", `NEW-HEAD-${"n".repeat(382)}-NEW-TAIL`)
+    const older = completed("call_boundary_old", `OLD-HEAD-${"o".repeat(500)}-OLD-TAIL`)
+    const newest = completed("call_boundary_new", `NEW-HEAD-${"n".repeat(800)}-NEW-TAIL`)
     const source = SessionMessage.Assistant.make({
       id: id("boundary-preview"),
       type: "assistant",
@@ -185,15 +266,18 @@ describe("toLLMMessages", () => {
       ]),
     )
 
-    expect(Token.estimate(`NEW-HEAD-${"n".repeat(382)}-NEW-TAIL`)).toBe(100)
-    expect(Token.estimate(byID.get("call_boundary_new") ?? "")).toBeLessThanOrEqual(100)
-    expect(byID.get("call_boundary_new")).toStartWith("NEW-HEAD-")
-    expect(byID.get("call_boundary_new")).toEndWith("-NEW-TAIL")
-    expect(byID.get("call_boundary_new")).toContain("trimmed for context")
-    expect(byID.get("call_boundary_old")).toContain("Earlier tool result omitted")
+    for (const [toolID, prefix, suffix] of [
+      ["call_boundary_old", "OLD-HEAD-", "-OLD-TAIL"],
+      ["call_boundary_new", "NEW-HEAD-", "-NEW-TAIL"],
+    ] as const) {
+      expect(Token.estimate(byID.get(toolID) ?? "")).toBeLessThanOrEqual(100)
+      expect(byID.get(toolID)).toStartWith(prefix)
+      expect(byID.get(toolID)).toEndWith(suffix)
+      expect(byID.get(toolID)).toContain("trimmed for context")
+    }
   })
 
-  test("keeps a short Unicode result and moves the boundary to the next oversized result", () => {
+  test("keeps short results while independently bounding an oversized sibling", () => {
     const completed = (toolID: string, text: string) =>
       SessionMessage.AssistantTool.make({
         type: "tool",
@@ -208,7 +292,7 @@ describe("toLLMMessages", () => {
       })
     const oldest = completed("call_short_boundary_old", `OLD-HEAD-${"o".repeat(1_182)}-OLD-TAIL`)
     const short = completed("call_short_boundary_emoji", "😀")
-    const newestText = "N".repeat(38_976)
+    const newestText = "N".repeat(200)
     const newest = completed("call_short_boundary_new", newestText)
     const source = SessionMessage.Assistant.make({
       id: id("short-boundary"),
@@ -218,7 +302,7 @@ describe("toLLMMessages", () => {
       content: [oldest, short, newest],
       time: { created, completed: created },
     })
-    const results = toLLMMessages([source], model, model.providerID, { toolResultTokens: 10_000 })
+    const results = toLLMMessages([source], model, model.providerID, { toolResultTokens: 100 })
       .flatMap((message) => message.content)
       .filter((part) => part.type === "tool-result")
     const byID = new Map(
@@ -229,10 +313,10 @@ describe("toLLMMessages", () => {
     )
     const boundary = byID.get("call_short_boundary_old") ?? ""
 
-    expect(Token.estimate(newestText)).toBe(9_744)
+    expect(Token.estimate(newestText)).toBe(50)
     expect(byID.get("call_short_boundary_new")).toBe(newestText)
     expect(byID.get("call_short_boundary_emoji")).toBe("😀")
-    expect(Token.estimate(boundary)).toBeLessThanOrEqual(255)
+    expect(Token.estimate(boundary)).toBeLessThanOrEqual(100)
     expect(boundary).toStartWith("OLD-HEAD-")
     expect(boundary).toEndWith("-OLD-TAIL")
     expect(boundary).toContain("trimmed for context")
@@ -282,7 +366,7 @@ describe("toLLMMessages", () => {
         id: "fc_yfu7VPkdtvv2d0aHKRZ2c7Ls",
         call_id: "call_yfu7VPkdtvv2d0aHKRZ2c7Ls",
         name: "read",
-        arguments: "{\"path\":\"README.md\"}",
+        arguments: '{"path":"README.md"}',
       },
     ]
     const messages = toLLMMessages(
