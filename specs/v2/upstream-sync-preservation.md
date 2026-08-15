@@ -117,6 +117,7 @@ Any unclassified path, unknown stable ID, or unknown bucket rejects the sync.
 | `CUST-MIGRATION-001` | V1 configuration and built-in database migration compatibility    | `PRESERVE`            | `42c0c9b96`, `24307f8ee` | Core V1 normalization and migration boundary                |
 | `CUST-MIGRATION-002` | Copy-only rehearsal, native context repair, and VACUUM safety     | `OPERATIONS`          | `42c0c9b96`              | Migration scripts and handoff documents                     |
 | `CUST-OPS-001`       | Windows build, export identity, and compiled-service smoke        | `OPERATIONS`          | `42c0c9b96`              | Build wrapper and CLI service smoke                         |
+| `CUST-OPS-002`       | Main TUI default standalone server lifecycle                      | `PRESERVE`            | `52345477b`              | CLI default handler and standalone ownership                |
 
 ## `CUST-RESP-001`: Native Route Ownership And Compatibility Routing
 
@@ -735,6 +736,52 @@ feedback as the intended contract; preserve or improve cancellation semantics.
   binary rather than a development server.
 - Exported artifact hashes match.
 
+## `CUST-OPS-002`: Main TUI Default Standalone Lifecycle
+
+### Required behavior
+
+- Invoking the CLI with no subcommand starts the main interactive TUI with a
+  private standalone server when no explicit `--server` is supplied.
+- The private server is owned by the interactive command's Effect scope through
+  the existing stdin lease. Normal TUI completion, Ctrl+C, crashes, and owner
+  termination close the lease and terminate that server.
+- An explicit `--server` continues to connect to the requested persistent or
+  external endpoint. Supplying both `--server` and `--standalone` continues to
+  use the existing conflict validation.
+- `mini`, `models`, `run`, `service`, and other subcommands retain their existing
+  defaults. Persistent background service operation remains available through
+  explicit `service start/status/stop/restart` commands.
+- The new TUI must not automatically stop a pre-existing managed service because
+  other clients may own it. The first activation after upgrading should use an
+  explicit `service stop` once to clean up the old default service.
+- The shared help text identifies standalone as the default only when no
+  subcommand is given.
+
+### Owners
+
+- `packages/cli/src/commands/handlers/default.ts`
+- `packages/cli/src/commands/commands.ts`
+- `packages/cli/src/services/server-connection.ts`
+- `packages/cli/src/services/standalone.ts`
+- `packages/cli/test/default-handler.test.ts`
+- `packages/cli/test/server-connection.test.ts`
+- `packages/cli/test/standalone.test.ts`
+
+### Acceptance evidence
+
+- Policy tests prove an absent server selects standalone, an explicit server is
+  preserved, empty explicit values reach downstream validation, and conflicting
+  flags remain conflicting.
+- Standalone lifecycle tests prove owner termination closes the private server.
+- CLI typecheck passes.
+- An isolated Windows benchmark confirms private standalone startup succeeds and
+  leaves `service status` as `stopped` after completion. Reference measurements
+  on 2026-08-15 were approximately 1.5 seconds standalone, 1.9 seconds managed
+  cold, and 0.34 seconds managed warm.
+- The compiled Windows candidate passes service smoke. Existing Windows-only CLI
+  suite failures caused by Unix `mktemp` assumptions or temporary-directory file
+  locks are reported separately and do not count as lifecycle failures.
+
 ## Explicitly Not Preserved
 
 The following historical behavior must not return during an upstream sync:
@@ -859,3 +906,4 @@ Copy this table into the synchronization change record and fill every row:
 | `CUST-MIGRATION-001` | pending |          |          |       |
 | `CUST-MIGRATION-002` | pending |          |          |       |
 | `CUST-OPS-001`       | pending |          |          |       |
+| `CUST-OPS-002`       | pending |          |          |       |

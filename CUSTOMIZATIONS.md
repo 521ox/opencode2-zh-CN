@@ -87,6 +87,12 @@ accepted.
     Escape behavior remains unchanged. Textual `esc` hints remain only where
     they mean back, cancel, dismiss, or a keyboard-only action rather than a
     window close control.
+16. Launching the main interactive TUI with no subcommand uses a private
+    standalone server by default. The server is owned by the TUI scope and exits
+    when the TUI exits, including Ctrl+C and owner termination. An explicit
+    `--server` still connects to a persistent or external server, and non-TUI
+    commands retain their existing service defaults. Persistent service
+    lifecycle remains available through the explicit `service` commands.
 
 ## Porting Rules
 
