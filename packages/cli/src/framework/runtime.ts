@@ -86,7 +86,7 @@ export function run(commands: Spec.Any, handlers: ReadonlyArray<LazyHandler>, op
 export function resolveCpuProfileTarget(
   command: string,
   flag: Option.Option<string>,
-  inherited = process.env.OPENCODE_CPU_PROFILE,
+  inherited = CpuProfile.inheritedTarget(),
 ) {
   return Option.getOrUndefined(flag) ?? (command === "serve" ? inherited : undefined)
 }
@@ -101,15 +101,19 @@ function provide(node: Spec.Any, handlers: ReadonlyArray<LazyHandler>): Provided
             const cpuProfile = resolveCpuProfileTarget(node.name, yield* GlobalFlags.CpuProfile)
             if (!cpuProfile) return yield* module.default(input)
             const target = path.resolve(cpuProfile)
-            const previous = process.env.OPENCODE_CPU_PROFILE
-            process.env.OPENCODE_CPU_PROFILE = target
+            const previousTarget = process.env[CpuProfile.targetEnvironment]
+            const previousSource = process.env[CpuProfile.sourceEnvironment]
+            process.env[CpuProfile.targetEnvironment] = target
+            process.env[CpuProfile.sourceEnvironment] = CpuProfile.explicitSource
             return yield* (
               node.name === "serve" ? CpuProfile.run(target, module.default(input)) : module.default(input)
             ).pipe(
               Effect.ensuring(
                 Effect.sync(() => {
-                  if (previous === undefined) delete process.env.OPENCODE_CPU_PROFILE
-                  else process.env.OPENCODE_CPU_PROFILE = previous
+                  if (previousTarget === undefined) delete process.env[CpuProfile.targetEnvironment]
+                  else process.env[CpuProfile.targetEnvironment] = previousTarget
+                  if (previousSource === undefined) delete process.env[CpuProfile.sourceEnvironment]
+                  else process.env[CpuProfile.sourceEnvironment] = previousSource
                 }),
               ),
             )

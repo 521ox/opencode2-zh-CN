@@ -861,14 +861,16 @@ feedback as the intended contract; preserve or improve cancellation semantics.
 
 - The upstream optional `--cpu-profile <path>` flag remains the public control.
 - An explicit flag value takes precedence over any inherited internal value.
-- The parent runtime may set `OPENCODE_CPU_PROFILE` while launching a serving
-  process, and restores the previous environment afterward.
+- The parent runtime may set `OPENCODE_CPU_PROFILE` together with an internal
+  explicit-source marker while launching a serving process, and restores both
+  previous environment values afterward.
 - Managed services continue to receive the explicit `--cpu-profile` argument
   through `ServiceConfig.options()`.
-- The custom default private `serve --stdio` child inherits the internal
+- The custom default private `serve --stdio` child inherits the marked internal
   environment value and starts the profiler even though it was not launched
   with an explicit profile flag.
-- Non-serve commands ignore an inherited `OPENCODE_CPU_PROFILE` value.
+- Non-serve commands and managed service discovery ignore an unmarked ambient
+  `OPENCODE_CPU_PROFILE` value.
 - With no flag or internal propagation value, startup, ownership, and shutdown
   behavior remain unchanged.
 
@@ -886,9 +888,9 @@ feedback as the intended contract; preserve or improve cancellation semantics.
 ### Acceptance evidence
 
 - Unit tests prove explicit-flag precedence, inherited private-serve behavior,
-  and non-serve rejection.
+  non-serve rejection, and unmarked ambient-value rejection.
 - Service tests prove the managed-service argument is included only when the
-  internal propagation value is present.
+  marked internal propagation value is present.
 - Default-handler and standalone lifecycle tests remain green.
 - The complete CLI suite passes 199/199 on Windows with the scoped Git
   `usr/bin` test environment.

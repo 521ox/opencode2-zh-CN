@@ -21,8 +21,10 @@ test("managed service forwards the CPU profile path to the server", async () => 
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "opencode-service-profile-"))
   const profile = path.join(root, "server.cpuprofile")
   try {
-    const previous = process.env.OPENCODE_CPU_PROFILE
+    const previousTarget = process.env.OPENCODE_CPU_PROFILE
+    const previousSource = process.env.OPENCODE_CPU_PROFILE_SOURCE
     process.env.OPENCODE_CPU_PROFILE = profile
+    process.env.OPENCODE_CPU_PROFILE_SOURCE = "explicit"
     try {
       const options = await Effect.runPromise(
         ServiceConfig.options().pipe(
@@ -32,8 +34,38 @@ test("managed service forwards the CPU profile path to the server", async () => 
       )
       expect(options.command.slice(-2)).toEqual(["--cpu-profile", profile])
     } finally {
-      if (previous === undefined) delete process.env.OPENCODE_CPU_PROFILE
-      else process.env.OPENCODE_CPU_PROFILE = previous
+      if (previousTarget === undefined) delete process.env.OPENCODE_CPU_PROFILE
+      else process.env.OPENCODE_CPU_PROFILE = previousTarget
+      if (previousSource === undefined) delete process.env.OPENCODE_CPU_PROFILE_SOURCE
+      else process.env.OPENCODE_CPU_PROFILE_SOURCE = previousSource
+    }
+  } finally {
+    await fs.rm(root, { recursive: true, force: true })
+  }
+})
+
+test("managed service ignores an unmarked ambient CPU profile", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "opencode-service-ambient-profile-"))
+  const profile = path.join(root, "ambient.cpuprofile")
+  try {
+    const previousTarget = process.env.OPENCODE_CPU_PROFILE
+    const previousSource = process.env.OPENCODE_CPU_PROFILE_SOURCE
+    process.env.OPENCODE_CPU_PROFILE = profile
+    delete process.env.OPENCODE_CPU_PROFILE_SOURCE
+    try {
+      const options = await Effect.runPromise(
+        ServiceConfig.options().pipe(
+          Effect.provide(Global.layerWith({ config: path.join(root, "config"), state: path.join(root, "state") })),
+          Effect.provide(NodeFileSystem.layer),
+        ),
+      )
+      expect(options.command).not.toContain("--cpu-profile")
+      expect(options.command).not.toContain(profile)
+    } finally {
+      if (previousTarget === undefined) delete process.env.OPENCODE_CPU_PROFILE
+      else process.env.OPENCODE_CPU_PROFILE = previousTarget
+      if (previousSource === undefined) delete process.env.OPENCODE_CPU_PROFILE_SOURCE
+      else process.env.OPENCODE_CPU_PROFILE_SOURCE = previousSource
     }
   } finally {
     await fs.rm(root, { recursive: true, force: true })

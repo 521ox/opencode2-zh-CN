@@ -4,6 +4,14 @@ import { Effect, FileSystem } from "effect"
 import { Session } from "node:inspector"
 import path from "node:path"
 
+export const targetEnvironment = "OPENCODE_CPU_PROFILE"
+export const sourceEnvironment = "OPENCODE_CPU_PROFILE_SOURCE"
+export const explicitSource = "explicit"
+
+export function inheritedTarget(target = process.env[targetEnvironment], source = process.env[sourceEnvironment]) {
+  return source === explicitSource ? target : undefined
+}
+
 export function run<A, E, R>(file: string, effect: Effect.Effect<A, E, R>) {
   const target = path.resolve(file)
   return Effect.acquireUseRelease(

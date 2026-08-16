@@ -5,6 +5,7 @@ import { Service } from "@opencode-ai/client/effect/service"
 import { Effect, FileSystem, Option, Schema } from "effect"
 import { randomBytes } from "crypto"
 import path from "path"
+import { CpuProfile } from "../cpu-profile"
 import { selfCommand } from "../util/process"
 
 // The CLI's service configuration file, plus the Service.EnsureOptions binding that
@@ -101,15 +102,11 @@ const paths = Effect.gen(function* () {
 export const options = Effect.fnUntraced(function* (input: { readonly checkVersion?: boolean } = {}) {
   const { file, legacyRegistrationFiles } = yield* paths
   yield* Effect.forEach(legacyRegistrationFiles, (legacy) => migrateRegistration(legacy, file))
+  const cpuProfile = CpuProfile.inheritedTarget()
   return {
     file,
     version: input.checkVersion ? OPENCODE_VERSION : undefined,
-    command: [
-      ...selfCommand(),
-      "serve",
-      "--service",
-      ...(process.env.OPENCODE_CPU_PROFILE ? ["--cpu-profile", process.env.OPENCODE_CPU_PROFILE] : []),
-    ],
+    command: [...selfCommand(), "serve", "--service", ...(cpuProfile ? ["--cpu-profile", cpuProfile] : [])],
   }
 })
 

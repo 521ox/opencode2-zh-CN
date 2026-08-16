@@ -107,9 +107,10 @@ accepted.
     immediate handoff; crash recovery waits for bounded expiry.
 18. The optional upstream `--cpu-profile` flag profiles the actual serving
     process in both managed-service and private-standalone modes. An explicit
-    flag takes precedence. The parent CLI uses `OPENCODE_CPU_PROFILE` only as an
-    internal propagation variable; a `serve` child may inherit it when no flag
-    is present, while non-serve commands ignore the inherited value. Default
+    flag takes precedence. The parent CLI propagates `OPENCODE_CPU_PROFILE` only
+    together with an internal explicit-source marker; a `serve` child may
+    inherit the marked value when no flag is present, while non-serve commands
+    and managed service discovery ignore an unmarked ambient value. Default
     startup and service ownership remain unchanged when profiling is disabled.
 
 ## Porting Rules
