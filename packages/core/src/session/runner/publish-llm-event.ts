@@ -202,6 +202,7 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
       }),
     true,
   )
+  // Providers may interleave reasoning parts before their done events arrive.
   const reasoning = fragments(
     "reasoning",
     (_reasoningID, value, ordinal, state) =>
@@ -214,7 +215,6 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
           state,
         })
       }),
-    true,
   )
   const toolInput = fragments("tool input", (id, value) =>
     Effect.gen(function* () {

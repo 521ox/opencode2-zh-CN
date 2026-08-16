@@ -201,6 +201,22 @@ test("reasoning state from start, empty delta, and end is merged", async () => {
   })
 })
 
+test("interleaved reasoning blocks flush independently at step finish", async () => {
+  const { published, publisher } = capture("openai")
+  await Effect.runPromise(publisher.publish(LLMEvent.reasoningStart({ id: "reasoning-a" })))
+  await Effect.runPromise(publisher.publish(LLMEvent.reasoningDelta({ id: "reasoning-a", text: "first" })))
+  await Effect.runPromise(publisher.publish(LLMEvent.reasoningStart({ id: "reasoning-b" })))
+  await Effect.runPromise(publisher.publish(LLMEvent.reasoningDelta({ id: "reasoning-b", text: "second" })))
+  await Effect.runPromise(publisher.publish(LLMEvent.stepFinish({ index: 0, reason: { normalized: "stop" } })))
+
+  expect(published.filter((event) => event.type === "session.reasoning.started.1")).toHaveLength(2)
+  expect(published.filter((event) => event.type === "session.reasoning.ended.1")).toEqual([
+    expect.objectContaining({ data: expect.objectContaining({ ordinal: 0, text: "first" }) }),
+    expect.objectContaining({ data: expect.objectContaining({ ordinal: 1, text: "second" }) }),
+  ])
+  expect(publisher.record().finish).toMatchObject({ finish: "stop" })
+})
+
 test("provider-executed tool metadata is flattened using the route key", async () => {
   const { published, publisher } = capture("openai")
   await Effect.runPromise(
