@@ -405,6 +405,12 @@ commit introduced it first.
   typed incomplete-stream provider error.
 - `response.completed`, `response.incomplete`, and the handled provider failure
   path remain explicit terminal states; an arbitrary socket close is not one.
+- Distinct reasoning part IDs may interleave before their individual done events
+  arrive. Core must keep each part's ordinal and flush all open reasoning parts
+  at step finish or typed stream failure instead of treating a second distinct
+  reasoning start as a malformed stream.
+- Duplicate starts for the same reasoning ID, delta-before-start, and
+  end-before-start remain invalid lifecycle transitions and must fail closed.
 - OpenAI Responses input arrays larger than 16,384 items fail locally as typed
   context overflow before an invalid request is dispatched.
 - Core recovery may consume typed context overflow, while incomplete streams
@@ -429,6 +435,9 @@ provide all of these exact OpenAI-specific failure and prevention semantics.
   events.
 - Core runner tests prove incomplete streams fail the Step instead of settling
   it successfully.
+- `packages/core/test/session-runner-tool-events.test.ts` proves interleaved
+  reasoning parts flush independently at step finish without weakening invalid
+  lifecycle checks.
 - Error classification remains structured; merge resolution must not preserve
   only an error-text substring while dropping the typed classification.
 
