@@ -735,8 +735,20 @@ feedback as the intended contract; preserve or improve cancellation semantics.
 
 - The Windows wrapper builds the official internal binary name `opencode2`.
 - Full WebUI embedding is the release default; `-SkipWebUI` is diagnostic only.
+- The default compile runtime is the pinned Bun
+  `1.4.0-canary.1+aec33f581` snapshot, not the moving `canary` label. Normal and
+  baseline Windows x64 archives are addressed by immutable release asset IDs
+  and verified by both archive and executable SHA-256 before compilation.
+- `-CompileRuntime Current` uses the Bun running the fixed script as a stable
+  recovery path. `MovingCanary` is an explicit diagnostic mode only.
+- A direct compile executable is accepted only for a single-target build with
+  an exact target match and expected executable SHA-256.
+- Normal and baseline single builds select exactly one matching target.
 - Exported package, worktree, and timestamped candidate copies have identical
   length and SHA-256.
+- Each candidate includes a `.build.json` sidecar that separately records the
+  build-orchestrator Bun, embedded compile runtime, source commit, runtime asset,
+  hashes, build options, and candidate identity.
 - The compiled service smoke uses isolated config, home, database, and a free
   loopback port so it can run beside another installed channel.
 - The smoke proves contender election, authenticated API and OpenAPI access,
@@ -748,11 +760,21 @@ feedback as the intended contract; preserve or improve cancellation semantics.
 ### Owners
 
 - `script/build-custom-windows.ps1`
+- `packages/cli/script/build.ts`
+- `packages/cli/script/build-target.ts`
 - `packages/cli/script/service-smoke.ts`
+- `packages/cli/test/build-target.test.ts`
 
 ### Acceptance evidence
 
-- Windows build completes with expected Bun and binary versions.
+- The default Windows build reports build Bun 1.3.14 and compile runtime Bun
+  `1.4.0-canary.1+aec33f581` with the pinned executable SHA-256.
+- A second default build is a cache hit with the same runtime identity.
+- `Current` mode reproduces the stable Bun 1.3.14 candidate and passes service
+  smoke.
+- Pinned-canary normal and baseline candidates pass service smoke.
+- Build-target tests prove normal and baseline single builds are mutually
+  exclusive and reject ABI or unsupported baseline targets.
 - The release path runs
   `pwsh -File .\script\build-custom-windows.ps1 -RunServiceSmoke`.
 - Service smoke passes against isolated state using the compiled distribution

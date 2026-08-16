@@ -8,6 +8,7 @@ import { createSolidTransformPlugin } from "@opentui/solid/bun-plugin"
 import type { BunPlugin } from "bun"
 import pkg from "../package.json"
 import { buildAppArchive } from "./app-assets"
+import { matchesSingleTarget } from "./build-target"
 
 const dir = path.resolve(import.meta.dirname, "..")
 const binary = "opencode2"
@@ -52,11 +53,7 @@ const targets =
   requestedTarget !== undefined
     ? allTargets.filter((item) => targetName(item) === requestedTarget)
     : singleFlag
-      ? allTargets.filter((item) => {
-          if (item.os !== process.platform || item.arch !== process.arch) return false
-          if (item.avx2 === false) return baselineFlag
-          return item.abi === undefined
-        })
+      ? allTargets.filter((item) => matchesSingleTarget(item, process.platform, process.arch, baselineFlag))
       : allTargets
 if (!targets.length) throw new Error(`Unknown build target: ${requestedTarget}`)
 
@@ -145,6 +142,44 @@ for (const item of targets) {
 }
 
 async function compileExecutable(item: (typeof allTargets)[number]) {
+  const directExecutable = process.env.BUN_COMPILE_EXECUTABLE
+  if (directExecutable) {
+    if (process.env.BUN_COMPILE_RELEASE) {
+      throw new Error("BUN_COMPILE_EXECUTABLE and BUN_COMPILE_RELEASE cannot be used together")
+    }
+    if (!singleFlag) {
+      throw new Error("BUN_COMPILE_EXECUTABLE requires a --single build")
+    }
+    const expectedTarget = process.env.BUN_COMPILE_EXECUTABLE_TARGET
+    const actualTarget = targetName(item)
+    if (!expectedTarget || expectedTarget !== actualTarget) {
+      throw new Error(`BUN_COMPILE_EXECUTABLE target mismatch: actual=${actualTarget} expected=${expectedTarget}`)
+    }
+    const expectedHash = process.env.BUN_COMPILE_EXECUTABLE_SHA256?.toLowerCase()
+    if (!expectedHash) {
+      throw new Error("BUN_COMPILE_EXECUTABLE_SHA256 is required")
+    }
+    const file = Bun.file(directExecutable)
+    if (!(await file.exists())) {
+      throw new Error(`BUN_COMPILE_EXECUTABLE does not exist: ${directExecutable}`)
+    }
+    const actualHash = new Bun.CryptoHasher("sha256").update(await file.arrayBuffer()).digest("hex")
+    if (actualHash !== expectedHash) {
+      throw new Error(`BUN_COMPILE_EXECUTABLE hash mismatch: actual=${actualHash} expected=${expectedHash}`)
+    }
+    console.log(
+      JSON.stringify({
+        compileRuntime: {
+          mode: "executable",
+          target: actualTarget,
+          path: directExecutable,
+          sha256: actualHash,
+        },
+      }),
+    )
+    return directExecutable
+  }
+
   const release = process.env.BUN_COMPILE_RELEASE
   if (!release) return
 

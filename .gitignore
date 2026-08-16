@@ -24,6 +24,7 @@ refs
 Session.vim
 /opencode.json
 /opencode2.exe
+/opencode2.exe.build.json
 a.out
 target
 .scripts

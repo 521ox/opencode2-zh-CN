@@ -8,7 +8,11 @@ import os from "node:os"
 import path from "node:path"
 
 const nodeBuild = process.argv.includes("--node")
-const target = `cli${nodeBuild ? "-node" : ""}-${process.platform === "win32" ? "windows" : process.platform}-${process.arch}`
+const defaultTarget = `cli${nodeBuild ? "-node" : ""}-${process.platform === "win32" ? "windows" : process.platform}-${process.arch}`
+const target = process.argv.find((arg) => arg.startsWith("--target="))?.slice("--target=".length) ?? defaultTarget
+if (!/^cli(?:-node)?-(?:windows|linux|darwin)-(?:x64|arm64)(?:-baseline)?$/.test(target)) {
+  throw new Error(`Invalid compiled service smoke target: ${target}`)
+}
 const directory = path.join(import.meta.dir, "..", "dist", ...(nodeBuild ? ["node"] : []), target, "bin")
 const binary = path.join(directory, `opencode2${nodeBuild ? "-node" : ""}${process.platform === "win32" ? ".exe" : ""}`)
 if (!(await Bun.file(binary).exists())) throw new Error(`Missing compiled CLI in ${directory}`)
