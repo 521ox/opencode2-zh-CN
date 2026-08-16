@@ -83,6 +83,14 @@ export function run(commands: Spec.Any, handlers: ReadonlyArray<LazyHandler>, op
   return Command.run(provide(commands, handlers), options) as Effect.Effect<void, unknown, Command.Environment>
 }
 
+export function resolveCpuProfileTarget(
+  command: string,
+  flag: Option.Option<string>,
+  inherited = process.env.OPENCODE_CPU_PROFILE,
+) {
+  return Option.getOrUndefined(flag) ?? (command === "serve" ? inherited : undefined)
+}
+
 function provide(node: Spec.Any, handlers: ReadonlyArray<LazyHandler>): ProvidedCommand {
   const handler = handlers.find((handler) => handler.spec === node.spec)
   const spec = handler
@@ -90,7 +98,7 @@ function provide(node: Spec.Any, handlers: ReadonlyArray<LazyHandler>): Provided
         Command.withHandler((input) =>
           Effect.gen(function* () {
             const module = yield* Effect.promise(handler.load)
-            const cpuProfile = Option.getOrUndefined(yield* GlobalFlags.CpuProfile)
+            const cpuProfile = resolveCpuProfileTarget(node.name, yield* GlobalFlags.CpuProfile)
             if (!cpuProfile) return yield* module.default(input)
             const target = path.resolve(cpuProfile)
             const previous = process.env.OPENCODE_CPU_PROFILE
