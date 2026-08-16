@@ -1,5 +1,5 @@
 import { castDraft, produce, type WritableDraft } from "immer"
-import { Effect, Match, pipe } from "effect"
+import { DateTime, Effect, Match, pipe } from "effect"
 import { SessionEvent } from "./event.js"
 import { SessionMessage } from "./message.js"
 
@@ -26,7 +26,7 @@ export function update(adapter: Adapter, event: SessionEvent.DurableEvent) {
   type DraftTool = WritableDraft<SessionMessage.AssistantTool>
   type DraftText = WritableDraft<SessionMessage.AssistantText>
   type DraftReasoning = WritableDraft<SessionMessage.AssistantReasoning>
-  const created = event.created
+  const created = DateTime.makeUnsafe(event.created)
 
   const latestTool = (assistant: DraftAssistant | undefined, id?: string) =>
     assistant?.content.findLast(
