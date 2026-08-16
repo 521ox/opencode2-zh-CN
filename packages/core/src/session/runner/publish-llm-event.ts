@@ -30,6 +30,8 @@ export interface StepRecord {
   /** The model produced visible output this attempt, which bars transparent retries and overflow recovery. */
   readonly outputStarted: boolean
   readonly providerFailed: boolean
+  /** The provider completed a replayable remote compaction checkpoint during this step. */
+  readonly remoteCompactionCompleted: boolean
   /** The step's recorded assistant failure, if any. */
   readonly failure?: SessionError.Error
   /** Present once the provider finished the step normally. */
@@ -623,6 +625,7 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
     record: (): StepRecord => ({
       outputStarted,
       providerFailed,
+      remoteCompactionCompleted: remoteCompactionSettled && remoteCheckpointReady,
       failure: stepFailure,
       finish: stepSettlement,
       calls: Array.from(tools, ([id, tool]) => ({

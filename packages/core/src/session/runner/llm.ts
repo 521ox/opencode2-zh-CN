@@ -43,7 +43,10 @@ type CallOutcome = Data.TaggedEnum<{
     readonly error: SessionRunnerRetry.RetryableFailure["error"]
     readonly step: number
   }
-  Restart: { readonly step: number; readonly recoveredOverflow: boolean }
+  Restart: {
+    readonly step: number
+    readonly recoveredOverflow: boolean
+  }
 }>
 const CallOutcome = Data.taggedEnum<CallOutcome>()
 
@@ -149,6 +152,9 @@ const layer = Layer.effect(
       }
     })
 
+    const claimRemoteFallback = (available: Ref.Ref<boolean>) =>
+      Ref.modify(available, (current): readonly [boolean, boolean] => [current, false])
+
     /**
      * Runs logical steps until no tool result or newly admitted steer requires another
      * model call. Queued inputs remain pending until the current model work reaches idle.
@@ -162,10 +168,11 @@ const layer = Layer.effect(
       let promotable: SessionInbox.Promotable = continuation ? "steer" : drainPromotable
       let step = continuation?.step ?? 1
       let next = continuation
+      const remoteFallbackAvailable = yield* Ref.make(true)
       while (true) {
         if (yield* runPendingCompaction(sessionID, "steer")) continue
         if (yield* runPendingMove(sessionID, "steer")) return { type: "moved" as const, continuation: next }
-        const result = yield* runStep(sessionID, promotable, step)
+        const result = yield* runStep(sessionID, promotable, step, remoteFallbackAvailable)
         next = result.needsContinuation ? { step: result.step + 1 } : undefined
         if (!result.needsContinuation && !(yield* SessionInbox.has(db, sessionID, "steer")))
           return { type: "complete" as const }
@@ -179,6 +186,7 @@ const layer = Layer.effect(
       sessionID: SessionSchema.ID,
       promotable: SessionInbox.Promotable,
       step: number,
+      remoteFallbackAvailable: Ref.Ref<boolean>,
     ) {
       // Minting message identity before any attempt lets retries resume the same durable
       // message. A compaction restart re-mints: the old message is stranded behind the new
@@ -215,6 +223,7 @@ const layer = Layer.effect(
           currentPromotable,
           currentStep,
           recoverOverflow,
+          remoteFallbackAvailable,
           assistantMessageID,
         ).pipe(Effect.catchTag("SessionRunner.RetryableFailure", waitForRetry))
         if (outcome._tag === "Completed") return { needsContinuation: outcome.needsContinuation, step: outcome.step }
@@ -251,6 +260,7 @@ const layer = Layer.effect(
       promotable: SessionInbox.Promotable | undefined,
       step: number,
       recoverOverflow: boolean,
+      remoteFallbackAvailable: Ref.Ref<boolean>,
       assistantMessageID: SessionMessage.ID,
     ) {
       const selected = yield* context.select(sessionID)
@@ -279,7 +289,10 @@ const layer = Layer.effect(
       if (compaction.required(compactionInput)) {
         const compacted = yield* compaction.compact(compactionInput)
         if (compacted.status === "completed")
-          return CallOutcome.Restart({ step: currentStep, recoveredOverflow: false })
+          return CallOutcome.Restart({
+            step: currentStep,
+            recoveredOverflow: false,
+          })
         return yield* new StepFailedError({ error: compacted.error })
       }
       const prepared = yield* modelRequests.prepare({
@@ -409,16 +422,37 @@ const layer = Layer.effect(
             toolRuns.map((run) => run.call),
           )
 
+          const initialRecord = publisher.record()
+
+          // A remote provider that ignored automatic compaction gets one triggered
+          // remote compaction attempt before the overflow is surfaced.
+          if (
+            compactThreshold !== undefined &&
+            !initialRecord.outputStarted &&
+            isContextOverflowFailure(overflowFailure ?? streamFailure) &&
+            (yield* claimRemoteFallback(remoteFallbackAvailable))
+          ) {
+            const compacted = yield* restore(compactRemoteFallback(sessionID))
+            if (compacted.status === "completed")
+              return CallOutcome.Restart({
+                step: currentStep,
+                recoveredOverflow: false,
+              })
+          }
+
           // A context overflow before any assistant output is recoverable: compact and
           // restart the step instead of surfacing the provider error.
           if (
             recoverOverflow &&
             compactThreshold === undefined &&
-            !publisher.record().outputStarted &&
+            !initialRecord.outputStarted &&
             isContextOverflowFailure(overflowFailure ?? streamFailure) &&
             (yield* restore(compaction.compact(compactionInput))).status === "completed"
           )
-            return CallOutcome.Restart({ step: currentStep, recoveredOverflow: true })
+            return CallOutcome.Restart({
+              step: currentStep,
+              recoveredOverflow: true,
+            })
 
           // An unrecovered held-back overflow becomes the step's durable provider error.
           if (overflowFailure) yield* publisher.publish(overflowFailure)
@@ -500,17 +534,73 @@ const layer = Layer.effect(
           if (tools.interrupted && tools.failure) return yield* Effect.failCause(tools.failure)
           if (tools.interrupted && joined._tag === "Failure") return yield* Effect.failCause(joined.cause)
           if (record.failure) return yield* new StepFailedError({ error: record.failure })
+
+          const needsContinuation =
+            !prepared.stepLimitReached &&
+            record.calls.some((call) => !call.providerExecuted && (call.called || call.settled))
+          const remoteFallbackNeeded =
+            record.finish !== undefined &&
+            SessionCompaction.remoteFallbackRequired({
+              threshold: compactThreshold,
+              tokens: record.finish.tokens,
+              checkpointed: record.remoteCompactionCompleted,
+            })
+          if (remoteFallbackNeeded) {
+            if (!(yield* claimRemoteFallback(remoteFallbackAvailable)))
+              return yield* new StepFailedError({
+                error: {
+                  type: "compaction.failed",
+                  message: "Remote compaction fallback was already attempted and context remains above the grace",
+                },
+              })
+            const compacted = yield* restore(compactRemoteFallback(sessionID))
+            if (compacted.status !== "completed")
+              return yield* new StepFailedError({
+                error: {
+                  type: "compaction.failed",
+                  message: "Remote compaction fallback failed after the automatic threshold grace was exceeded",
+                },
+              })
+            if (needsContinuation)
+              return CallOutcome.Restart({
+                step: currentStep + 1,
+                recoveredOverflow: false,
+              })
+          }
           return CallOutcome.Completed({
             // A local call or malformed tool input requires another model step, unless
             // this step already exhausted the agent's allowance.
-            needsContinuation:
-              !prepared.stepLimitReached &&
-              record.calls.some((call) => !call.providerExecuted && (call.called || call.settled)),
+            needsContinuation,
             step: currentStep,
           })
         }),
       )
     }, Effect.scoped)
+
+    const prepareRemoteCompaction = Effect.fn("SessionRunner.prepareRemoteCompaction")(function* (
+      sessionID: SessionSchema.ID,
+    ) {
+      const selected = yield* context.select(sessionID)
+      yield* InstructionState.prepare(db, bus, selected.instructions, selected.session.id)
+      const loaded = yield* context.load(selected)
+      const prepared = yield* modelRequests.prepare({
+        context: loaded,
+        step: 0,
+        includeSessionRules: false,
+      })
+      return { request: prepared.request, options: prepared.options }
+    })
+
+    const compactRemoteFallback = Effect.fn("SessionRunner.compactRemoteFallback")(function* (
+      sessionID: SessionSchema.ID,
+    ) {
+      const session = yield* getSession(sessionID)
+      return yield* compaction.compactFallback({
+        session,
+        messages: yield* store.context(sessionID),
+        prepareRemote: () => prepareRemoteCompaction(sessionID),
+      })
+    })
 
     /** Executes a previously admitted manual compaction request, if one is pending. */
     const runPendingCompaction = Effect.fn("SessionRunner.runPendingCompaction")(function* (
@@ -542,18 +632,7 @@ const layer = Layer.effect(
                 inputID: pending.id,
                 started: true,
                 onTerminal: Ref.set(terminalCommitted, true),
-                prepareRemote: () =>
-                  Effect.gen(function* () {
-                    const selected = yield* context.select(sessionID)
-                    yield* InstructionState.prepare(db, bus, selected.instructions, selected.session.id)
-                    const loaded = yield* context.load(selected)
-                    const prepared = yield* modelRequests.prepare({
-                      context: loaded,
-                      step: 0,
-                      includeSessionRules: false,
-                    })
-                    return { request: prepared.request, options: prepared.options }
-                  }),
+                prepareRemote: () => prepareRemoteCompaction(sessionID),
               })
             }),
           ).pipe(Effect.exit)

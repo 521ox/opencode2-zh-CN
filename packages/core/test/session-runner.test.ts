@@ -582,6 +582,13 @@ const invalidRequest = () =>
     reason: new InvalidRequestReason({ message: "Invalid request" }),
   })
 
+const contextOverflow = () =>
+  new AIError({
+    module: "test",
+    method: "stream",
+    reason: new InvalidRequestReason({ message: "prompt too long", classification: "context-overflow" }),
+  })
+
 const rateLimited = (retryAfterMs?: number) =>
   new AIError({
     module: "test",
@@ -649,7 +656,7 @@ const recordedStepSettlementTypes = (id: Session.ID, assistantMessageID: Session
 const hostedCall = (id: string, query: string) =>
   LLMEvent.toolCall({ id, name: "web_search", input: { query }, providerExecuted: true })
 
-const remoteCheckpoint = () => {
+const remoteCheckpoint = (inputTokens = 0) => {
   const output = [
     { type: "compaction", id: "cmp_runner", encrypted_content: "opaque-runner" },
     { type: "message", id: "msg_runner", role: "assistant", content: [] },
@@ -664,11 +671,38 @@ const remoteCheckpoint = () => {
       LLMEvent.textStart({ id: "text-remote" }),
       LLMEvent.textDelta({ id: "text-remote", text: "Compacted" }),
       LLMEvent.textEnd({ id: "text-remote" }),
+      LLMEvent.stepFinish({
+        index: 0,
+        reason: { normalized: "stop" },
+        usage: { inputTokens, nonCachedInputTokens: inputTokens },
+      }),
+      LLMEvent.finish({ reason: { normalized: "stop" } }),
+    ],
+  }
+}
+
+const triggeredCheckpoint = () => {
+  const output = [{ type: "compaction" as const, id: "cmp-triggered", encrypted_content: "opaque-triggered" }]
+  return {
+    output,
+    events: [
+      LLMEvent.providerCompactionStart({}),
+      LLMEvent.providerCheckpoint({ reset: true, item: output[0]! }),
+      LLMEvent.stepStart({ index: 0 }),
       LLMEvent.stepFinish({ index: 0, reason: { normalized: "stop" } }),
       LLMEvent.finish({ reason: { normalized: "stop" } }),
     ],
   }
 }
+
+const toolCallWithUsage = (id: string, inputTokens: number) =>
+  TestLLM.complete(
+    {
+      reason: { normalized: "tool-calls" },
+      usage: { inputTokens, nonCachedInputTokens: inputTokens },
+    },
+    LLMEvent.toolCall({ id, name: "echo", input: { text: id } }),
+  )
 
 const requireAssistant = (messages: readonly SessionMessage.Info[]) => {
   const assistant = messages.find((message) => message.type === "assistant")
@@ -2467,6 +2501,117 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("falls back to triggered remote compaction after the automatic threshold grace", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const checkpoint = triggeredCheckpoint()
+      currentModel = nativeAutomaticCompactionModel
+      yield* TestLLM.push(
+        TestLLM.textWithUsage("Provider ignored automatic compaction", "text-provider-no-checkpoint", 390_000),
+        checkpoint.events,
+      )
+
+      yield* runPrompt(session, "Recover remote compaction after the grace")
+
+      expect(requests).toHaveLength(2)
+      expect(requests[0]?.providerOptions).toEqual({ openai: { compactThreshold: 368_000 } })
+      expect(requests[1]?.providerOptions?.openai).not.toHaveProperty("compactThreshold")
+      expect((yield* session.messages({ sessionID })).findLast((message) => message.type === "compaction")).toMatchObject({
+        type: "compaction",
+        reason: "auto",
+        status: "completed",
+        remote: checkpoint.output,
+      })
+    }),
+  )
+
+  it.effect("does not trigger fallback after a completed automatic checkpoint", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const checkpoint = remoteCheckpoint(390_000)
+      currentModel = nativeAutomaticCompactionModel
+      yield* TestLLM.push(checkpoint.events)
+
+      yield* runPrompt(session, "Use the provider checkpoint above the grace")
+
+      expect(requests).toHaveLength(1)
+      expect((yield* session.messages({ sessionID })).findLast((message) => message.type === "compaction")).toMatchObject({
+        type: "compaction",
+        reason: "auto",
+        status: "completed",
+        remote: checkpoint.output,
+      })
+    }),
+  )
+
+  it.effect("stops when the triggered remote compaction fallback fails", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      currentModel = nativeAutomaticCompactionModel
+      yield* TestLLM.push(
+        TestLLM.textWithUsage("Provider ignored automatic compaction", "text-provider-fallback-fails", 390_000),
+        Stream.fail(contextOverflow()),
+      )
+
+      yield* admit(session, "Stop after the remote fallback fails")
+      expect(yield* Effect.result(session.resume(sessionID))).toMatchObject({
+        _tag: "Failure",
+        failure: { _tag: "Session.StepFailedError" },
+      })
+      expect(requests).toHaveLength(2)
+      expect((yield* session.messages({ sessionID })).findLast((message) => message.type === "compaction")).toMatchObject({
+        type: "compaction",
+        reason: "auto",
+        status: "failed",
+      })
+    }),
+  )
+
+  it.effect("allows only one triggered remote fallback across tool continuations", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const checkpoint = triggeredCheckpoint()
+      currentModel = nativeAutomaticCompactionModel
+      yield* TestLLM.push(
+        toolCallWithUsage("call-fallback-first", 390_000),
+        checkpoint.events,
+        toolCallWithUsage("call-fallback-low", 1),
+        toolCallWithUsage("call-fallback-second", 390_000),
+      )
+
+      yield* admit(session, "Do not trigger remote compaction twice")
+      expect(yield* Effect.result(session.resume(sessionID))).toMatchObject({
+        _tag: "Failure",
+        failure: { _tag: "Session.StepFailedError" },
+      })
+      expect(requests).toHaveLength(4)
+      expect(
+        (yield* session.messages({ sessionID })).filter(
+          (message) => message.type === "compaction" && message.reason === "auto",
+        ),
+      ).toMatchObject([{ status: "completed", remote: checkpoint.output }])
+    }),
+  )
+
+  it.effect("stops when the overflow trigger itself fails", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      currentModel = nativeAutomaticCompactionModel
+      yield* TestLLM.push(Stream.fail(contextOverflow()), Stream.fail(contextOverflow()))
+
+      yield* admit(session, "Stop after the overflow trigger fails")
+      expect(yield* Effect.result(session.resume(sessionID))).toMatchObject({
+        _tag: "Failure",
+      })
+      expect(requests).toHaveLength(2)
+      expect((yield* session.messages({ sessionID })).findLast((message) => message.type === "compaction")).toMatchObject({
+        type: "compaction",
+        reason: "auto",
+        status: "failed",
+      })
+    }),
+  )
+
   it.effect("fails a provider compaction boundary without a checkpoint", () =>
     Effect.gen(function* () {
       const session = yield* setup
@@ -2613,26 +2758,30 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect("does not call the manual compact endpoint to recover native automatic overflow", () =>
+  it.effect("recovers native automatic overflow through triggered remote compaction", () =>
     Effect.gen(function* () {
       const session = yield* setup
+      const checkpoint = triggeredCheckpoint()
       yield* TestLLM.push(TestLLM.text("Earlier answer", "text-native-overflow-failure-history"))
       yield* runPrompt(session, "Earlier question")
       currentModel = nativeAutomaticCompactionModel
       requests.length = 0
       yield* TestLLM.push(
-        [LLMEvent.providerError({ message: "prompt too long", classification: "context-overflow" })],
-        TestLLM.text("Must not run", "text-native-overflow-fallback"),
+        Stream.fail(contextOverflow()),
+        checkpoint.events,
+        TestLLM.text("Recovered after remote fallback", "text-native-overflow-recovered"),
       )
 
-      yield* admit(session, "Continue after failed remote compact")
-      expect((yield* session.resume(sessionID).pipe(Effect.flip)).message).toBe("prompt too long")
+      yield* runPrompt(session, "Continue after failed automatic compaction")
 
-      expect(requests).toHaveLength(1)
+      expect(requests).toHaveLength(3)
       expect(requests[0]?.providerOptions).toEqual({ openai: { compactThreshold: 368_000 } })
-      expect(requests[0]?.providerOptions?.openai).not.toHaveProperty("compactionTrigger")
-      expect(requests[0]?.providerOptions).not.toHaveProperty("opencode-internal")
-      expect((yield* session.context(sessionID)).some((message) => message.type === "compaction")).toBeFalse()
+      expect(requests[1]?.providerOptions?.openai).not.toHaveProperty("compactThreshold")
+      expect(requests[2]?.providerOptions).toEqual({ openai: { compactThreshold: 368_000 } })
+      expect(yield* session.context(sessionID)).toMatchObject([
+        { type: "compaction", reason: "auto", status: "completed", remote: checkpoint.output },
+        { type: "assistant", finish: "stop" },
+      ])
     }),
   )
 

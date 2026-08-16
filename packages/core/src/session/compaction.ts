@@ -30,6 +30,7 @@ const DEFAULT_BUFFER = 20_000
 const DEFAULT_KEEP_TOKENS = 15_000
 const OUTPUT_TOKEN_MAX = 32_000
 const TOOL_OUTPUT_MAX_CHARS = 2_000
+const REMOTE_FALLBACK_GRACE = 0.05
 const NATIVE_OPENAI_RESPONSES_PACKAGES = new Set([
   "@opencode-ai/ai/providers/openai",
   "@opencode-ai/ai/providers/openai/responses",
@@ -106,6 +107,8 @@ export type ManualInput = {
   readonly onTerminal?: Effect.Effect<void>
 }
 
+export type FallbackInput = Omit<ManualInput, "inputID">
+
 type RequiredInput = Omit<AutoInput, "ref">
 
 const supportsRemoteCompaction = (input: Pick<AutoInput, "model" | "providerPackage">) =>
@@ -143,9 +146,25 @@ export interface Interface {
   readonly remoteThreshold: (input: RequiredInput) => number | undefined
   readonly compact: (input: AutoInput) => Effect.Effect<Outcome>
   readonly compactManual: (input: ManualInput) => Effect.Effect<Outcome>
+  readonly compactFallback: (input: FallbackInput) => Effect.Effect<Outcome>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SessionCompaction") {}
+
+export const remoteFallbackRequired = (input: {
+  readonly threshold: number | undefined
+  readonly tokens: ReturnType<typeof SessionUsage.tokens>
+  readonly checkpointed: boolean
+}) => {
+  if (input.threshold === undefined || input.checkpointed) return false
+  const used =
+    input.tokens.input +
+    input.tokens.output +
+    input.tokens.reasoning +
+    input.tokens.cache.read +
+    input.tokens.cache.write
+  return used > input.threshold * (1 + REMOTE_FALLBACK_GRACE)
+}
 
 const truncate = (value: string) =>
   value.length <= TOOL_OUTPUT_MAX_CHARS ? value : `${value.slice(0, TOOL_OUTPUT_MAX_CHARS)}\n[truncated]`
@@ -502,22 +521,27 @@ const make = (dependencies: Dependencies) => {
     if (used <= 0) return false
     return used >= ceiling
   }
-  const compactManual = Effect.fn("SessionCompaction.compactManual")(function* (input: ManualInput) {
+  const compactTriggered = Effect.fn("SessionCompaction.compactTriggered")(function* (
+    input: ManualInput | FallbackInput,
+    reason: SessionMessage.Compaction["reason"],
+    remoteOnly: boolean,
+  ) {
+    const inputID = "inputID" in input ? input.inputID : undefined
     const content = planContent(input.messages, config.tokens)
     if (!content)
       return yield* failed({
         sessionID: input.session.id,
-        reason: "manual",
+        reason,
         error: { type: "compaction.unavailable", message: "Nothing to compact yet" },
-        inputID: input.inputID,
+        inputID,
       })
     const resolved = yield* dependencies.models.resolve(input.session).pipe(
       Effect.catch((cause) =>
         failed({
           sessionID: input.session.id,
-          reason: "manual",
+          reason,
           error: toSessionError(cause),
-          inputID: input.inputID,
+          inputID,
         }),
       ),
     )
@@ -526,9 +550,9 @@ const make = (dependencies: Dependencies) => {
       if (!input.prepareRemote)
         return yield* failed({
           sessionID: input.session.id,
-          reason: "manual",
+          reason,
           error: { type: "compaction.failed", message: "Remote compaction request was not prepared" },
-          inputID: input.inputID,
+          inputID,
         })
       const prepared = yield* input.prepareRemote().pipe(
         Effect.map((remote) => ({ remote }) as const),
@@ -537,37 +561,51 @@ const make = (dependencies: Dependencies) => {
       if ("error" in prepared)
         return yield* failed({
           sessionID: input.session.id,
-          reason: "manual",
+          reason,
           error: prepared.error,
-          inputID: input.inputID,
+          inputID,
         })
       return yield* executeRemote({
         session: input.session,
         request: prepared.remote.request,
         options: prepared.remote.options,
-        reason: "manual",
-        inputID: input.inputID,
+        reason,
+        inputID,
         started: input.started,
         onTerminal: input.onTerminal,
       })
     }
+    if (remoteOnly)
+      return yield* failed({
+        sessionID: input.session.id,
+        reason,
+        error: { type: "compaction.failed", message: "Remote compaction is not supported by this provider" },
+        inputID,
+      })
     return yield* execute({
       session: input.session,
       model: resolved.model,
       ref: resolved.ref,
       cost: resolved.cost,
-      reason: "manual",
-      inputID: input.inputID,
+      reason,
+      inputID,
       started: input.started,
       onTerminal: input.onTerminal,
       ...content,
     })
   })
+  const compactManual = Effect.fn("SessionCompaction.compactManual")((input: ManualInput) =>
+    compactTriggered(input, "manual", false),
+  )
+  const compactFallback = Effect.fn("SessionCompaction.compactFallback")((input: FallbackInput) =>
+    compactTriggered(input, "auto", true),
+  )
   return Service.of({
     required,
     remoteThreshold,
     compact,
     compactManual,
+    compactFallback,
   })
 }
 

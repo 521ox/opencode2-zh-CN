@@ -264,13 +264,21 @@ commit introduced it first.
   It must not call the explicit `/responses/compact` endpoint.
 - Provider compaction start and opaque checkpoint items become durable Session
   events and one projected compaction message.
+- Core gives the submitted remote threshold a fixed 5% usage grace. A completed
+  response above that grace without a completed automatic checkpoint invokes
+  the native remote `compaction_trigger` path once.
+- A request-level context overflow before assistant output bypasses the grace,
+  invokes the same remote trigger once, and retries the original step only after
+  a replayable checkpoint completes.
+- Trigger failure stops the Session. It must not loop, continue growing the
+  context, or fall back to a local summary.
 - A reset checkpoint replaces older remote output; later checkpoint items keep
   provider order.
 - Replay sends validated opaque checkpoint items exactly and preserves hosted
   tool calls and their required local results.
 - A compaction boundary cannot complete without a replayable checkpoint.
 - OpenAI's 16,384 input-item limit surfaces as typed context overflow so Core
-  can perform one bounded local recovery rather than sending an invalid request.
+  can perform one bounded recovery rather than sending an invalid request.
 - Stored continuation, supplier binding, Legacy fallback, and dual writes are
   not implicit requirements of automatic remote compaction.
 
@@ -341,8 +349,12 @@ commit introduced it first.
   only for the native owner and issues zero `/responses/compact` requests.
 - Automatic native Responses requests carry `compactThreshold` through normal
   provider options and never gain a manual `compaction_trigger` item.
-- Native automatic overflow surfaces as provider overflow rather than invoking
-  manual trigger compaction or a local-summary fallback.
+- Native automatic overflow before assistant output invokes one remote trigger
+  compaction and retries the original step only after the checkpoint completes.
+- Successful provider usage above 105% of the submitted remote threshold invokes
+  one remote trigger only when the step did not complete an automatic checkpoint.
+- A completed automatic checkpoint suppresses fallback even when usage exceeds
+  the grace; a failed trigger stops without a third model request or local summary.
 - Compatibility routes use local summary compaction.
 - Trigger request tests prove protected Session context, tools, tool choice, and
   automatic `context_management` are absent while the pre-trigger prefix remains

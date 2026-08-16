@@ -80,7 +80,13 @@ accepted.
     with a final `{ "type": "compaction_trigger" }` input item. It never calls
     or falls back to the legacy `/responses/compact` endpoint. Automatic remote
     compaction remains the separate normal-request
-    `context_management.compaction.compact_threshold` contract.
+    `context_management.compaction.compact_threshold` contract. Core gives that
+    automatic path a 5% grace above the submitted threshold. If completed
+    provider usage exceeds the grace without a completed automatic checkpoint,
+    Core invokes the same remote `compaction_trigger` path once. A request-level
+    context overflow before assistant output invokes that trigger immediately.
+    Trigger failure stops the Session; it does not retry indefinitely or fall
+    back to a local summary.
 15. TUI dialog and composer header close controls use the shared `×` icon with
     the original three-cell mouse target instead of a clickable `esc` label.
     Mouse clicks preserve each caller's existing close callback, and keyboard

@@ -134,6 +134,31 @@ test("compaction prompt requires the checkpoint headings in order", () => {
   expect(prompt).toContain("Keep every section, even when empty.")
 })
 
+test("waits for five percent remote compaction grace", () => {
+  const tokens = (input: number) => ({
+    input,
+    output: 0,
+    reasoning: 0,
+    cache: { read: 0, write: 0 },
+  })
+
+  expect(
+    SessionCompaction.remoteFallbackRequired({ threshold: 304_000, tokens: tokens(319_200), checkpointed: false }),
+  ).toBe(false)
+  expect(
+    SessionCompaction.remoteFallbackRequired({ threshold: 304_000, tokens: tokens(319_201), checkpointed: false }),
+  ).toBe(true)
+  expect(
+    SessionCompaction.remoteFallbackRequired({ threshold: 304_000, tokens: tokens(400_000), checkpointed: true }),
+  ).toBe(false)
+  expect(
+    SessionCompaction.remoteFallbackRequired({ threshold: 333_333, tokens: tokens(349_999), checkpointed: false }),
+  ).toBe(false)
+  expect(
+    SessionCompaction.remoteFallbackRequired({ threshold: 333_333, tokens: tokens(350_000), checkpointed: false }),
+  ).toBe(true)
+})
+
 it.effect("auto compaction reserves a buffer below the prompt ceiling", () =>
   Effect.gen(function* () {
     const compaction = yield* SessionCompaction.Service
