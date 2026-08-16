@@ -118,7 +118,8 @@ Any unclassified path, unknown stable ID, or unknown bucket rejects the sync.
 | `CUST-MIGRATION-002` | Copy-only rehearsal, native context repair, and VACUUM safety     | `OPERATIONS`          | `42c0c9b96`              | Migration scripts and handoff documents                     |
 | `CUST-OPS-001`       | Windows build, export identity, and compiled-service smoke        | `OPERATIONS`          | `42c0c9b96`              | Build wrapper and CLI service smoke                         |
 | `CUST-OPS-002`       | Main TUI default standalone server lifecycle                      | `PRESERVE`            | `52345477b`              | CLI default handler and standalone ownership                |
-| `CUST-OPS-003`       | Cross-process Session execution lease                             | `PRESERVE`            | pending                  | Core SessionStore, execution, restart, and migration        |
+| `CUST-OPS-003`       | Cross-process Session execution lease                             | `PRESERVE`            | `917635b5c`              | Core SessionStore, execution, restart, and migration        |
+| `CUST-OPS-004`       | CPU profile propagation for private standalone servers            | `PRESERVE`            | `d70a656de`              | CLI runtime, service config, and standalone process         |
 
 ## `CUST-RESP-001`: Native Route Ownership And Compatibility Routing
 
@@ -800,9 +801,10 @@ feedback as the intended contract; preserve or improve cancellation semantics.
   leaves `service status` as `stopped` after completion. Reference measurements
   on 2026-08-15 were approximately 1.5 seconds standalone, 1.9 seconds managed
   cold, and 0.34 seconds managed warm.
-- The compiled Windows candidate passes service smoke. Existing Windows-only CLI
-  suite failures caused by Unix `mktemp` assumptions or temporary-directory file
-  locks are reported separately and do not count as lifecycle failures.
+- The compiled Windows candidate passes service smoke. On Windows, the complete
+  CLI suite requires Git for Windows `usr/bin` on the test process `PATH` for
+  the existing `mktemp` and `rm` assumptions; with that scoped environment the
+  suite passes 199/199.
 
 ## `CUST-OPS-003`: Cross-Process Session Execution Lease
 
@@ -852,6 +854,45 @@ feedback as the intended contract; preserve or improve cancellation semantics.
   one successful owner.
 - Session execution, prompt, runner, tool, V1 migration, typecheck, and migration
   checks pass.
+
+## `CUST-OPS-004`: Standalone CPU Profile Propagation
+
+### Required behavior
+
+- The upstream optional `--cpu-profile <path>` flag remains the public control.
+- An explicit flag value takes precedence over any inherited internal value.
+- The parent runtime may set `OPENCODE_CPU_PROFILE` while launching a serving
+  process, and restores the previous environment afterward.
+- Managed services continue to receive the explicit `--cpu-profile` argument
+  through `ServiceConfig.options()`.
+- The custom default private `serve --stdio` child inherits the internal
+  environment value and starts the profiler even though it was not launched
+  with an explicit profile flag.
+- Non-serve commands ignore an inherited `OPENCODE_CPU_PROFILE` value.
+- With no flag or internal propagation value, startup, ownership, and shutdown
+  behavior remain unchanged.
+
+### Owners
+
+- `packages/cli/src/commands/global-flags.ts`
+- `packages/cli/src/cpu-profile.ts`
+- `packages/cli/src/framework/runtime.ts`
+- `packages/cli/src/services/service-config.ts`
+- `packages/cli/src/services/standalone.ts`
+- `packages/cli/test/framework-runtime.test.ts`
+- `packages/cli/test/service.test.ts`
+- `packages/cli/test/standalone.test.ts`
+
+### Acceptance evidence
+
+- Unit tests prove explicit-flag precedence, inherited private-serve behavior,
+  and non-serve rejection.
+- Service tests prove the managed-service argument is included only when the
+  internal propagation value is present.
+- Default-handler and standalone lifecycle tests remain green.
+- The complete CLI suite passes 199/199 on Windows with the scoped Git
+  `usr/bin` test environment.
+- The fixed Windows build and compiled-service lifecycle smoke pass.
 
 ## Explicitly Not Preserved
 
@@ -979,3 +1020,4 @@ Copy this table into the synchronization change record and fill every row:
 | `CUST-OPS-001`       | pending |          |          |       |
 | `CUST-OPS-002`       | pending |          |          |       |
 | `CUST-OPS-003`       | pending |          |          |       |
+| `CUST-OPS-004`       | pending |          |          |       |
