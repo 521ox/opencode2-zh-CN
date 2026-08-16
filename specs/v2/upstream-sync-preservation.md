@@ -118,6 +118,7 @@ Any unclassified path, unknown stable ID, or unknown bucket rejects the sync.
 | `CUST-MIGRATION-002` | Copy-only rehearsal, native context repair, and VACUUM safety     | `OPERATIONS`          | `42c0c9b96`              | Migration scripts and handoff documents                     |
 | `CUST-OPS-001`       | Windows build, export identity, and compiled-service smoke        | `OPERATIONS`          | `42c0c9b96`              | Build wrapper and CLI service smoke                         |
 | `CUST-OPS-002`       | Main TUI default standalone server lifecycle                      | `PRESERVE`            | `52345477b`              | CLI default handler and standalone ownership                |
+| `CUST-OPS-003`       | Cross-process Session execution lease                             | `PRESERVE`            | pending                  | Core SessionStore, execution, restart, and migration        |
 
 ## `CUST-RESP-001`: Native Route Ownership And Compatibility Routing
 
@@ -803,6 +804,55 @@ feedback as the intended contract; preserve or improve cancellation semantics.
   suite failures caused by Unix `mktemp` assumptions or temporary-directory file
   locks are reported separately and do not count as lifecycle failures.
 
+## `CUST-OPS-003`: Cross-Process Session Execution Lease
+
+### Required behavior
+
+- Session execution ownership is a SQLite compare-and-set lease, not a
+  process-local set or a recovery marker.
+- Each Core process uses one PID/UUID/hostname owner identity. Claims record the
+  owner, update time, and expiry.
+- `resume` and `wake` acquire or renew the lease before entering the process-local
+  coordinator. Claim failure performs no model run.
+- Restart recovery claims before incrementing resume attempts, publishing
+  Synthetic continuation, or starting the runner.
+- Active leases are renewed on a bounded heartbeat. Losing a lease interrupts
+  the old process with shutdown semantics so it cannot publish a terminal for the
+  new owner.
+- Terminal release, touch, resume counting, and cancellation are owner-checked.
+- Graceful Layer teardown preserves suspended state but expires this owner's
+  leases immediately. Crash recovery becomes eligible after lease expiry.
+- Fresh child leases are not cleared by restart cleanup. Unowned, legacy, or
+  expired child claims may be cleared.
+- Existing managed-service and TUI standalone process policies remain separate;
+  the lease guarantees single Session execution even when both processes exist.
+
+### Owners
+
+- `packages/core/src/session/sql.ts`
+- `packages/core/src/session/store.ts`
+- `packages/core/src/session/execution.ts`
+- `packages/core/src/session/execution/restart.ts`
+- `packages/core/src/database/migration/20260816053649_session_execution_lease.ts`
+- `packages/core/test/session-execution.test.ts`
+- `packages/core/test/fixture/session-lease-worker.ts`
+
+### Acceptance evidence
+
+- Fresh foreign owners cannot claim, touch, release, or increment resume attempts.
+- An expired owner can be replaced atomically without resetting the durable
+  resume budget.
+- Restart recovery skips Synthetic publication, attempt mutation, and runner
+  execution for a foreign fresh lease.
+- Graceful teardown expires the lease while preserving the suspended marker.
+- Terminal events and restart Synthetic continuations are fenced in the same
+  database transaction that persists the event. A process that loses ownership
+  cannot commit either event or release/renew the replacement owner's claim.
+- Two independent Windows Bun processes racing one SQLite claim produce exactly
+  one successful owner.
+- Session execution, prompt, runner, tool, V1 migration, typecheck, and migration
+  checks pass.
+
 ## Explicitly Not Preserved
 
 The following historical behavior must not return during an upstream sync:
@@ -928,3 +978,4 @@ Copy this table into the synchronization change record and fill every row:
 | `CUST-MIGRATION-002` | pending |          |          |       |
 | `CUST-OPS-001`       | pending |          |          |       |
 | `CUST-OPS-002`       | pending |          |          |       |
+| `CUST-OPS-003`       | pending |          |          |       |

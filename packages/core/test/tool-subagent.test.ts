@@ -83,8 +83,11 @@ const executionNode = makeGlobalNode({
         })
       })
       return SessionExecution.Service.of({
+        owner: { id: "test-owner", pid: 0, hostname: "test", leaseMs: 30_000 },
         active: Effect.succeed(new Set()),
+        claim: () => Effect.succeed(true),
         resume: complete,
+        resumeClaimed: complete,
         wake: () => Effect.void,
         wakeActive: () => Effect.void,
         interrupt: () => Effect.void,

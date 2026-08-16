@@ -65,6 +65,11 @@ const session = (
   time_archived: null,
   time_suspended: null,
   resume_attempts: 0,
+  claim_owner: null,
+  claim_pid: null,
+  claim_hostname: null,
+  claim_updated_at: null,
+  claim_expires_at: null,
   ...overrides,
 })
 

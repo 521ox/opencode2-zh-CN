@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "e33cd504-ca18-4bc8-bbc9-e7d7a7787ab6",
+  "id": "1347196d-b32e-453d-9147-23d731704d9c",
   "prevIds": [
-    "dcde8e6b-4bf4-4f6b-b2be-4030c2c3e936"
+    "e33cd504-ca18-4bc8-bbc9-e7d7a7787ab6"
   ],
   "ddl": [
     {
@@ -1408,6 +1408,56 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
+      "name": "claim_owner",
+      "entityType": "columns",
+      "table": "session_v2"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "claim_pid",
+      "entityType": "columns",
+      "table": "session_v2"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "claim_hostname",
+      "entityType": "columns",
+      "table": "session_v2"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "claim_updated_at",
+      "entityType": "columns",
+      "table": "session_v2"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "claim_expires_at",
+      "entityType": "columns",
+      "table": "session_v2"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
       "name": "id",
       "entityType": "columns",
       "table": "workspace"
@@ -2117,6 +2167,20 @@
       "where": "\"session_v2\".\"time_suspended\" is not null",
       "origin": "manual",
       "name": "session_v2_time_suspended_idx",
+      "entityType": "indexes",
+      "table": "session_v2"
+    },
+    {
+      "columns": [
+        {
+          "value": "claim_expires_at",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": "\"session_v2\".\"claim_expires_at\" is not null",
+      "origin": "manual",
+      "name": "session_v2_claim_expires_idx",
       "entityType": "indexes",
       "table": "session_v2"
     }

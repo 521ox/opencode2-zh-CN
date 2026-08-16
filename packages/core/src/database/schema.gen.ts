@@ -214,6 +214,11 @@ const schema: Omit<DatabaseMigration.Migration, "id"> = {
           \`time_archived\` integer,
           \`time_suspended\` integer,
           \`resume_attempts\` integer DEFAULT 0 NOT NULL,
+          \`claim_owner\` text,
+          \`claim_pid\` integer,
+          \`claim_hostname\` text,
+          \`claim_updated_at\` integer,
+          \`claim_expires_at\` integer,
           CONSTRAINT \`fk_session_v2_project_id_project_id_fk\` FOREIGN KEY (\`project_id\`) REFERENCES \`project\`(\`id\`) ON DELETE CASCADE
         );
       `)
@@ -271,6 +276,9 @@ const schema: Omit<DatabaseMigration.Migration, "id"> = {
       yield* tx.run(`CREATE INDEX \`session_v2_parent_idx\` ON \`session_v2\` (\`parent_id\`);`)
       yield* tx.run(
         `CREATE INDEX \`session_v2_time_suspended_idx\` ON \`session_v2\` (\`time_suspended\`) WHERE "session_v2"."time_suspended" is not null;`,
+      )
+      yield* tx.run(
+        `CREATE INDEX \`session_v2_claim_expires_idx\` ON \`session_v2\` (\`claim_expires_at\`) WHERE "session_v2"."claim_expires_at" is not null;`,
       )
     })
   },

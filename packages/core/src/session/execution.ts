@@ -1,6 +1,8 @@
 export * as SessionExecution from "./execution.js"
 
-import { Cause, Context, Effect, Exit, Layer } from "effect"
+import { randomUUID } from "node:crypto"
+import { hostname } from "node:os"
+import { Cause, Context, Duration, Effect, Exit, Layer, Schedule } from "effect"
 import { Bus } from "../bus.js"
 import { Database } from "../database/database.js"
 import { LocationServiceMap } from "../location-service-map.js"
@@ -15,10 +17,16 @@ import { UserInterruptedError } from "./error.js"
 import { SessionInbox } from "./inbox.js"
 
 export interface Interface {
+  /** Stable owner identity shared by every claim in this process. */
+  readonly owner: SessionStore.Owner
   /** Snapshots active execution owned by this process. */
   readonly active: Effect.Effect<ReadonlySet<SessionSchema.ID>>
+  /** Atomically acquires or renews this process's Session lease. */
+  readonly claim: (sessionID: SessionSchema.ID) => Effect.Effect<boolean>
   /** Starts execution while idle or joins the active execution. */
   readonly resume: (sessionID: SessionSchema.ID) => Effect.Effect<void, SessionRunner.RunError>
+  /** Starts execution after the caller has already acquired this process's lease. */
+  readonly resumeClaimed: (sessionID: SessionSchema.ID) => Effect.Effect<void, SessionRunner.RunError>
   /** Registers newly recorded work. Repeated wakeups may coalesce. */
   readonly wake: (sessionID: SessionSchema.ID) => Effect.Effect<void>
   /** Wakes only an active execution, preserving its current input eligibility. */
@@ -33,6 +41,7 @@ export interface Interface {
 export class Service extends Context.Service<Service, Interface>()("@opencode/SessionExecution") {}
 
 type InterruptReason = "user" | "shutdown" | "superseded"
+const LEASE_MS = 30_000
 
 export function terminal(exit: Exit.Exit<void, SessionRunner.RunError>, reason?: InterruptReason) {
   if (Exit.isSuccess(exit)) return { type: "succeeded" as const }
@@ -47,6 +56,12 @@ export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const store = yield* SessionStore.Service
+    const owner: SessionStore.Owner = {
+      id: `${process.pid}-${randomUUID()}`,
+      pid: process.pid,
+      hostname: hostname(),
+      leaseMs: LEASE_MS,
+    }
     const locations = yield* LocationServiceMap.Service
     const bus = yield* Bus.Service
     const db = (yield* Database.Service).db
@@ -61,16 +76,11 @@ export const layer = Layer.effect(
         ),
         Effect.asVoid,
       )
-    // Write-ahead claim: starting records the durable intent that a turn is in flight, in the same
-    // transaction as the started event. Terminals release it — except shutdown interruption, which
-    // preserves the claim so the next server start resumes the turn. A claim that survives with no
-    // terminal is the signature of a process that died without teardown (crash, SIGKILL, eviction);
-    // recovery is a property of the database, never of a shutdown hook that may not run.
-    const claimOnCommit = (sessionID: SessionSchema.ID) => ({
-      commit: () => store.claim(sessionID),
-    })
     const releaseOnCommit = (sessionID: SessionSchema.ID) => ({
-      commit: () => store.release(sessionID),
+      commit: () =>
+        store
+          .release(sessionID, owner)
+          .pipe(Effect.flatMap(SessionStore.requireOwnership(sessionID, owner, "terminal commit"))),
     })
     function drain(
       sessionID: SessionSchema.ID,
@@ -96,11 +106,7 @@ export const layer = Layer.effect(
       })
     }
     const coordinator = yield* SessionRunCoordinator.make<SessionSchema.ID, SessionRunner.RunError, InterruptReason>({
-      started: (sessionID) =>
-        reportLifecycle(
-          sessionID,
-          bus.publish(SessionEvent.Execution.Started, { sessionID }, claimOnCommit(sessionID)),
-        ),
+      started: (sessionID) => reportLifecycle(sessionID, bus.publish(SessionEvent.Execution.Started, { sessionID })),
       drain: (sessionID, force, promotable) => drain(sessionID, force, undefined, promotable),
       // One terminal observation per busy period, covering every coalesced drain.
       settled: (sessionID, exit, reason) =>
@@ -108,6 +114,8 @@ export const layer = Layer.effect(
           sessionID,
           Effect.gen(function* () {
             const outcome = terminal(exit, reason)
+            if (outcome.type === "interrupted" && outcome.reason === "shutdown") return
+            if (!(yield* store.touch(sessionID, owner))) return
             if (outcome.type === "succeeded") {
               yield* bus.publish(SessionEvent.Execution.Succeeded, { sessionID }, releaseOnCommit(sessionID))
               return
@@ -118,7 +126,7 @@ export const layer = Layer.effect(
               yield* bus.publish(
                 SessionEvent.Execution.Interrupted,
                 { sessionID, reason: outcome.reason },
-                outcome.reason === "shutdown" ? undefined : releaseOnCommit(sessionID),
+                releaseOnCommit(sessionID),
               )
               return
             }
@@ -134,8 +142,35 @@ export const layer = Layer.effect(
         ),
     })
 
+    const claim = (sessionID: SessionSchema.ID) => store.claim(sessionID, owner)
+    const resumeClaimed = (sessionID: SessionSchema.ID) =>
+      store.touch(sessionID, owner).pipe(Effect.flatMap((owned) => (owned ? coordinator.run(sessionID) : Effect.void)))
+    const resume = Effect.fn("SessionExecution.resume")(function* (sessionID: SessionSchema.ID) {
+      if (!(yield* claim(sessionID))) return
+      yield* coordinator.run(sessionID)
+    })
+    const wake = Effect.fn("SessionExecution.wake")(function* (sessionID: SessionSchema.ID) {
+      if (!(yield* claim(sessionID))) return
+      yield* coordinator.wake(sessionID)
+    })
+    const renew = Effect.gen(function* () {
+      const active = yield* coordinator.active
+      yield* Effect.forEach(
+        active,
+        (sessionID) =>
+          store
+            .touch(sessionID, owner)
+            .pipe(Effect.flatMap((owned) => (owned ? Effect.void : coordinator.interrupt(sessionID, "shutdown")))),
+        { discard: true },
+      )
+    })
+    yield* renew.pipe(Effect.repeat(Schedule.spaced(Duration.millis(LEASE_MS / 3))), Effect.forkScoped)
+    yield* Effect.addFinalizer(() => store.expireOwner(owner))
+
     return Service.of({
+      owner,
       active: coordinator.active,
+      claim,
       interrupt: (sessionID, options) =>
         coordinator.interrupt(
           sessionID,
@@ -144,8 +179,9 @@ export const layer = Layer.effect(
             ? { continue: { request: "steer", when: SessionInbox.has(db, sessionID, "steer") } }
             : undefined,
         ),
-      resume: coordinator.run,
-      wake: coordinator.wake,
+      resume,
+      resumeClaimed,
+      wake,
       wakeActive: coordinator.wakeActive,
       awaitIdle: coordinator.awaitIdle,
     })
@@ -162,8 +198,11 @@ export const node = makeGlobalNode({
 export const noopLayer = Layer.succeed(
   Service,
   Service.of({
+    owner: { id: "noop", pid: 0, hostname: "noop", leaseMs: LEASE_MS },
     active: Effect.succeed(new Set()),
+    claim: () => Effect.succeed(true),
     resume: () => Effect.void,
+    resumeClaimed: () => Effect.void,
     wake: () => Effect.void,
     wakeActive: () => Effect.void,
     interrupt: () => Effect.void,

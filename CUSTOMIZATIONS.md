@@ -99,6 +99,12 @@ accepted.
     `--server` still connects to a persistent or external server, and non-TUI
     commands retain their existing service defaults. Persistent service
     lifecycle remains available through the explicit `service` commands.
+17. Session execution claims are cross-process SQLite leases. Every Core process
+    owns claims through a PID/UUID/hostname identity, renews active leases, and
+    can release or terminalize only its own Sessions. A second private or managed
+    server cannot resume, publish continuation, or drain a Session while the
+    first owner's lease is fresh. Graceful teardown expires the lease for
+    immediate handoff; crash recovery waits for bounded expiry.
 
 ## Porting Rules
 

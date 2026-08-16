@@ -66,9 +66,10 @@ export const layer = (options?: Options) =>
       const maxAttempts = options?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS
 
       const resumeOne = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
+        if (!(yield* execution.claim(sessionID))) return
         // Durable before the resume runs, so a crash inside the resumed turn is
         // counted by the next sweep and the budget cannot be dodged.
-        const attempts = yield* store.countResume(sessionID)
+        const attempts = yield* store.countResume(sessionID, execution.owner)
         if (attempts === undefined) return // the Session was deleted since listing
         if (attempts > maxAttempts) {
           // Terminalize instead: the release hook clears the claim and resets the
@@ -76,19 +77,41 @@ export const layer = (options?: Options) =>
           yield* bus.publish(
             SessionEvent.Execution.Failed,
             { sessionID, error: RESUME_EXHAUSTED },
-            { commit: () => store.release(sessionID) },
+            {
+              commit: () =>
+                store
+                  .release(sessionID, execution.owner)
+                  .pipe(
+                    Effect.flatMap(
+                      SessionStore.requireOwnership(sessionID, execution.owner, "resume exhaustion terminal commit"),
+                    ),
+                  ),
+            },
           )
           return
         }
-        yield* bus.publish(SessionEvent.Synthetic, {
-          sessionID,
-          text: CONTINUE_AFTER_SERVER_RESTART,
-          description: "Continuing after restart",
-        })
+        yield* bus.publish(
+          SessionEvent.Synthetic,
+          {
+            sessionID,
+            text: CONTINUE_AFTER_SERVER_RESTART,
+            description: "Continuing after restart",
+          },
+          {
+            commit: () =>
+              store
+                .touch(sessionID, execution.owner)
+                .pipe(
+                  Effect.flatMap(
+                    SessionStore.requireOwnership(sessionID, execution.owner, "restart continuation commit"),
+                  ),
+                ),
+          },
+        )
         // Forked into the service scope so boot never waits on resumed turns;
         // resuming an already-live Session joins its execution. Drain failures
         // are logged and durably recorded by the execution layer.
-        yield* execution.resume(sessionID).pipe(Effect.ignore, Effect.forkIn(scope))
+        yield* execution.resumeClaimed(sessionID).pipe(Effect.ignore, Effect.forkIn(scope))
       })
 
       return Service.of({
@@ -97,7 +120,7 @@ export const layer = (options?: Options) =>
           // dead child's claim is noise no terminal will ever release. Clearing
           // is safe even against a live child: claims are recovery markers, not
           // locks, and children are excluded from that recovery.
-          yield* store.releaseChildClaims
+          yield* store.releaseChildClaims(execution.owner)
           const active = yield* execution.active
           // Sessions already draining in this process keep their claim; resuming
           // them would only inject a stray continuation into a live turn.

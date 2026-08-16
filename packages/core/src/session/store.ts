@@ -1,6 +1,6 @@
 export * as SessionStore from "./store.js"
 
-import { and, eq, isNotNull, isNull, sql } from "drizzle-orm"
+import { and, eq, isNotNull, isNull, lte, or, sql } from "drizzle-orm"
 import { Context, Effect, Layer, Schema } from "effect"
 import { Database } from "../database/database.js"
 import { makeGlobalNode } from "@opencode-ai/util/effect/app-node"
@@ -12,6 +12,18 @@ import { AbsolutePath } from "../schema.js"
 import { SessionMessageTable, SessionTable } from "./sql.js"
 import { fromRow } from "./info.js"
 import { SessionRulesLocation } from "./rules-location.js"
+
+export type Owner = {
+  readonly id: string
+  readonly pid: number
+  readonly hostname: string
+  readonly leaseMs: number
+}
+
+export const requireOwnership = (sessionID: Session.ID, owner: Owner, operation: string) => (owned: boolean) =>
+  owned
+    ? Effect.void
+    : Effect.die(new Error(`Session execution lease lost before ${operation}: session=${sessionID} owner=${owner.id}`))
 
 export interface Interface {
   readonly get: (sessionID: Session.ID) => Effect.Effect<Session.Info | undefined>
@@ -33,20 +45,22 @@ export interface Interface {
    * next boot marks a turn that never completed — its process crashed or shut
    * down mid-turn.
    */
-  readonly claim: (sessionID: Session.ID) => Effect.Effect<void>
+  readonly claim: (sessionID: Session.ID, owner: Owner) => Effect.Effect<boolean>
+  readonly touch: (sessionID: Session.ID, owner: Owner) => Effect.Effect<boolean>
   /** Releases the claim and resets resume accounting. Terminal events call this on commit. */
-  readonly release: (sessionID: Session.ID) => Effect.Effect<void>
+  readonly release: (sessionID: Session.ID, owner: Owner) => Effect.Effect<boolean>
   /**
    * Clears orphaned child (subagent) claims. Children are never resumed
    * independently, so a dead child's claim is noise no terminal will ever
    * release.
    */
-  readonly releaseChildClaims: Effect.Effect<void>
+  readonly releaseChildClaims: (owner: Owner) => Effect.Effect<void>
+  readonly expireOwner: (owner: Owner) => Effect.Effect<void>
   /**
    * Durably counts one more resume of an orphaned claim, returning the new
    * total — or undefined when the Session no longer exists.
    */
-  readonly countResume: (sessionID: Session.ID) => Effect.Effect<number | undefined>
+  readonly countResume: (sessionID: Session.ID, owner: Owner) => Effect.Effect<number | undefined>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SessionStore") {}
@@ -109,40 +123,118 @@ const layer = Layer.effect(
             Effect.map((rows) => rows.map((row) => row.sessionID)),
           )
       }),
-      claim: Effect.fn("SessionStore.claim")(function* (sessionID) {
-        // The null guard makes re-claiming a still-claimed Session a zero-row
-        // no-op (a resumed turn re-claims through the same started hook).
-        // Claim bookkeeping never counts as user activity: time_updated is
-        // pinned so session ordering only moves on real changes.
+      claim: Effect.fn("SessionStore.claim")(function* (sessionID, owner) {
+        const now = Date.now()
+        const row = yield* db
+          .update(SessionTable)
+          .set({
+            time_suspended: sql`coalesce(${SessionTable.time_suspended}, ${now})`,
+            resume_attempts: sql`case when ${SessionTable.time_suspended} is null then 0 else ${SessionTable.resume_attempts} end`,
+            claim_owner: owner.id,
+            claim_pid: owner.pid,
+            claim_hostname: owner.hostname,
+            claim_updated_at: now,
+            claim_expires_at: now + owner.leaseMs,
+            time_updated: sql`${SessionTable.time_updated}`,
+          })
+          .where(
+            and(
+              eq(SessionTable.id, sessionID),
+              or(
+                isNull(SessionTable.claim_owner),
+                eq(SessionTable.claim_owner, owner.id),
+                lte(SessionTable.claim_expires_at, now),
+              ),
+            ),
+          )
+          .returning({ id: SessionTable.id })
+          .get()
+          .pipe(Effect.orDie)
+        return row !== undefined
+      }),
+      touch: Effect.fn("SessionStore.touch")(function* (sessionID, owner) {
+        const now = Date.now()
+        const row = yield* db
+          .update(SessionTable)
+          .set({
+            claim_updated_at: now,
+            claim_expires_at: now + owner.leaseMs,
+            time_updated: sql`${SessionTable.time_updated}`,
+          })
+          .where(and(eq(SessionTable.id, sessionID), eq(SessionTable.claim_owner, owner.id)))
+          .returning({ id: SessionTable.id })
+          .get()
+          .pipe(Effect.orDie)
+        return row !== undefined
+      }),
+      release: Effect.fn("SessionStore.release")(function* (sessionID, owner) {
+        const row = yield* db
+          .update(SessionTable)
+          .set({
+            time_suspended: null,
+            resume_attempts: 0,
+            claim_owner: null,
+            claim_pid: null,
+            claim_hostname: null,
+            claim_updated_at: null,
+            claim_expires_at: null,
+            time_updated: sql`${SessionTable.time_updated}`,
+          })
+          .where(and(eq(SessionTable.id, sessionID), eq(SessionTable.claim_owner, owner.id)))
+          .returning({ id: SessionTable.id })
+          .get()
+          .pipe(Effect.orDie)
+        return row !== undefined
+      }),
+      releaseChildClaims: Effect.fn("SessionStore.releaseChildClaims")(function* (owner) {
+        const now = Date.now()
         yield* db
           .update(SessionTable)
-          .set({ time_suspended: Date.now(), time_updated: sql`${SessionTable.time_updated}` })
-          .where(and(eq(SessionTable.id, sessionID), isNull(SessionTable.time_suspended)))
+          .set({
+            time_suspended: null,
+            resume_attempts: 0,
+            claim_owner: null,
+            claim_pid: null,
+            claim_hostname: null,
+            claim_updated_at: null,
+            claim_expires_at: null,
+            time_updated: sql`${SessionTable.time_updated}`,
+          })
+          .where(
+            and(
+              isNotNull(SessionTable.time_suspended),
+              isNotNull(SessionTable.parent_id),
+              or(
+                isNull(SessionTable.claim_owner),
+                lte(SessionTable.claim_expires_at, now),
+                and(eq(SessionTable.claim_owner, owner.id), isNull(SessionTable.claim_expires_at)),
+              ),
+            ),
+          )
           .run()
           .pipe(Effect.orDie)
       }),
-      release: Effect.fn("SessionStore.release")(function* (sessionID) {
+      expireOwner: Effect.fn("SessionStore.expireOwner")(function* (owner) {
+        const now = Date.now()
         yield* db
           .update(SessionTable)
-          .set({ time_suspended: null, resume_attempts: 0, time_updated: sql`${SessionTable.time_updated}` })
-          .where(eq(SessionTable.id, sessionID))
+          .set({
+            claim_updated_at: now,
+            claim_expires_at: now,
+            time_updated: sql`${SessionTable.time_updated}`,
+          })
+          .where(eq(SessionTable.claim_owner, owner.id))
           .run()
           .pipe(Effect.orDie)
       }),
-      releaseChildClaims: db
-        .update(SessionTable)
-        .set({ time_suspended: null, resume_attempts: 0, time_updated: sql`${SessionTable.time_updated}` })
-        .where(and(isNotNull(SessionTable.time_suspended), isNotNull(SessionTable.parent_id)))
-        .run()
-        .pipe(Effect.orDie, Effect.asVoid, Effect.withSpan("SessionStore.releaseChildClaims")),
-      countResume: Effect.fn("SessionStore.countResume")(function* (sessionID) {
+      countResume: Effect.fn("SessionStore.countResume")(function* (sessionID, owner) {
         const row = yield* db
           .update(SessionTable)
           .set({
             resume_attempts: sql`${SessionTable.resume_attempts} + 1`,
             time_updated: sql`${SessionTable.time_updated}`,
           })
-          .where(eq(SessionTable.id, sessionID))
+          .where(and(eq(SessionTable.id, sessionID), eq(SessionTable.claim_owner, owner.id)))
           .returning({ attempts: SessionTable.resume_attempts })
           .get()
           .pipe(Effect.orDie)

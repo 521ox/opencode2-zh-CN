@@ -37,8 +37,14 @@ const activeSessions = new Set<Session.ID>()
 const execution = Layer.succeed(
   SessionExecution.Service,
   SessionExecution.Service.of({
+    owner: { id: "test-owner", pid: 0, hostname: "test", leaseMs: 30_000 },
     active: Effect.sync(() => new Set(activeSessions)),
+    claim: () => Effect.succeed(true),
     resume: (sessionID) =>
+      Effect.sync(() => {
+        executionCalls.push(sessionID)
+      }),
+    resumeClaimed: (sessionID) =>
       Effect.sync(() => {
         executionCalls.push(sessionID)
       }),

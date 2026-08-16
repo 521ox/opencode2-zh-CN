@@ -20,6 +20,7 @@ const projects = Layer.mock(Project.Service, {
   resolve: (directory) => Effect.succeed({ id: Project.ID.global, directory, canonical: directory }),
 })
 const execution = Layer.mock(SessionExecution.Service, {
+  owner: { id: "test-owner", pid: 0, hostname: "test", leaseMs: 30_000 },
   awaitIdle: (sessionID) => Effect.sync(() => awaited.push(sessionID)),
 })
 const it = testEffect(

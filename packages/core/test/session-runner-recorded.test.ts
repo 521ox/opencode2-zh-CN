@@ -123,8 +123,11 @@ const execution = (llmClient: Layer.Layer<typeof LLMClient.Service>) =>
         drain: (sessionID, force) => sessionRunner.drain({ sessionID, force }).pipe(Effect.asVoid),
       })
       return SessionExecution.Service.of({
+        owner: { id: "test-owner", pid: 0, hostname: "test", leaseMs: 30_000 },
         active: coordinator.active,
+        claim: () => Effect.succeed(true),
         resume: coordinator.run,
+        resumeClaimed: coordinator.run,
         wake: coordinator.wake,
         wakeActive: coordinator.wakeActive,
         interrupt: (sessionID) => coordinator.interrupt(sessionID),

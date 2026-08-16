@@ -59,9 +59,14 @@ export const SessionTable = sqliteTable(
     ...Timestamps,
     time_compacting: integer(),
     time_archived: integer(),
-    /** The execution claim timestamp (historical column name; see SessionStore.claim). */
+    /** The execution claim timestamp retained for restart compatibility. */
     time_suspended: integer(),
     resume_attempts: integer().notNull().default(0),
+    claim_owner: text(),
+    claim_pid: integer(),
+    claim_hostname: text(),
+    claim_updated_at: integer(),
+    claim_expires_at: integer(),
   },
   (table) => [
     index("session_v2_project_idx").on(table.project_id),
@@ -70,6 +75,9 @@ export const SessionTable = sqliteTable(
     index("session_v2_time_suspended_idx")
       .on(table.time_suspended)
       .where(sql`${table.time_suspended} is not null`),
+    index("session_v2_claim_expires_idx")
+      .on(table.claim_expires_at)
+      .where(sql`${table.claim_expires_at} is not null`),
   ],
 )
 
