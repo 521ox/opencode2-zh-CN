@@ -739,6 +739,11 @@ feedback as the intended contract; preserve or improve cancellation semantics.
   `1.4.0-canary.1+aec33f581` snapshot, not the moving `canary` label. Normal and
   baseline Windows x64 archives are addressed by immutable release asset IDs
   and verified by both archive and executable SHA-256 before compilation.
+- A pinned cache is valid only when `bun.exe`, its matching archive, and
+  `snapshot.json` all exist. Every cache hit revalidates snapshot identity,
+  archive SHA-256, executable SHA-256, runtime version, and revision.
+- New caches are assembled and verified in a staging directory before the
+  complete cache directory is published.
 - `-CompileRuntime Current` uses the Bun running the fixed script as a stable
   recovery path. `MovingCanary` is an explicit diagnostic mode only.
 - A direct compile executable is accepted only for a single-target build with
@@ -748,7 +753,12 @@ feedback as the intended contract; preserve or improve cancellation semantics.
   length and SHA-256.
 - Each candidate includes a `.build.json` sidecar that separately records the
   build-orchestrator Bun, embedded compile runtime, source commit, runtime asset,
-  hashes, build options, and candidate identity.
+  hashes, build options, complete source status, and candidate identity.
+- Git HEAD and complete porcelain status are captured before and after the
+  build. Git command failure or any state difference stops publication before
+  the root or timestamped candidate is copied.
+- All compile-runtime environment changes and directory changes are covered by
+  a common `finally` scope and restore the caller state on failure.
 - The compiled service smoke uses isolated config, home, database, and a free
   loopback port so it can run beside another installed channel.
 - The smoke proves contender election, authenticated API and OpenAPI access,
@@ -770,6 +780,9 @@ feedback as the intended contract; preserve or improve cancellation semantics.
 - The default Windows build reports build Bun 1.3.14 and compile runtime Bun
   `1.4.0-canary.1+aec33f581` with the pinned executable SHA-256.
 - A second default build is a cache hit with the same runtime identity.
+- Partial cache, corrupt archive, mismatched snapshot, runtime-probe failure,
+  Git-status failure, and pre/post source-change probes all fail closed without
+  publishing a candidate; environment and location are restored.
 - `Current` mode reproduces the stable Bun 1.3.14 candidate and passes service
   smoke.
 - Pinned-canary normal and baseline candidates pass service smoke.

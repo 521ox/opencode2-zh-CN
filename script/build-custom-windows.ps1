@@ -6,7 +6,8 @@ param(
   [switch] $RunServiceSmoke,
   [ValidateSet("PinnedCanary", "Current", "MovingCanary")]
   [string] $CompileRuntime = "PinnedCanary",
-  [string] $CompileRuntimeCache = "$env:LOCALAPPDATA\opencode-build\bun"
+  [string] $CompileRuntimeCache = "$env:LOCALAPPDATA\opencode-build\bun",
+  [string] $BuildBun = "$env:USERPROFILE\.bun\bin\bun.exe"
 )
 
 $ErrorActionPreference = "Stop"
@@ -23,6 +24,35 @@ function Restore-EnvironmentVariable {
     return
   }
   Set-Item -LiteralPath "Env:$Name" -Value $Value
+}
+
+function Get-GitSourceState {
+  param(
+    [string] $Repository,
+    [string] $Git
+  )
+
+  $commitOutput = @(& $Git -C $Repository rev-parse HEAD 2>&1)
+  if ($LASTEXITCODE -ne 0) {
+    throw "Unable to read source commit: $($commitOutput -join [Environment]::NewLine)"
+  }
+  $commit = ($commitOutput -join "`n").Trim()
+  if (-not $commit) {
+    throw "Git returned an empty source commit"
+  }
+
+  $statusOutput = @(& $Git -C $Repository status --porcelain=v1 --untracked-files=all 2>&1)
+  if ($LASTEXITCODE -ne 0) {
+    throw "Unable to read source status: $($statusOutput -join [Environment]::NewLine)"
+  }
+  $porcelain = $statusOutput -join "`n"
+
+  [pscustomobject]@{
+    Commit = $commit
+    Porcelain = $porcelain
+    Dirty = -not [string]::IsNullOrWhiteSpace($porcelain)
+    Lines = @($statusOutput)
+  }
 }
 
 function Get-BunRuntimeInfo {
@@ -93,6 +123,65 @@ function Get-PinnedBunRuntimeSpec {
   }
 }
 
+function Get-VerifiedPinnedBunCache {
+  param(
+    [string] $CacheDirectory,
+    [pscustomobject] $Spec,
+    [string] $ExpectedExecutableSHA256,
+    [string] $ExpectedVersion,
+    [string] $ExpectedRevision
+  )
+
+  $executable = Join-Path $CacheDirectory "bun.exe"
+  $archive = Join-Path $CacheDirectory $Spec.AssetName
+  $snapshotPath = Join-Path $CacheDirectory "snapshot.json"
+  foreach ($required in @($executable, $archive, $snapshotPath)) {
+    if (-not (Test-Path -LiteralPath $required)) {
+      throw "Pinned Bun cache is incomplete: $required"
+    }
+  }
+
+  try {
+    $snapshot = Get-Content -Raw -LiteralPath $snapshotPath | ConvertFrom-Json
+  }
+  catch {
+    throw "Pinned Bun snapshot metadata is invalid: $snapshotPath"
+  }
+
+  $expectedSnapshot = [ordered]@{
+    Version = $ExpectedVersion
+    Revision = $ExpectedRevision
+    ExecutableSHA256 = $ExpectedExecutableSHA256
+    AssetId = [long] $Spec.AssetId
+    AssetName = $Spec.AssetName
+    ZipSHA256 = $Spec.ZipSHA256
+  }
+  foreach ($property in $expectedSnapshot.Keys) {
+    $actual = $snapshot.$property
+    $expected = $expectedSnapshot[$property]
+    if ([string] $actual -ne [string] $expected) {
+      throw "Pinned Bun snapshot metadata mismatch for ${property}: actual=$actual expected=$expected"
+    }
+  }
+
+  $archiveSHA256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
+  if ($archiveSHA256 -ne $Spec.ZipSHA256) {
+    throw "Pinned Bun cached archive hash mismatch: actual=$archiveSHA256 expected=$($Spec.ZipSHA256)"
+  }
+
+  $runtimeArgs = @{
+    Path = $executable
+    ExpectedSHA256 = $ExpectedExecutableSHA256
+    ExpectedVersion = $ExpectedVersion
+    ExpectedRevision = $ExpectedRevision
+  }
+  $runtime = Get-BunRuntimeInfo @runtimeArgs
+  $runtime.AssetId = [long] $snapshot.AssetId
+  $runtime.AssetName = [string] $snapshot.AssetName
+  $runtime.ZipSHA256 = $archiveSHA256
+  $runtime
+}
+
 function Get-PinnedBunRuntime {
   param(
     [bool] $IsBaseline,
@@ -105,26 +194,24 @@ function Get-PinnedBunRuntime {
   $spec = Get-PinnedBunRuntimeSpec -IsBaseline $IsBaseline
   $snapshot = "1.4.0-canary.1-aec33f581"
   $cacheDirectory = Join-Path $CacheRoot (Join-Path $snapshot $spec.DirectoryName)
-  $cachedExecutable = Join-Path $cacheDirectory "bun.exe"
 
-  if (Test-Path -LiteralPath $cachedExecutable) {
-    $runtimeArgs = @{
-      Path = $cachedExecutable
-      ExpectedSHA256 = $expectedExecutableSHA256
+  if (Test-Path -LiteralPath $cacheDirectory) {
+    $cacheArgs = @{
+      CacheDirectory = $cacheDirectory
+      Spec = $spec
+      ExpectedExecutableSHA256 = $expectedExecutableSHA256
       ExpectedVersion = $expectedVersion
       ExpectedRevision = $expectedRevision
     }
-    $runtime = Get-BunRuntimeInfo @runtimeArgs
-    $runtime.AssetId = $spec.AssetId
-    $runtime.AssetName = $spec.AssetName
-    $runtime.ZipSHA256 = $spec.ZipSHA256
+    $runtime = Get-VerifiedPinnedBunCache @cacheArgs
     $runtime.CacheHit = $true
     return $runtime
   }
 
   $staging = Join-Path $CacheRoot (".staging-{0}" -f [guid]::NewGuid().ToString("N"))
-  $zip = Join-Path $staging $spec.AssetName
+  $zip = Join-Path $staging "download.zip"
   $expanded = Join-Path $staging "expanded"
+  $stagedCache = Join-Path $staging "cache"
   try {
     New-Item -ItemType Directory -Force -Path $staging | Out-Null
     $downloadArgs = @{
@@ -149,12 +236,9 @@ function Get-PinnedBunRuntime {
     }
     $runtime = Get-BunRuntimeInfo @runtimeArgs
 
-    if (Test-Path -LiteralPath $cacheDirectory) {
-      Remove-Item -LiteralPath $cacheDirectory -Recurse -Force
-    }
-    New-Item -ItemType Directory -Force -Path $cacheDirectory | Out-Null
-    Copy-Item -LiteralPath $sourceExecutable -Destination $cachedExecutable
-    Copy-Item -LiteralPath $zip -Destination (Join-Path $cacheDirectory $spec.AssetName)
+    New-Item -ItemType Directory -Force -Path $stagedCache | Out-Null
+    Copy-Item -LiteralPath $sourceExecutable -Destination (Join-Path $stagedCache "bun.exe")
+    Copy-Item -LiteralPath $zip -Destination (Join-Path $stagedCache $spec.AssetName)
     [pscustomobject]@{
       Version = $runtime.Version
       Revision = $runtime.Revision
@@ -162,7 +246,23 @@ function Get-PinnedBunRuntime {
       AssetId = $spec.AssetId
       AssetName = $spec.AssetName
       ZipSHA256 = $spec.ZipSHA256
-    } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $cacheDirectory "snapshot.json") -Encoding utf8
+    } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $stagedCache "snapshot.json") -Encoding utf8
+
+    $stagedArgs = @{
+      CacheDirectory = $stagedCache
+      Spec = $spec
+      ExpectedExecutableSHA256 = $expectedExecutableSHA256
+      ExpectedVersion = $expectedVersion
+      ExpectedRevision = $expectedRevision
+    }
+    Get-VerifiedPinnedBunCache @stagedArgs | Out-Null
+
+    $cacheParent = Split-Path -Parent $cacheDirectory
+    New-Item -ItemType Directory -Force -Path $cacheParent | Out-Null
+    if (Test-Path -LiteralPath $cacheDirectory) {
+      throw "Pinned Bun cache appeared during publication: $cacheDirectory"
+    }
+    Move-Item -LiteralPath $stagedCache -Destination $cacheDirectory
   }
   finally {
     if (Test-Path -LiteralPath $staging) {
@@ -171,15 +271,13 @@ function Get-PinnedBunRuntime {
   }
 
   $verifiedArgs = @{
-    Path = $cachedExecutable
-    ExpectedSHA256 = $expectedExecutableSHA256
+    CacheDirectory = $cacheDirectory
+    Spec = $spec
+    ExpectedExecutableSHA256 = $expectedExecutableSHA256
     ExpectedVersion = $expectedVersion
     ExpectedRevision = $expectedRevision
   }
-  $verified = Get-BunRuntimeInfo @verifiedArgs
-  $verified.AssetId = $spec.AssetId
-  $verified.AssetName = $spec.AssetName
-  $verified.ZipSHA256 = $spec.ZipSHA256
+  $verified = Get-VerifiedPinnedBunCache @verifiedArgs
   $verified.CacheHit = $false
   $verified
 }
@@ -189,7 +287,7 @@ $rootPackage = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "package.json"
 $cliPackage = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "packages\cli\package.json") | ConvertFrom-Json
 $requiredBun = $rootPackage.packageManager -replace '^bun@', ''
 $version = $cliPackage.version
-$bun = Join-Path $env:USERPROFILE ".bun\bin\bun.exe"
+$bun = $BuildBun
 
 if (-not (Test-Path -LiteralPath $bun)) {
   throw "Bun executable not found: $bun"
@@ -212,32 +310,36 @@ $previousCompileSHA256 = $env:BUN_COMPILE_EXECUTABLE_SHA256
 
 $compileTarget = if ($Baseline) { "opencode2-windows-x64-baseline" } else { "opencode2-windows-x64" }
 $compileRuntimeInfo = $null
-
-switch ($CompileRuntime) {
-  "PinnedCanary" {
-    $compileRuntimeInfo = Get-PinnedBunRuntime -IsBaseline ([bool] $Baseline) -CacheRoot $CompileRuntimeCache
-    Remove-Item -LiteralPath "Env:BUN_COMPILE_RELEASE" -ErrorAction SilentlyContinue
-    $env:BUN_COMPILE_EXECUTABLE = $compileRuntimeInfo.Path
-    $env:BUN_COMPILE_EXECUTABLE_TARGET = $compileTarget
-    $env:BUN_COMPILE_EXECUTABLE_SHA256 = $compileRuntimeInfo.SHA256
-  }
-  "Current" {
-    Remove-Item -LiteralPath "Env:BUN_COMPILE_RELEASE" -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath "Env:BUN_COMPILE_EXECUTABLE" -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath "Env:BUN_COMPILE_EXECUTABLE_TARGET" -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath "Env:BUN_COMPILE_EXECUTABLE_SHA256" -ErrorAction SilentlyContinue
-    $compileRuntimeInfo = Get-BunRuntimeInfo -Path $bun
-  }
-  "MovingCanary" {
-    $env:BUN_COMPILE_RELEASE = "canary"
-    Remove-Item -LiteralPath "Env:BUN_COMPILE_EXECUTABLE" -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath "Env:BUN_COMPILE_EXECUTABLE_TARGET" -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath "Env:BUN_COMPILE_EXECUTABLE_SHA256" -ErrorAction SilentlyContinue
-  }
-}
-
-Push-Location $repoRoot
+$pushedLocation = $false
+$sourceBefore = $null
 try {
+  Push-Location $repoRoot
+  $pushedLocation = $true
+  $sourceBefore = Get-GitSourceState -Repository $repoRoot -Git "git"
+
+  switch ($CompileRuntime) {
+    "PinnedCanary" {
+      $compileRuntimeInfo = Get-PinnedBunRuntime -IsBaseline ([bool] $Baseline) -CacheRoot $CompileRuntimeCache
+      Remove-Item -LiteralPath "Env:BUN_COMPILE_RELEASE" -ErrorAction SilentlyContinue
+      $env:BUN_COMPILE_EXECUTABLE = $compileRuntimeInfo.Path
+      $env:BUN_COMPILE_EXECUTABLE_TARGET = $compileTarget
+      $env:BUN_COMPILE_EXECUTABLE_SHA256 = $compileRuntimeInfo.SHA256
+    }
+    "Current" {
+      Remove-Item -LiteralPath "Env:BUN_COMPILE_RELEASE" -ErrorAction SilentlyContinue
+      Remove-Item -LiteralPath "Env:BUN_COMPILE_EXECUTABLE" -ErrorAction SilentlyContinue
+      Remove-Item -LiteralPath "Env:BUN_COMPILE_EXECUTABLE_TARGET" -ErrorAction SilentlyContinue
+      Remove-Item -LiteralPath "Env:BUN_COMPILE_EXECUTABLE_SHA256" -ErrorAction SilentlyContinue
+      $compileRuntimeInfo = Get-BunRuntimeInfo -Path $bun
+    }
+    "MovingCanary" {
+      $env:BUN_COMPILE_RELEASE = "canary"
+      Remove-Item -LiteralPath "Env:BUN_COMPILE_EXECUTABLE" -ErrorAction SilentlyContinue
+      Remove-Item -LiteralPath "Env:BUN_COMPILE_EXECUTABLE_TARGET" -ErrorAction SilentlyContinue
+      Remove-Item -LiteralPath "Env:BUN_COMPILE_EXECUTABLE_SHA256" -ErrorAction SilentlyContinue
+    }
+  }
+
   if (-not $SkipInstall) {
     & $bun install --frozen-lockfile
     if ($LASTEXITCODE -ne 0) {
@@ -293,6 +395,11 @@ try {
     }
   }
 
+  $sourceAfter = Get-GitSourceState -Repository $repoRoot -Git "git"
+  if ($sourceBefore.Commit -ne $sourceAfter.Commit -or $sourceBefore.Porcelain -cne $sourceAfter.Porcelain) {
+    throw "Source changed during build; refusing to publish candidate"
+  }
+
   $publishParent = Split-Path -Parent $PublishDirectory
   if (-not (Test-Path -LiteralPath $publishParent)) {
     throw "Publish parent directory not found: $publishParent"
@@ -318,12 +425,11 @@ try {
     throw "Exported binary hash mismatch"
   }
 
-  $sourceCommit = (git rev-parse HEAD).Trim()
-  $sourceDirty = -not [string]::IsNullOrWhiteSpace((git status --porcelain | Out-String))
   $metadata = [ordered]@{
     Version = $version
-    SourceCommit = $sourceCommit
-    SourceDirty = $sourceDirty
+    SourceCommit = $sourceBefore.Commit
+    SourceDirty = $sourceBefore.Dirty
+    SourceStatus = @($sourceBefore.Lines)
     BuildBunVersion = $actualBun
     CompileRuntimeMode = $CompileRuntime
     CompileRuntimeVersion = $compileRuntimeInfo.Version
@@ -374,5 +480,7 @@ finally {
   Restore-EnvironmentVariable -Name "BUN_COMPILE_EXECUTABLE" -Value $previousCompileExecutable
   Restore-EnvironmentVariable -Name "BUN_COMPILE_EXECUTABLE_TARGET" -Value $previousCompileTarget
   Restore-EnvironmentVariable -Name "BUN_COMPILE_EXECUTABLE_SHA256" -Value $previousCompileSHA256
-  Pop-Location
+  if ($pushedLocation) {
+    Pop-Location
+  }
 }

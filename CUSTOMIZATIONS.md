@@ -169,10 +169,15 @@ root worktree copy at `opencode2.exe`, and publishes timestamped artifacts to a
 V2-specific directory. It verifies the Bun version, binary version, and SHA-256
 identity of all exported copies. The default pinned snapshot is Bun
 `1.4.0-canary.1+aec33f581`; normal and baseline Windows x64 assets are addressed
-by immutable GitHub asset IDs and verified by archive and executable SHA-256.
-Each candidate receives a `.build.json` sidecar that distinguishes the Bun
-running the build from the Bun runtime embedded in the executable and records
-source, runtime, asset, and candidate hashes.
+by immutable GitHub asset IDs. A cache is accepted only when `bun.exe`, the
+matching archive, and `snapshot.json` are all present and every metadata,
+archive-SHA, executable-SHA, version, and revision check passes. New caches are
+fully assembled and verified in staging before the complete directory is
+published. Each candidate receives a `.build.json` sidecar that distinguishes
+the Bun running the build from the Bun runtime embedded in the executable and
+records source, runtime, asset, and candidate hashes. Git HEAD and complete
+porcelain status are sampled before and after the build; Git failure or any
+source-state difference prevents candidate publication.
 
 ## Safety And Rollback
 
