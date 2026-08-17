@@ -1,47 +1,53 @@
-# Security
+# Security Policy
 
-## IMPORTANT
+## Independent Fork
 
-We do not accept AI generated security reports. We receive a large number of
-these and we absolutely do not have the resources to review them all. If you
-submit one that will be an automatic ban from the project.
+OpenCode2 zh-CN is an independent community fork. Fork-specific security
+reports are handled separately from the upstream OpenCode project.
 
-## Threat Model
+## Reporting a Vulnerability
 
-### Overview
+For a vulnerability introduced by or specific to this fork, use a private
+[GitHub Security Advisory](https://github.com/521ox/opencode2-zh-CN/security/advisories/new).
 
-OpenCode is an AI-powered coding assistant that runs locally on your machine. It provides an agent system with access to powerful tools including shell execution, file operations, and web access.
+Do not disclose an unpatched vulnerability in a public issue, pull request,
+discussion, log excerpt, or chat transcript. Do not include API keys, cookies,
+authorization headers, private prompts, customer data, session databases, or
+unredacted local paths in a report.
 
-### No Sandbox
+If the vulnerability also affects upstream OpenCode, report it privately using
+the process in the upstream
+[SECURITY.md](https://github.com/anomalyco/opencode/blob/v2/SECURITY.md). Reporting
+to this fork does not automatically notify the upstream maintainers.
 
-OpenCode does **not** sandbox the agent. The permission system exists as a UX feature to help users stay aware of what actions the agent is taking - it prompts for confirmation before executing commands, writing files, etc. However, it is not designed to provide security isolation.
+For non-security defects, use the fork's
+[issue tracker](https://github.com/521ox/opencode2-zh-CN/issues).
 
-If you need true isolation, run OpenCode inside a Docker container or VM.
+## Security Model
 
-### Server Mode
+OpenCode2 is a local development agent, not a security sandbox. Depending on
+your configuration and approvals, it may:
 
-Server mode is opt-in only. When enabled, set `OPENCODE_SERVER_PASSWORD` to require HTTP Basic Auth. Without this, the server runs unauthenticated (with a warning). It is the end user's responsibility to secure the server - any functionality it provides is not a vulnerability.
+- read and modify files available to the current operating-system user;
+- execute local processes and shell commands;
+- connect to model providers, gateways, MCP servers, and other network services;
+- load JavaScript packages, provider adapters, plugins, and native components;
+- persist prompts, tool results, provider checkpoints, and session metadata.
 
-### Out of Scope
+Run the program with the least operating-system privilege required for the
+task. Review provider and MCP endpoints before use. Keep credentials outside
+the repository, restrict the permissions of configuration and database files,
+and back up important work before allowing write-capable tools.
 
-| Category                        | Rationale                                                               |
-| ------------------------------- | ----------------------------------------------------------------------- |
-| **Server access when opted-in** | If you enable server mode, API access is expected behavior              |
-| **Sandbox escapes**             | The permission system is not a sandbox (see above)                      |
-| **LLM provider data handling**  | Data sent to your configured LLM provider is governed by their policies |
-| **MCP server behavior**         | External MCP servers you configure are outside our trust boundary       |
-| **Malicious config files**      | Users control their own config; modifying it is not an attack vector    |
+Third-party OpenAI-compatible gateways are separate trust boundaries. A
+gateway may log content, ignore protocol fields, or return events that differ
+from the official provider. Remote compaction checkpoints and encrypted
+provider content should remain opaque; clients must not infer or expose their
+internal plaintext.
 
----
+## Supported Code
 
-# Reporting Security Issues
-
-We appreciate your efforts to responsibly disclose your findings, and will make every effort to acknowledge your contributions.
-
-To report a security issue, please use the GitHub Security Advisory ["Report a Vulnerability"](https://github.com/anomalyco/opencode/security/advisories/new) tab.
-
-The team will send a response indicating the next steps in handling your report. After the initial reply to your report, the security team will keep you informed of the progress towards a fix and full announcement, and may ask for additional information or guidance.
-
-## Escalation
-
-If you do not receive an acknowledgement of your report within 6 business days, you may send an email to security@anoma.ly
+Security fixes are made against the current public `main` branch. The initial
+publication does not distribute a supported binary release. Locally compiled
+or redistributed binaries must be tied to an exact source commit and verified
+build metadata before a report can be reproduced.

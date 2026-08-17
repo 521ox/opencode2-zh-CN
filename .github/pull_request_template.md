@@ -1,29 +1,30 @@
-### Issue for this PR
+### Related issue
 
 Closes #
 
-### Type of change
+### Product outcome
 
-- [ ] Bug fix
-- [ ] New feature
-- [ ] Refactor / code improvement
-- [ ] Documentation
+Describe the user-visible behavior or defect, the intended outcome, and the non-goals.
 
-### What does this PR do?
+### Implementation
 
-Please provide a description of the issue, the changes you made to fix it, and why they work. It is expected that you understand why your changes work and if you do not understand why at least say as much so a maintainer knows how much to value the PR.
+Explain the affected ownership boundary, why the implementation is correct, and whether it changes a public contract or persistent state.
 
-**If you paste a large clearly AI generated description here your PR may be IGNORED or CLOSED!**
+### Verification
 
-### How did you verify your code works?
+List the exact commands, exit results, and focused checks used to falsify the previous behavior.
 
-### Screenshots / recordings
+### Compatibility and recovery
 
-_If this is a UI change, please include a screenshot or recording._
+Describe provider, database, migration, upstream-sync, and rollback considerations when applicable.
+
+### UI evidence
+
+For a TUI or other visible change, include a redacted screenshot or recording.
 
 ### Checklist
 
-- [ ] I have tested my changes locally
-- [ ] I have not included unrelated changes in this PR
-
-_If you do not follow this template your PR will be automatically rejected._
+- [ ] I tested the affected behavior locally.
+- [ ] I added or updated focused tests where the behavior is machine-verifiable.
+- [ ] I did not include unrelated changes, credentials, private prompts, databases, or unredacted logs.
+- [ ] I reviewed the protected contracts in `specs/v2/upstream-sync-preservation.md`.

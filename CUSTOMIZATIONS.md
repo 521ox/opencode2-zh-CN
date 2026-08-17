@@ -1,5 +1,9 @@
 # OpenCode V2 Customization Contract
 
+> Public fork note: absolute build, rehearsal, and installation paths in this
+> document are historical validation examples, not required installation
+> locations. Use paths appropriate for your own environment.
+
 ## Purpose
 
 This worktree is the V2 successor to the historical `opencode-v1.18.9-custom`

@@ -1,28 +1,43 @@
 name: Bug report
-description: Report an issue that should be fixed (avoid pasting giant AI generated summaries or your issue may be closed/ignored)
+description: Report a reproducible defect in OpenCode2 zh-CN
+title: "[BUG]: "
 body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include API keys, cookies, private prompts, customer data, session databases, or unredacted logs and paths.
+
   - type: textarea
     id: description
     attributes:
       label: Description
-      description: Describe the bug you encountered
-      placeholder: What happened?
+      description: Describe the expected behavior and what happened instead.
     validations:
       required: true
 
   - type: input
-    id: plugins
+    id: commit
     attributes:
-      label: Plugins
-      description: What plugins are you using?
+      label: Source commit
+      description: Provide the exact commit used to run or build the program.
+      placeholder: 40-character Git commit
+    validations:
+      required: true
+
+  - type: input
+    id: provider
+    attributes:
+      label: Provider route and model
+      description: Include whether an official endpoint or third-party gateway is involved. Do not include credentials.
+      placeholder: native OpenAI Responses / provider/model / third-party gateway yes or no
     validations:
       required: false
 
   - type: input
-    id: opencode-version
+    id: plugins
     attributes:
-      label: OpenCode version
-      description: What version of OpenCode are you using?
+      label: Plugins and MCP servers
+      description: List relevant plugins and MCP server types without credentials or private endpoints.
     validations:
       required: false
 
@@ -30,37 +45,33 @@ body:
     id: reproduce
     attributes:
       label: Steps to reproduce
-      description: How can we reproduce this issue?
       placeholder: |
         1.
         2.
         3.
     validations:
-      required: false
+      required: true
 
   - type: textarea
-    id: screenshot-or-link
+    id: evidence
     attributes:
-      label: Screenshot and/or share link
-      description: Run `/share` to get a share link, or attach a screenshot
-      placeholder: Paste link or drag and drop screenshot here
+      label: Redacted evidence
+      description: Add a screenshot or minimal log excerpt only after removing private data.
     validations:
       required: false
 
   - type: input
     id: os
     attributes:
-      label: Operating System
-      description: what OS are you using?
-      placeholder: e.g., macOS 26.0.1, Ubuntu 22.04, Windows 11
+      label: Operating system
+      placeholder: Windows 11, macOS 26, Ubuntu 24.04
     validations:
-      required: false
+      required: true
 
   - type: input
     id: terminal
     attributes:
       label: Terminal
-      description: what terminal are you using?
-      placeholder: e.g., iTerm2, Ghostty, Alacritty, Windows Terminal
+      placeholder: Windows Terminal, iTerm2, Ghostty, Alacritty
     validations:
       required: false
