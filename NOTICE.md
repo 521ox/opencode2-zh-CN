@@ -25,7 +25,14 @@ Third-party packages, generated artifacts, bundled assets, and provider SDKs
 may carry their own notices and license terms. Their inclusion does not alter
 those terms.
 
-This repository publishes source-only sanitized snapshots. It provides no
-GitHub Release or prebuilt binary. A locally built or third-party binary must
-not be represented as an official OpenCode release, an endorsed upstream
-build, or a release published by this repository.
+In addition to periodic sanitized source snapshots, this repository currently
+publishes the manually audited prerelease `v1.18.4-zhcn.1` through the fork's
+GitHub Releases page. It contains six native CLI archives; the Windows and
+macOS assets are unsigned, and the application updater is disabled. Release
+archives, `SHA256SUMS`, the manifest, and platform sidecars belong to that
+specific release and must not be inferred from source-snapshot history.
+
+A locally built or third-party binary must not be represented as an official
+OpenCode release, an endorsed upstream build, or an asset published by this
+repository. The fork release is independently maintained and is not an
+official or endorsed upstream release.

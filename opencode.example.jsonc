@@ -1,10 +1,12 @@
 {
   "$schema": "https://opencode.ai/config.json",
 
+  // Global V2 template. Copy to the global config path documented in
+  // docs/provider-compaction.md; a project config may override these values.
   // Select one configured model. Replace only the model ID placeholder.
   // To use the xAI example instead, select:
   // "model": "xai-official/replace-with-xai-model-id"
-  "model": "mycodex/replace-with-model-id",
+  "model": "openai-gateway/replace-with-model-id",
 
   // Shared V2 compaction settings. There is no top-level compact_threshold.
   "compaction": {
@@ -21,13 +23,13 @@
     // Example 1: a gateway that genuinely implements native OpenAI Responses,
     // including context_management and compaction_trigger. A display name or
     // baseURL alone does not grant these capabilities.
-    "mycodex": {
+    "openai-gateway": {
       "name": "Native OpenAI Responses gateway",
       "package": "@opencode-ai/ai/providers/openai",
-      "env": ["MYCODEX_API_KEY"],
+      "env": ["OPENAI_GATEWAY_API_KEY"],
       "settings": {
-        "apiKey": "{env:MYCODEX_API_KEY}",
-        "baseURL": "{env:MYCODEX_BASE_URL}"
+        "apiKey": "{env:OPENAI_GATEWAY_API_KEY}",
+        "baseURL": "{env:OPENAI_GATEWAY_BASE_URL}"
       },
       "models": {
         "replace-with-model-id": {

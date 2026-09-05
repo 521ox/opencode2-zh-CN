@@ -47,8 +47,16 @@ bun --cwd packages/ai test test/<relevant-test>.test.ts
 ```
 
 Do not add a second runtime or canary lane to documentation or automation
-without an accepted product change. This source snapshot does not publish
-prebuilt binaries.
+without an accepted product change. Public source updates are periodic
+sanitized snapshots. The repository also currently publishes the separately
+audited prerelease `v1.18.4-zhcn.1` with six native CLI archives; Windows and
+macOS assets are unsigned and the application updater is disabled.
+
+Binary publication remains a manual, audited authority boundary. A source
+change, pull request, merge, tag, or available workflow does not by itself
+authorize or prove a Release. Contributors must not trigger, publish, replace,
+or describe future release assets without explicit repository-owner authority
+and the release-specific verification record.
 
 ## Change Requirements
 

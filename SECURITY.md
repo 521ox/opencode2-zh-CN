@@ -49,11 +49,19 @@ The `session-memory-v2` plugin may generate redacted snapshots that still
 contain sensitive context. Store them locally with restrictive permissions,
 review them before sharing, and never commit generated snapshots.
 
-## Supported Code
+## Supported Scope
 
-Security fixes target the current public `main` branch. Public updates are
-source-only sanitized snapshots; there is no GitHub Release or supported
-prebuilt binary from this repository. For a locally compiled or redistributed
-binary, reporters should identify the corresponding public source revision and
+Security reports may target the current public `main` branch or assets actually
+published by this repository in its current GitHub Release. The current
+published binary scope is the manually audited prerelease `v1.18.4-zhcn.1` and
+its six native CLI archives. Windows and macOS assets are unsigned, and the
+application updater is disabled; these boundaries must not be interpreted as a
+signature, stable-release, or automatic-update guarantee.
+
+Public source updates remain periodic sanitized snapshots. A locally compiled,
+modified, repackaged, mirrored, or otherwise third-party build is outside the
+repository release-asset support promise. Reports about such a build should
+first reproduce against public `main` or an unmodified repository-published
+asset when possible, and identify the corresponding public source revision and
 reproduction steps without attaching credentials, local configuration, or
 machine-specific build evidence.
