@@ -26,6 +26,7 @@
 - [发布、校验与更新](#发布校验与更新)
 - [从源码运行与贡献](#从源码运行与贡献)
 - [安全、隐私、上游与许可](#安全隐私上游与许可)
+- [社区与友链](#社区与友链)
 - [English summary](#english-summary)
 
 ## 为什么有这个 fork
@@ -362,6 +363,10 @@ OpenCode2 可在用户授权下读写文件、执行进程并访问网络；它�
 - 公告与归属：[NOTICE.md](NOTICE.md)
 - 稳定定制合同：[CUSTOMIZATIONS.md](CUSTOMIZATIONS.md)
 - 许可：[MIT License](LICENSE)
+
+## 社区与友链
+
+- [LINUX DO](https://linux.do) — 开放友好的技术交流社区。
 
 ## English summary
 
