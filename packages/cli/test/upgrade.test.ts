@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { Updater } from "../src/services/updater"
 
 describe("upgrade command", () => {
   test("is registered in root help and documents its options", async () => {
@@ -30,59 +31,23 @@ describe("upgrade command", () => {
     expect(plugin.stdout).not.toContain("Upgrade OpenCode to the latest or a specific version")
   })
 
-  test("detects the installation method and resolves the latest version", async () => {
-    const result = await cli([])
-    expect(result.exitCode).toBe(0)
-    expect(result.events).toEqual(["method", "latest", { method: "npm", version: "0.0.0-beta-new" }])
-    expect(result.stdout).toContain("Upgrade complete")
-  })
-
-  test("accepts an explicit version and method without detection or a version lookup", async () => {
-    const result = await cli(["v0.0.0-beta-target", "--method", "pnpm"])
-    expect(result.exitCode).toBe(0)
-    expect(result.events).toEqual([{ method: "pnpm", version: "v0.0.0-beta-target" }])
-    expect(result.stdout).toContain("0.0.0-beta-old → 0.0.0-beta-target")
-  })
-
-  test("accepts the short method flag and an explicit major upgrade", async () => {
-    const result = await cli(["2.0.0", "-m", "bun"])
-    expect(result.exitCode).toBe(0)
-    expect(result.events).toEqual([{ method: "bun", version: "2.0.0" }])
-  })
-
-  test("skips the already installed version", async () => {
-    const result = await cli(["v0.0.0-beta-old"])
-    expect(result.exitCode).toBe(0)
-    expect(result.events).toEqual(["method"])
-    expect(result.stdout).toContain("already installed")
-  })
-
-  test("requires an explicit method when detection fails", async () => {
-    const result = await cli([], { UPGRADE_TEST_METHOD: "unknown" })
+  test("rejects before method detection, release lookup, or installation", async () => {
+    const result = await cli(["v1.18.4-zhcn.2", "--method", "npm"])
     expect(result.exitCode).toBe(1)
-    expect(result.events).toEqual(["method"])
-    expect(result.stdout).toContain("Pass --method")
-  })
-
-  test("rejects unsupported methods before attempting an upgrade", async () => {
-    const result = await cli(["--method", "brew"])
-    expect(result.exitCode).not.toBe(0)
     expect(result.events).toEqual([])
+    expect(`${result.stdout}\n${result.stderr}`).toContain(Updater.RELEASES_URL)
   })
 
-  test("reports version lookup failures without installing", async () => {
-    const result = await cli([], { UPGRADE_TEST_LATEST_ERROR: "1" })
-    expect(result.exitCode).toBe(1)
-    expect(result.events).toEqual(["method", "latest"])
-    expect(result.stdout).toContain("Update check failed")
-  })
-
-  test("reports installation failures with a nonzero exit code", async () => {
-    const result = await cli([], { UPGRADE_TEST_INSTALL_ERROR: "1" })
-    expect(result.exitCode).toBe(1)
-    expect(result.stdout).toContain("Upgrade failed")
-    expect(result.stdout).toContain("Permission denied")
-    expect(result.stdout).not.toContain("Upgrade complete")
+  test("root upgrade and update aliases return the same disabled failure", async () => {
+    for (const command of ["upgrade", "update"]) {
+      const result = await cli([command], {}, "../src/index.ts")
+      const output = `${result.stdout}\n${result.stderr}`
+      expect(result.exitCode, command).toBe(1)
+      expect(output, command).toContain("Updates are disabled for this fork")
+      expect(output, command).toContain(Updater.RELEASES_URL)
+      expect(output, command).not.toContain("Using method")
+      expect(output, command).not.toContain("Upgrading...")
+    }
   })
 })
 
@@ -90,7 +55,7 @@ async function cli(args: string[], env: Record<string, string> = {}, entry = "fi
   const root = await mkdtemp(path.join(os.tmpdir(), "opencode-upgrade-"))
   try {
     const child = Bun.spawn(
-      [process.execPath, "--define", 'OPENCODE_VERSION="0.0.0-beta-old"', path.join(import.meta.dir, entry), ...args],
+      [process.execPath, "--define", 'OPENCODE_VERSION="1.18.4-zhcn.1"', path.join(import.meta.dir, entry), ...args],
       {
         cwd: path.join(import.meta.dir, ".."),
         env: {
@@ -100,7 +65,6 @@ async function cli(args: string[], env: Record<string, string> = {}, entry = "fi
           XDG_CONFIG_HOME: path.join(root, "config"),
           XDG_CACHE_HOME: path.join(root, "cache"),
           XDG_STATE_HOME: path.join(root, "state"),
-          OPENCODE_DISABLE_AUTOUPDATE: "1",
           ...env,
         },
         stdout: "pipe",

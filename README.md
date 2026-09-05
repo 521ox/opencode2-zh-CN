@@ -10,13 +10,16 @@ OpenCode V2 fork. It provides a Simplified Chinese-first TUI, explicit native
 provider routes, bounded remote-compaction behavior, session and subagent
 enhancements, plugin management, and additional local tools. It is not
 affiliated with or endorsed by anomalyco or the upstream OpenCode project. The
-public repository is a source-only sanitized snapshot: it provides no GitHub
-Release or prebuilt binary, and GitHub Actions are disabled.
+public history began as a source-only sanitized snapshot. A later, separately
+audited manual-release layer may provide binaries; availability must be checked
+on this fork's public Releases page and must not be inferred from source history.
 
 ## 当前状态
 
-- **发布形态**：周期性发布经过清理的源码快照提交；不提供 GitHub Release 或预编译二进制。
-- **自动化**：GitHub Actions 当前禁用。不要把公开源码等同于已由托管 CI 验证的构建。
+- **发布形态**：保留周期性、经过清理的源码快照历史；后续另设人工触发、独立审计的 GitHub Release 层。
+  Release 是否存在以及包含哪些资产，只以本 fork 的公开 Releases 页面为准。
+- **自动化**：公开源码提交本身不等同于托管 CI 已验证的构建；只有六平台 Release workflow 全部成功后创建的
+  Release 才是该次二进制发布结果。
 - **运行时前置**：以根目录 `packageManager` 为准，当前为 **Bun 1.3.14**。
 - **上游同步**：已选择性审查到上游提交
   [`0808ebc3`](https://github.com/anomalyco/opencode/commit/0808ebc3c52286f5a3a602f82f069ae597f86469)。
@@ -138,6 +141,25 @@ bun dev
 
 不要把 API key、Cookie、Session 数据库、日志、本机配置、生成的 memory snapshot 或私有 endpoint 提交到仓库。
 
+## 二进制下载
+
+经过审计的 CLI 二进制发布（**如已成功发布**）位于：
+[github.com/521ox/opencode2-zh-CN/releases](https://github.com/521ox/opencode2-zh-CN/releases)。本节不表示
+任一 Release 当前已经存在；发布页面没有对应版本时，请从源码构建或等待完整 workflow 成功，不能把 workflow 文件、
+tag 名称或源码快照当成已发布二进制。
+
+首个二进制版本固定为 `1.18.4-zhcn.1`（tag `v1.18.4-zhcn.1`，prerelease），由 Bun 1.3.14 在六个匹配的
+GitHub 托管 runner 上分别原生构建：Windows x64/arm64、Linux glibc x64/arm64、macOS x64/arm64。任一平台的
+构建、版本、`--help`、service smoke、源码洁净度或哈希校验失败，均不得创建五平台或其他不完整 Release。
+
+下载后必须用 Release 中的 `SHA256SUMS` 核对 archive；`release-manifest.json` 和每平台 JSON sidecar 还会绑定
+源码 commit、版本、`zh-cn` channel、Bun version/revision、runner/target、archive 与 executable 的字节数和
+SHA-256。Windows 与 macOS 资产均未签名或 notarize，因此 Windows SmartScreen 与 macOS Gatekeeper 可能警告；
+请先核对哈希并自行评估来源。
+
+首个 Release 中的应用内 updater 明确禁用，不会自动安装后续版本。需要更新时，仅访问上述 fork Releases URL；
+不要使用上游 update service、installer 或 npm CLI 作为本 fork 的更新来源。
+
 ## 验证
 
 根目录的聚合测试入口被故意阻止，以免把不同 package 的测试无边界混合运行。请通过 Bun 的 global `--cwd`
@@ -152,8 +174,9 @@ bun --cwd packages/ai run typecheck
 bun --cwd packages/ai test test/provider/compaction.test.ts
 ```
 
-具体修改还应运行其 owner package 的相关测试、lint/format 检查以及 `git diff --check`。由于 Actions 禁用，公开
-snapshot 本身不构成这些检查已经通过的证明。
+具体修改还应运行其 owner package 的相关测试、lint/format 检查以及 `git diff --check`。公开源码 snapshot 或
+workflow 源码本身都不能证明这些检查已经通过；如对应 Release 已成功发布，应以该次 Release run 以及其中的
+`SHA256SUMS`、`release-manifest.json` 和每平台 sidecar 作为对应构建与资产的验证证据。
 
 ## 安全、贡献与许可
 

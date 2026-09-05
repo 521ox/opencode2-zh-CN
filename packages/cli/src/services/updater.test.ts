@@ -1,21 +1,41 @@
 import { describe, expect, test } from "bun:test"
+import { Effect } from "effect"
+import path from "node:path"
+import { Updater } from "./updater"
 import { action } from "./updater-action"
-import { decodePolicy } from "./updater"
 
-describe("updater", () => {
-  test("reads update policy from JSONC", () => {
-    expect(decodePolicy('{ // preference\n "update": "notify",\n}')).toBe("notify")
-    expect(decodePolicy('{ "update": "disable" }')).toBe("disable")
-    expect(decodePolicy('{ "update": "auto" }')).toBe("notify")
-    expect(decodePolicy('{ "update": "invalid" }')).toBeUndefined()
+describe("fork updater", () => {
+  test("owns a stable disabled error with the fork Releases URL", () => {
+    const error = new Updater.DisabledError()
+    expect(error.name).toBe("UpdaterDisabledError")
+    expect(error.message).toContain(Updater.RELEASES_URL)
   })
 
-  test("maps the v1 update policy", () => {
-    expect(decodePolicy('{ "autoupdate": false }')).toBe("disable")
-    expect(decodePolicy('{ "autoupdate": "notify" }')).toBe("notify")
-    expect(decodePolicy('{ "autoupdate": true }')).toBe("notify")
+  test("provides a side-effect-free disabled service", async () => {
+    const updater = Effect.runSync(Updater.Service.pipe(Effect.provide(Updater.layer)))
+    expect(Effect.runSync(updater.method())).toBeUndefined()
+
+    const error = await Effect.runPromise(updater.ensureEnabled().pipe(Effect.flip))
+    expect(error).toBeInstanceOf(Updater.DisabledError)
   })
 
+  test("runtime and build source contain no upstream updater path and identify the fork repository", async () => {
+    const owner = await Bun.file(path.join(import.meta.dir, "updater.ts")).text()
+    const build = await Bun.file(path.join(import.meta.dir, "../../script/build.ts")).text()
+    const changedSource = `${owner}\n${build}`
+
+    expect(changedSource).not.toContain("update.opencode.ai")
+    expect(changedSource).not.toContain("opencode.ai/v2/install")
+    expect(changedSource).not.toContain("@opencode-ai/cli")
+    expect(owner).not.toContain("AppProcess")
+    expect(owner).not.toContain("ChildProcess")
+    expect(owner).not.toContain("fetch(")
+    expect(build).toContain('repository: { type: "git", url: "git+https://github.com/521ox/opencode2-zh-CN.git" }')
+    expect(build).not.toContain("git+https://github.com/anomalyco/opencode.git")
+  })
+})
+
+describe("updater action", () => {
   test("reports every available release", () => {
     expect(action("1.2.3", "1.2.4", "notify")).toBe("notify")
     expect(action("1.2.3", "1.3.0", "notify")).toBe("notify")

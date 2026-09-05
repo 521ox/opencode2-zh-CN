@@ -1,40 +1,30 @@
-import { expect } from "bun:test"
-import { Effect, Layer, Queue } from "effect"
-import { TestClock } from "effect/testing"
-import { testEffect } from "../../core/test/lib/effect"
+import { expect, spyOn, test } from "bun:test"
+import { Effect } from "effect"
 import { Updater } from "../src/services/updater"
 
-const it = testEffect(Layer.empty)
+test("default monitor emits no update and performs no request", async () => {
+  const request = spyOn(globalThis, "fetch").mockImplementation(
+    Object.assign(
+      async () => {
+        throw new Error("Unexpected update request")
+      },
+      { preconnect: fetch.preconnect },
+    ),
+  )
+  const notifications: string[] = []
 
-it.effect("checks after 90 seconds and every 10 minutes after that", () =>
-  Effect.gen(function* () {
-    const updates = yield* Queue.unbounded<string>()
-    yield* Updater.monitorUpdates({
-      inspect: () => Effect.succeed("2.0.0"),
-      notify: (version) => Queue.offer(updates, version).pipe(Effect.asVoid),
-    }).pipe(Effect.forkScoped)
-
-    yield* Effect.yieldNow
-    expect(yield* Queue.size(updates)).toBe(0)
-    yield* TestClock.adjust("89 seconds")
-    expect(yield* Queue.size(updates)).toBe(0)
-    yield* TestClock.adjust("1 second")
-    expect(yield* Queue.take(updates)).toBe("2.0.0")
-    yield* Effect.yieldNow
-    yield* TestClock.adjust("10 minutes")
-    expect(yield* Queue.take(updates)).toBe("2.0.0")
-  }),
-)
-
-it.effect("does not notify when no update is available", () =>
-  Effect.gen(function* () {
-    const updates = yield* Queue.unbounded<string>()
-    yield* Updater.monitorUpdates({
-      inspect: () => Effect.succeed(undefined),
-      notify: (version) => Queue.offer(updates, version).pipe(Effect.asVoid),
-    }).pipe(Effect.forkScoped)
-
-    yield* Effect.yieldNow
-    expect(yield* Queue.size(updates)).toBe(0)
-  }),
-)
+  try {
+    const updater = Effect.runSync(Updater.Service.pipe(Effect.provide(Updater.layer)))
+    await Effect.runPromise(
+      updater.monitor((version) =>
+        Effect.sync(() => {
+          notifications.push(version)
+        }),
+      ),
+    )
+    expect(notifications).toEqual([])
+    expect(request).not.toHaveBeenCalled()
+  } finally {
+    request.mockRestore()
+  }
+})

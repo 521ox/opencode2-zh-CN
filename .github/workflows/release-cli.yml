@@ -1,0 +1,276 @@
+name: Release fork CLI binaries
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact first fork release version
+        required: true
+        type: string
+        default: 1.18.4-zhcn.1
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-cli-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2025
+            target: opencode2-windows-x64
+            dist: cli-windows-x64
+            archive: opencode2-windows-x64.zip
+          - runner: windows-11-arm
+            target: opencode2-windows-arm64
+            dist: cli-windows-arm64
+            archive: opencode2-windows-arm64.zip
+          - runner: ubuntu-24.04
+            target: opencode2-linux-x64
+            dist: cli-linux-x64
+            archive: opencode2-linux-x64.tar.gz
+          - runner: ubuntu-24.04-arm
+            target: opencode2-linux-arm64
+            dist: cli-linux-arm64
+            archive: opencode2-linux-arm64.tar.gz
+          - runner: macos-15-intel
+            target: opencode2-darwin-x64
+            dist: cli-darwin-x64
+            archive: opencode2-darwin-x64.tar.gz
+          - runner: macos-15
+            target: opencode2-darwin-arm64
+            dist: cli-darwin-arm64
+            archive: opencode2-darwin-arm64.tar.gz
+    runs-on: ${{ matrix.runner }}
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
+      RELEASE_CHANNEL: zh-cn
+      HUSKY: "0"
+    steps:
+      - name: Enable native symlink checkout on Windows
+        if: runner.os == 'Windows'
+        run: git config --global core.symlinks true
+        shell: pwsh
+      - name: Check out the dispatched source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Node.js for the WebUI build
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "24"
+      - name: Set up exact Bun runtime
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.3.14
+      - name: Validate fixed release identity
+        run: >-
+          bun run packages/cli/script/release-artifact.ts validate
+          --version="$RELEASE_VERSION"
+          --repository="$GITHUB_REPOSITORY"
+          --ref="$GITHUB_REF"
+          --runner="${{ matrix.runner }}"
+          --target="${{ matrix.target }}"
+        shell: bash
+      - name: Verify pristine dispatched source
+        run: bun run packages/cli/script/release-source-check.ts --source-sha="$GITHUB_SHA"
+        shell: bash
+      - name: Install frozen native dependencies on Windows
+        if: runner.os == 'Windows'
+        run: bun install --frozen-lockfile --linker hoisted
+        shell: pwsh
+      - name: Install frozen native dependencies on Unix
+        if: runner.os != 'Windows'
+        run: bun install --frozen-lockfile
+        shell: bash
+      - name: Build one explicit native target with embedded WebUI
+        env:
+          OPENCODE_VERSION: ${{ inputs.version }}
+          OPENCODE_CHANNEL: zh-cn
+        run: >-
+          bun run packages/cli/script/build.ts
+          --target="${{ matrix.target }}"
+          --single
+          --skip-install
+        shell: bash
+      - name: Verify complete compiled artifact contents
+        run: bun run packages/cli/script/verify-artifact.ts "packages/cli/dist/${{ matrix.dist }}"
+        shell: bash
+      - name: Verify Windows executable contract
+        if: runner.os == 'Windows'
+        run: |
+          $executable = "packages/cli/dist/${{ matrix.dist }}/bin/opencode2.exe"
+          $reported = (& $executable --version | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or $reported -ne "opencode2 v$env:RELEASE_VERSION") {
+            throw "Executable identity mismatch: expected 'opencode2 v$env:RELEASE_VERSION', got '$reported'"
+          }
+          & $executable --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "Executable --help failed" }
+        shell: pwsh
+      - name: Verify Unix executable contract
+        if: runner.os != 'Windows'
+        run: |
+          executable="packages/cli/dist/${{ matrix.dist }}/bin/opencode2"
+          reported="$("$executable" --version)"
+          if [ "$reported" != "opencode2 v$RELEASE_VERSION" ]; then
+            echo "Executable identity mismatch: expected 'opencode2 v$RELEASE_VERSION', got '$reported'" >&2
+            exit 1
+          fi
+          "$executable" --help >/dev/null
+        shell: bash
+      - name: Run compiled service lifecycle smoke test
+        run: bun run packages/cli/script/service-smoke.ts --target="${{ matrix.dist }}"
+        shell: bash
+      - name: Create deterministic archive and bound metadata sidecar
+        run: >-
+          bun run packages/cli/script/release-artifact.ts package
+          --version="$RELEASE_VERSION"
+          --source-sha="$GITHUB_SHA"
+          --runner="${{ matrix.runner }}"
+          --target="${{ matrix.target }}"
+          --dist="packages/cli/dist/${{ matrix.dist }}"
+          --output="$RUNNER_TEMP/release"
+        shell: bash
+      - name: Reject source mutation and unexpected ignored output
+        run: bun run packages/cli/script/release-source-check.ts --source-sha="$GITHUB_SHA"
+        shell: bash
+      - name: Upload one bounded platform artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-${{ matrix.target }}
+          path: |
+            ${{ runner.temp }}/release/${{ matrix.archive }}
+            ${{ runner.temp }}/release/${{ matrix.archive }}.json
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    name: Verify all platforms and publish prerelease
+    needs: [build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
+      RELEASE_CHANNEL: zh-cn
+      RELEASE_TAG: v1.18.4-zhcn.1
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out the exact built source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up exact Bun runtime
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.3.14
+      - name: Validate fixed release identity
+        run: >-
+          bun run packages/cli/script/release-artifact.ts validate
+          --version="$RELEASE_VERSION"
+          --repository="$GITHUB_REPOSITORY"
+          --ref="$GITHUB_REF"
+          --runner="ubuntu-24.04"
+          --target="opencode2-linux-x64"
+        shell: bash
+      - name: Download exactly the six native artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: release-*
+          path: ${{ runner.temp }}/release-downloads
+          merge-multiple: false
+      - name: Validate six-way metadata and create final manifests
+        run: >-
+          bun run packages/cli/script/release-manifest.ts
+          --version="$RELEASE_VERSION"
+          --source-sha="$GITHUB_SHA"
+          --artifacts="$RUNNER_TEMP/release-downloads"
+          --output="$RUNNER_TEMP/release-assets"
+        shell: bash
+      - name: Write fixed release notes
+        run: |
+          cat >"$RUNNER_TEMP/release-notes.md" <<EOF
+          ## OpenCode2 zh-CN CLI ${RELEASE_VERSION}
+
+          This is an unsigned prerelease of the independent community fork
+          [521ox/opencode2-zh-CN](https://github.com/521ox/opencode2-zh-CN). It is not affiliated
+          with, authorized, sponsored, or endorsed by anomalyco or the upstream OpenCode project.
+
+          Source commit: \`${GITHUB_SHA}\`
+
+          Six native CLI archives are provided: Windows x64/arm64, Linux glibc x64/arm64, and
+          macOS x64/arm64. Windows SmartScreen and macOS Gatekeeper may warn because these binaries
+          are not code-signed or notarized.
+
+          Verify a download against \`SHA256SUMS\` before running it. On Linux/macOS use
+          \`sha256sum -c SHA256SUMS --ignore-missing\`; on Windows compare
+          \`Get-FileHash -Algorithm SHA256 <archive>\` with the matching line. The JSON manifest and
+          per-platform sidecars bind each archive and executable to this source commit, Bun runtime,
+          native runner, target, byte length, and SHA-256 digest.
+
+          The in-application updater is disabled for this first fork release. Obtain updates only from
+          https://github.com/521ox/opencode2-zh-CN/releases.
+          EOF
+        shell: bash
+      - name: Publish one complete GitHub prerelease
+        run: |
+          set -euo pipefail
+
+          require_absent() {
+            local endpoint="$1"
+            local label="$2"
+            local response
+            local status
+            set +e
+            response="$(gh api --include "$endpoint" 2>&1)"
+            status=$?
+            set -e
+            if [ "$status" -eq 0 ]; then
+              echo "$label already exists; refusing to clobber it" >&2
+              exit 1
+            fi
+            if ! grep -Eq '^HTTP/[0-9.]+ 404 ' <<<"$response"; then
+              echo "Could not prove $label absent" >&2
+              echo "$response" >&2
+              exit 1
+            fi
+          }
+
+          require_absent "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" "tag $RELEASE_TAG"
+          require_absent "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" "release $RELEASE_TAG"
+
+          release_created=false
+          cleanup_failed_release() {
+            if [ "$release_created" = true ]; then
+              gh release delete "$RELEASE_TAG" --yes --cleanup-tag || true
+            fi
+          }
+          trap cleanup_failed_release ERR
+
+          release_created=true
+          gh release create "$RELEASE_TAG" "$RUNNER_TEMP/release-assets"/* \
+            --draft \
+            --prerelease \
+            --target "$GITHUB_SHA" \
+            --title "OpenCode2 zh-CN $RELEASE_VERSION" \
+            --notes-file "$RUNNER_TEMP/release-notes.md"
+          find "$RUNNER_TEMP/release-assets" -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort >"$RUNNER_TEMP/expected-assets.txt"
+          gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | LC_ALL=C sort >"$RUNNER_TEMP/uploaded-assets.txt"
+          diff -u "$RUNNER_TEMP/expected-assets.txt" "$RUNNER_TEMP/uploaded-assets.txt"
+          test "$(wc -l <"$RUNNER_TEMP/uploaded-assets.txt")" -eq 14
+          test "$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')" = true
+          test "$(gh release view "$RELEASE_TAG" --json isPrerelease --jq '.isPrerelease')" = true
+          test "$(gh release view "$RELEASE_TAG" --json targetCommitish --jq '.targetCommitish')" = "$GITHUB_SHA"
+
+          gh release edit "$RELEASE_TAG" --draft=false --prerelease
+          release_created=false
+          trap - ERR
+        shell: bash
