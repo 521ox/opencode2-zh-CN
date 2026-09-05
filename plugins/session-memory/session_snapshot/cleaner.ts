@@ -1,5 +1,10 @@
 import { canonicalJSON } from "./canonical"
-import { inspectUnsupportedText, maskCredentialFileToolOutput } from "./redaction"
+import {
+  inspectUnsupportedText,
+  isSensitiveStructuredKey,
+  maskCredentialFileToolOutput,
+  redactText,
+} from "./redaction"
 import type {
   CleanMessage,
   CleanPart,
@@ -131,8 +136,13 @@ function sanitizeToolValue(value: unknown): JsonValue {
   if (!object) return null
   const sanitized: Record<string, JsonValue> = {}
   for (const [key, item] of Object.entries(object)) {
-    if (inspectUnsupportedText(key).failureClasses.length > 0) {
-      return omittedValue(value, "binary-like-tool-content")
+    const keyRedaction = redactText(key)
+    if (
+      isSensitiveStructuredKey(key) ||
+      keyRedaction.status !== "eligible" ||
+      keyRedaction.redactedCount > 0
+    ) {
+      return omittedValue(value, "unsupported-object-key")
     }
     sanitized[key] = sanitizeToolValue(item)
   }
@@ -287,10 +297,10 @@ function cleanMessage(
       maskSummary.redactedCount += tool.maskedCount
       tool.maskedCategories.forEach((category) => maskSummary.categories.add(category))
     } else if (type === "compaction") {
-      cleaned = { id: sourcePart.row.id, type: "compaction", data: jsonValue(sourcePart.data) }
+      cleaned = { id: sourcePart.row.id, type: "compaction", data: sanitizeToolValue(sourcePart.data) }
       decision = "kept"
     } else if (type !== "reasoning" && type !== "step-start" && type !== "step-finish") {
-      cleaned = { id: sourcePart.row.id, type, data: compactValue(sourcePart.data, 8 * 1024) }
+      cleaned = { id: sourcePart.row.id, type, data: compactValue(sanitizeToolValue(sourcePart.data), 8 * 1024) }
       decision = "compressed"
     }
     const retainedBytes = cleaned ? Buffer.byteLength(canonicalJSON(cleaned)) : 0
@@ -304,7 +314,7 @@ function cleanMessage(
   if (!parts.length && !summary && role !== "user") return null
   const model = message.data.model === undefined
     ? null
-    : compactValue(message.data.model, SMALL_OUTPUT_LIMIT)
+    : compactValue(sanitizeToolValue(message.data.model), SMALL_OUTPUT_LIMIT)
   return {
     id: message.row.id,
     time_created: message.row.time_created,

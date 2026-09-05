@@ -46,8 +46,14 @@ const CREDENTIAL_ASSIGNMENT =
   /(["']?)([A-Za-z][A-Za-z0-9_.-]{0,127})\1\s*[:=]\s*(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|[^\s,;}\]&#]+)/g
 
 const UNSUPPORTED_CONTROL = /[\u0000-\u0008\u000B\u000C\u000E-\u001F]/
+const SANITIZABLE_FAILURE_CLASSES = new Set(["binary-like-control-content", "nul-byte"])
 const HEADER_RULE_HINT = /Bearer|Authorization|Cookie|X-API-Key|X-Auth-Token|X-Access-Token/i
 const CREDENTIAL_KEY_HINT = /password|passwd|secret|credential|authorization|cookie|token|auth|key/i
+
+export const OMITTED_UNSUPPORTED_TEXT = "[OMITTED:unsupported-text]"
+const OMITTED_UNSUPPORTED_TEXT_CATEGORY = "omitted-unsupported-text"
+const OMITTED_UNSUPPORTED_OBJECT_KEY_CATEGORY = "omitted-unsupported-object-key"
+const OMITTED_OBJECT_KEY_PREFIX = "__omitted_key_"
 
 function keyTokens(key: string): string[] {
   return key
@@ -83,6 +89,10 @@ function isSensitiveKey(key: string): boolean {
     /authorization(?:header)?$/,
     /cookie$/,
   ].some((pattern) => pattern.test(compact))
+}
+
+export function isSensitiveStructuredKey(key: string): boolean {
+  return isSensitiveKey(key)
 }
 
 function redactCredentialAssignments(input: string): { text: string; redactedCount: number } {
@@ -122,6 +132,30 @@ export function inspectUnsupportedText(input: string): UnsupportedTextInspection
     for (const rule of ANSI_RULES) text = text.replace(rule.pattern, "")
   }
   return inspectControlContent(text)
+}
+
+function hasOnlySanitizableFailures(failureClasses: string[]): boolean {
+  return failureClasses.length > 0 && failureClasses.every((failure) => SANITIZABLE_FAILURE_CLASSES.has(failure))
+}
+
+function omittedObjectKeyValue(input: string): Record<string, unknown> {
+  const inspection = inspectUnsupportedText(input)
+  return {
+    omitted: true,
+    reason: "unsupported-object-key",
+    original_bytes: Buffer.byteLength(input),
+    failure_classes: inspection.failureClasses,
+    nul_count: inspection.nulCount,
+    control_count: inspection.controlCount,
+  }
+}
+
+export function assertPublishableIdentity(input: string | null | undefined, label: string): void {
+  if (input === null || input === undefined) return
+  const result = redactText(input)
+  if (result.status !== "eligible" || result.redactedCount > 0) {
+    throw new Error(`Session snapshot identity is not publishable at ${label}`)
+  }
 }
 
 export function redactText(input: string): RedactionResult {
@@ -265,6 +299,11 @@ export function redactStructured(value: unknown): {
     if (input === null || typeof input === "number" || typeof input === "boolean") return input
     if (typeof input === "string") {
       const redacted = redactText(input)
+      if (hasOnlySanitizableFailures(redacted.failureClasses)) {
+        redactedCount++
+        categories.add(OMITTED_UNSUPPORTED_TEXT_CATEGORY)
+        return OMITTED_UNSUPPORTED_TEXT
+      }
       redactedCount += redacted.redactedCount
       unknownCount += redacted.unknownCount
       redacted.categories.forEach((category) => categories.add(category))
@@ -283,15 +322,34 @@ export function redactStructured(value: unknown): {
       return output ?? input
     }
     if (isObject(input)) {
-      let output: Record<string, unknown> | undefined
-      for (const [childKey, child] of Object.entries(input)) {
+      const entries = Object.entries(input)
+      const occupiedKeys = new Set(entries.map(([childKey]) => childKey))
+      let omittedKeyIndex = 0
+      let output: Array<[string, unknown]> | undefined
+      for (let index = 0; index < entries.length; index++) {
+        const [childKey, child] = entries[index]!
+        const keyResult = redactText(childKey)
+        if (keyResult.status !== "eligible" || keyResult.redactedCount > 0) {
+          output ??= entries.slice(0, index)
+          let replacementKey: string
+          do {
+            replacementKey = `${OMITTED_OBJECT_KEY_PREFIX}${omittedKeyIndex++}`
+          } while (occupiedKeys.has(replacementKey))
+          occupiedKeys.add(replacementKey)
+          output.push([replacementKey, omittedObjectKeyValue(childKey)])
+          redactedCount++
+          categories.add(OMITTED_UNSUPPORTED_OBJECT_KEY_CATEGORY)
+          continue
+        }
         const next = walk(child, childKey)
-        if (next !== child) {
-          output ??= { ...input }
-          output[childKey] = next
+        if (output) {
+          output.push([childKey, next])
+        } else if (next !== child) {
+          output = entries.slice(0, index)
+          output.push([childKey, next])
         }
       }
-      return output ?? input
+      return output ? Object.fromEntries(output) : input
     }
     unknownCount++
     failureClasses.add("unsupported-structured-value")

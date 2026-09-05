@@ -225,7 +225,7 @@ opencode2 import session-backup.json --directory ./target-project
 3. **先读 navigation**，再按最小相关范围读取 snapshot，不要整库预取。
 4. 分析结束后调用 `session_snapshot` 的 `cleanup=true` 清理临时目录。
 
-Snapshot 是临时分析投影，**不是**可 import 的备份；redacted 也不代表可公开，遇到 binary/NUL 或未知内容还可能 fail closed。完整命令、import 限制与隐私检查见 [Session 历史、导出与恢复](docs/session-history.md)。
+Snapshot 是临时分析投影，**不是**可 import 的备份；redacted 也不代表可公开。可识别的 binary/NUL 内容会在序列化和截断前被局部省略，身份损坏或真正无法安全表示的结构仍会 fail closed。完整命令、import 限制与隐私检查见 [Session 历史、导出与恢复](docs/session-history.md)。
 
 ### Session 分享
 

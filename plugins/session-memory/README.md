@@ -16,7 +16,7 @@ The plugin registers two tools:
 ## Requirements
 
 - OpenCode V2 with directory-plugin support.
-- Bun, including `bun:sqlite` and `bun:test` for the included catalog test.
+- Bun, including `bun:sqlite` and `bun:test` for the included tests.
 
 No dependencies need to be installed inside this plugin directory.
 
@@ -77,16 +77,36 @@ snapshot safe to publish. **Sanitized snapshots may still contain sensitive
 conversation content. Never commit, upload, or share a generated snapshot
 without an independent content review.** Clean up snapshots promptly.
 
+Recognized NUL bytes or dense unsupported control content in non-identity text
+is omitted locally instead of rejecting the entire Session. Structured values
+are inspected for unsupported or credential-like keys before they are
+serialized or reduced to a bounded preview, so truncation cannot discard the
+key context before sanitization. The original unsafe key and its value are not
+retained.
+
+Identity fields remain fail-closed because replacing them would corrupt
+navigation, correlation, or ownership. This includes Session, message, part,
+tool-call, project, workspace, parent, and child-Session identities. Truly
+unsupported structures, malformed source JSON, unsafe paths or permissions, and
+unstable database reads can still make snapshot creation fail visibly. The
+final secret and unsupported-content validators remain enabled.
+
+V2 `session_message.seq` is the conversation-order authority. Message
+timestamps are metadata and may be non-monotonic after import, recovery, or
+concurrent events. Snapshot lines and first/last message IDs follow `seq`, while
+navigation time spans and contiguous UTC-hour divisions use the minimum and
+maximum timestamps observed in their respective ranges.
+
 ## Development and tests
 
 Use synthetic fixtures only. Never point tests at a live OpenCode database or a
 copy containing real sessions, account data, project data, or customer data.
 
-The included catalog test creates its own temporary SQLite database and removes
-it after each test:
+The included tests use synthetic values and temporary SQLite databases. Run
+them from this plugin directory:
 
 ```sh
-bun test session_catalog/catalog.test.ts
+bun test
 ```
 
 If `OPENCODE_DB` is set in the surrounding environment, override it with a path

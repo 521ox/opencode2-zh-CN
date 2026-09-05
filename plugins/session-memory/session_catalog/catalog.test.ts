@@ -76,6 +76,22 @@ describe("session catalog input contract", () => {
     })
   })
 
+  test("locally omits an unsupported title instead of rejecting the page", async () => {
+    const databasePath = await catalogFixture()
+    const db = new Database(databasePath)
+    const insert = db.prepare("INSERT INTO session_v2 (id, parent_id, title, time_updated) VALUES (?, ?, ?, ?)")
+    insert.run("ses_control_title", null, "title\0\u0001", 350)
+    insert.finalize()
+    db.close()
+
+    const result = loadSessionCatalog(databasePath, { currentSessionID: "ses_current" })
+    expect(result.sessions).toContainEqual({
+      session_id: "ses_control_title",
+      title: "[OMITTED:unsupported-text]",
+    })
+    expect(result.redacted_count).toBeGreaterThanOrEqual(1)
+  })
+
   test("returns a recoverable result for malformed or non-string cursors", async () => {
     const databasePath = await catalogFixture()
     for (const cursor of ["null", "%%%", 42]) {

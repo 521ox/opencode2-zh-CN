@@ -76,10 +76,17 @@ export function buildTimeDivisions(messageIndex: SnapshotMessageLine[]): Snapsho
   const flush = (endInclusive: number) => {
     const first = itemAt(messageIndex, start, `message_index[${start}]`)
     const last = itemAt(messageIndex, endInclusive, `message_index[${endInclusive}]`)
+    let minTime = first.time_created
+    let maxTime = first.time_created
+    for (let index = start + 1; index <= endInclusive; index++) {
+      const time = itemAt(messageIndex, index, `message_index[${index}]`).time_created
+      minTime = Math.min(minTime, time)
+      maxTime = Math.max(maxTime, time)
+    }
     divisions.push({
       key: currentKey,
-      start_time_iso: first.time_iso,
-      end_time_iso: last.time_iso,
+      start_time_iso: isoFromEpochMs(minTime),
+      end_time_iso: isoFromEpochMs(maxTime),
       start_line: first.line,
       end_line: last.end_line,
       message_count: endInclusive - start + 1,
@@ -255,8 +262,12 @@ export function buildNavigation(input: {
 
   const message_index = index.message_index
   const time_divisions = buildTimeDivisions(message_index)
-  const first = message_index[0]
-  const last = message_index[message_index.length - 1]
+  let minTime: number | null = null
+  let maxTime: number | null = null
+  for (const message of message_index) {
+    minTime = minTime === null ? message.time_created : Math.min(minTime, message.time_created)
+    maxTime = maxTime === null ? message.time_created : Math.max(maxTime, message.time_created)
+  }
 
   return buildNavigationFromSummary({
     total_lines: index.total_lines,
@@ -265,12 +276,12 @@ export function buildNavigation(input: {
     messages_start_line: index.messages_start_line,
     messages_end_line: index.messages_end_line,
     message_count: messages.length,
-    time_span: first && last
+    time_span: minTime !== null && maxTime !== null
       ? {
-          start_time: first.time_created,
-          end_time: last.time_created,
-          start_time_iso: first.time_iso,
-          end_time_iso: last.time_iso,
+          start_time: minTime,
+          end_time: maxTime,
+          start_time_iso: isoFromEpochMs(minTime),
+          end_time_iso: isoFromEpochMs(maxTime),
         }
       : null,
     time_divisions,

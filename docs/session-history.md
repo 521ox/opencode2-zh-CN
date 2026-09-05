@@ -119,7 +119,8 @@ POSIX:   ~/.config/opencode/plugins/session_memory/index.ts
 
 - Snapshot 是为有界分析生成的投影，**不是 transfer JSON、备份或可导入格式**。
 - Redaction/sanitization 只降低风险。快照仍可能含提示词、工具结果、文件名、项目结构、账号信息或其他敏感上下文；不得未经独立内容审阅就提交、上传或分享。
-- 插件对二进制样内容、NUL 字节或无法安全表示的未知内容可以 fail closed，拒绝生成快照。这是隐私/完整性边界，不应绕过，也不能把拒绝误报为成功导出。
+- 可识别的二进制样内容、NUL 字节和高密度控制字符若出现在普通内容字段中，会在结构化数据序列化或截断之前被局部省略；原异常键及其值不会进入 bounded preview。Session、message、part、tool-call、父子 Session 等身份字段损坏，以及无法安全表示的真正未知结构，仍会 fail closed。这是隐私/完整性边界，不应绕过，也不能把拒绝误报为成功导出。
+- V2 消息文件顺序以数据库 `session_message.seq` 为准；时间戳只用于导航元数据，可以非单调。`navigation.json` 的时间跨度使用对应范围内的最小/最大时间，但不会按时间戳重排对话。
 - 数据库只读不等于整个操作无副作用：临时 bundle 是受保护的本地写入，应及时 cleanup。
 - 测试只能使用合成数据库和合成 Session，绝不能指向 live OpenCode 数据库或其副本。
 

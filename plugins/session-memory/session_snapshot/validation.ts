@@ -222,10 +222,6 @@ function sum(values: number[]): number {
   return values.reduce((total, value) => total + value, 0)
 }
 
-function compareSqliteBinaryText(left: string, right: string): number {
-  return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"))
-}
-
 export function validateSnapshotHeader(snapshotValue: unknown): SnapshotHeaderValidation {
   const snapshot = objectValue(snapshotValue, "$.snapshot")
   exactObjectKeys(snapshot, SNAPSHOT_KEYS, "$.snapshot")
@@ -347,7 +343,6 @@ export function createSnapshotMessageValidation(): SnapshotMessageValidation {
   const partIDs = new Set<string>()
   let actualMessageCount = 0
   let actualPartCount = 0
-  let previousMessage: { time: number; id: string } | null = null
   return {
     validate(messageValue) {
       const label = `$.messages[${actualMessageCount}]`
@@ -356,18 +351,12 @@ export function createSnapshotMessageValidation(): SnapshotMessageValidation {
       const messageID = stringValue(message.id, `${label}.id`)
       if (messageIDs.has(messageID)) invalid(`${label}.id`, "a unique message ID")
       messageIDs.add(messageID)
-      const timeCreated = epochMillisecondValue(message.time_created, `${label}.time_created`)
+      epochMillisecondValue(message.time_created, `${label}.time_created`)
       epochMillisecondValue(message.time_updated, `${label}.time_updated`)
       stringValue(message.role, `${label}.role`)
       booleanValue(message.summary, `${label}.summary`)
       nullableString(message.agent, `${label}.agent`)
       requiredJsonProperty(message, "model", `${label}.model`)
-      if (
-        previousMessage &&
-        (timeCreated < previousMessage.time ||
-          (timeCreated === previousMessage.time && compareSqliteBinaryText(messageID, previousMessage.id) < 0))
-      ) invalid(label, "chronological message ordering")
-      previousMessage = { time: timeCreated, id: messageID }
       const parts = arrayValue(message.parts, `${label}.parts`)
       actualPartCount += parts.length
       for (const [partIndex, partValue] of parts.entries()) {
@@ -644,8 +633,8 @@ export async function validateSessionSnapshotFile(target: string): Promise<Strea
     const divisions: SnapshotTimeDivision[] = []
     let currentDivision: SnapshotTimeDivision | null = null
     let messageCount = 0
-    let firstTime: number | null = null
-    let lastTime: number | null = null
+    let minTime: number | null = null
+    let maxTime: number | null = null
     let messagesEnd = lineNumber
 
     if (messagesFirst === '  "messages": []') {
@@ -699,14 +688,15 @@ export async function validateSessionSnapshotFile(target: string): Promise<Strea
         } else {
           currentDivision = {
             ...existingDivision,
-            end_time_iso: timeIso,
+            start_time_iso: timeIso < existingDivision.start_time_iso ? timeIso : existingDivision.start_time_iso,
+            end_time_iso: timeIso > existingDivision.end_time_iso ? timeIso : existingDivision.end_time_iso,
             end_line: startLine,
             message_count: existingDivision.message_count + 1,
             last_message_id: id,
           }
         }
-        firstTime ??= time
-        lastTime = time
+        minTime = minTime === null ? time : Math.min(minTime, time)
+        maxTime = maxTime === null ? time : Math.max(maxTime, time)
         messageCount++
         if (trailingComma) {
           requiresMessage = true
@@ -741,13 +731,13 @@ export async function validateSessionSnapshotFile(target: string): Promise<Strea
       messages_start_line: messagesStart,
       messages_end_line: messagesEnd,
       message_count: messageCount,
-      time_span: firstTime === null || lastTime === null
+      time_span: minTime === null || maxTime === null
         ? null
         : {
-            start_time: firstTime,
-            end_time: lastTime,
-            start_time_iso: new Date(firstTime).toISOString(),
-            end_time_iso: new Date(lastTime).toISOString(),
+            start_time: minTime,
+            end_time: maxTime,
+            start_time_iso: new Date(minTime).toISOString(),
+            end_time_iso: new Date(maxTime).toISOString(),
           },
       time_divisions: divisions,
     }

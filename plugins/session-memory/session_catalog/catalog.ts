@@ -178,6 +178,7 @@ export function loadSessionCatalog(
     let redactedCount = 0
     let lastIncludedRow: CatalogRow | undefined
     for (const row of rows.slice(0, limit)) {
+      if (!SESSION_ID.test(row.id)) throw new Error("Session catalog contains an invalid session ID")
       const redacted = redactStructured({ session_id: row.id, title: row.title ?? "Untitled" })
       if (redacted.status !== "eligible") {
         throw new Error(`Session catalog redaction is ${redacted.status}: ${redacted.failureClasses.join(", ")}`)

@@ -22,6 +22,7 @@ import {
   type ScopedPrivacyController,
 } from "./privacy"
 import {
+  assertPublishableIdentity,
   assertNoUnredactedSecretsInValue,
   redactStructured,
 } from "./redaction"
@@ -51,8 +52,8 @@ type RedactionSummary = Omit<RedactionResult, "text">
 
 type FragmentNavigation = {
   messageCount: number
-  firstTime: number | null
-  lastTime: number | null
+  minTime: number | null
+  maxTime: number | null
   timeDivisions: SnapshotTimeDivision[]
 }
 
@@ -67,7 +68,8 @@ function addFragmentNavigationMessage(
   const key = timeBucketKey(time)
   const current = navigation.timeDivisions.at(-1)
   if (current?.key === key) {
-    current.end_time_iso = timeIso
+    if (timeIso < current.start_time_iso) current.start_time_iso = timeIso
+    if (timeIso > current.end_time_iso) current.end_time_iso = timeIso
     current.end_line = endLine
     current.message_count++
     current.last_message_id = message.id
@@ -83,8 +85,8 @@ function addFragmentNavigationMessage(
       last_message_id: message.id,
     })
   }
-  navigation.firstTime ??= time
-  navigation.lastTime = time
+  navigation.minTime = navigation.minTime === null ? time : Math.min(navigation.minTime, time)
+  navigation.maxTime = navigation.maxTime === null ? time : Math.max(navigation.maxTime, time)
   navigation.messageCount++
 }
 
@@ -354,8 +356,8 @@ export class SessionSnapshotService {
               let nextLeasePulseAt = Date.now() + 250
               const fragmentNavigation: FragmentNavigation = {
                 messageCount: 0,
-                firstTime: null,
-                lastTime: null,
+                minTime: null,
+                maxTime: null,
                 timeDivisions: [],
               }
               try {
@@ -365,8 +367,15 @@ export class SessionSnapshotService {
                     await lease.pulse()
                     nextLeasePulseAt = Date.now() + 250
                   }
+                  assertPublishableIdentity(message.row.id, "message.id")
+                  for (const part of message.parts) {
+                    assertPublishableIdentity(part.row.id, "part.id")
+                  }
                   const cleaned = cleaner.clean(message)
                   if (!cleaned) continue
+                  for (const part of cleaned.parts) {
+                    assertPublishableIdentity(part.call_id, "part.call_id")
+                  }
                   const result = redactStructured(cleaned)
                   redaction.add(result)
                   if (result.status !== "eligible") {
@@ -409,6 +418,18 @@ export class SessionSnapshotService {
           )
 
           const source = fragment.source
+          if (source.session.id !== sessionID) {
+            throw new Error("Session snapshot source identity does not match the requested session")
+          }
+          assertPublishableIdentity(source.session.id, "session.id")
+          assertPublishableIdentity(source.session.project_id, "session.project_id")
+          assertPublishableIdentity(source.session.workspace_id, "session.workspace_id")
+          assertPublishableIdentity(source.session.parent_id, "session.parent_id")
+          assertPublishableIdentity(source.stats.firstMessageID, "snapshot.first_message_id")
+          assertPublishableIdentity(source.stats.lastMessageID, "snapshot.last_message_id")
+          source.subagentSessions.forEach((child, index) => {
+            assertPublishableIdentity(child.session_id, `subagent_sessions[${index}].session_id`)
+          })
           const session: SnapshotSession = {
             ...source.session,
             model: parseNullableJSON(source.session.model, "session.model"),
@@ -498,15 +519,15 @@ export class SessionSnapshotService {
             start_line: division.start_line + lineOffset,
             end_line: division.end_line + lineOffset,
           }))
-          const firstTime = fragment.value.navigation.firstTime
-          const lastTime = fragment.value.navigation.lastTime
-          const timeSpan = firstTime === null || lastTime === null
+          const minTime = fragment.value.navigation.minTime
+          const maxTime = fragment.value.navigation.maxTime
+          const timeSpan = minTime === null || maxTime === null
             ? null
             : {
-                start_time: firstTime,
-                end_time: lastTime,
-                start_time_iso: new Date(firstTime).toISOString(),
-                end_time_iso: new Date(lastTime).toISOString(),
+                start_time: minTime,
+                end_time: maxTime,
+                start_time_iso: new Date(minTime).toISOString(),
+                end_time_iso: new Date(maxTime).toISOString(),
               }
           const verifiedSnapshot = await verifyConstructedSessionSnapshotFile(snapshotPath, {
             file: constructedFile,
