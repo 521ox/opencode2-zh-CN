@@ -20,13 +20,15 @@ test("validates mini replay settings", () => {
 test("validates the session tabs setting", () => {
   const decode = Schema.decodeUnknownSync(Info)
 
-  expect(decode({ tabs: { enabled: true, layout: "vertical" } })).toEqual({
-    tabs: { enabled: true, layout: "vertical" },
+  expect(decode({ tabs: { enabled: true, layout: "vertical", indicators: "numbers" } })).toEqual({
+    tabs: { enabled: true, layout: "vertical", indicators: "numbers" },
   })
+  expect(() => decode({ tabs: { indicators: "unknown" } })).toThrow()
   expect(() => decode({ tabs: { layout: true } })).toThrow()
   expect(() => decode({ tabs: { enabled: "on" } })).toThrow()
   expect(decode({ prompt: { image_preview: true } })).toEqual({ prompt: { image_preview: true } })
   expect(decode({ session: { image_preview: true } })).toEqual({ session: { image_preview: true } })
+  expect(decode({ session: { tps: false } })).toEqual({ session: { tps: false } })
   expect(decode({ session: { new_location: "inherit" } })).toEqual({ session: { new_location: "inherit" } })
   expect(() => decode({ session: { new_location: "current" } })).toThrow()
 })
@@ -48,18 +50,68 @@ test("resolves nested config and keybind defaults", () => {
   expect(config.scroll).toEqual({ speed: 2, acceleration: true })
   expect(config.diffs).toEqual({ view: "split" })
   expect(config.debug).toEqual({ devtools: true })
-  expect(config.tabs).toEqual({ enabled: true, scope: "cwd", layout: "horizontal" })
+  expect(config.tabs).toEqual({ enabled: true, scope: "cwd", layout: "horizontal", indicators: "status" })
   expect(config.session.new_location).toBe("launch")
+  expect(config.session.tps).toBe(true)
 })
 
 test("shows resolved tab defaults in settings", () => {
   expect(settings.find((setting) => setting.path.join(".") === "tabs.enabled")?.default).toBe(true)
   expect(settings.find((setting) => setting.path.join(".") === "tabs.scope")?.default).toBe("cwd")
   expect(settings.find((setting) => setting.path.join(".") === "tabs.layout")?.default).toBe("horizontal")
+  expect(settings.find((setting) => setting.path.join(".") === "tabs.indicators")).toMatchObject({
+    default: "status",
+    values: ["status", "numbers"],
+  })
 })
 
 test("shows the new session location default in settings", () => {
   expect(settings.find((setting) => setting.path.join(".") === "session.new_location")?.default).toBe("launch")
+})
+
+test("shows the TPS default in session settings", () => {
+  const setting = settings.find((setting) => setting.path.join(".") === "session.tps")
+  expect(setting?.category).toBe("Session")
+  expect(setting?.default).toBe(true)
+})
+
+test("names tool grouping explicitly in settings", () => {
+  expect(settings.find((setting) => setting.path.join(".") === "session.grouping")).toMatchObject({
+    title: "Tool grouping",
+    category: "Session",
+    default: "auto",
+    values: ["none", "auto"],
+  })
+})
+
+test("validates terminal copy behavior", () => {
+  expect(decodeInfo({ terminal: { copy: "manual" } })).toEqual({ terminal: { copy: "manual" } })
+  expect(decodeInfo({ terminal: { copy: "select" } })).toEqual({ terminal: { copy: "select" } })
+  expect(() => decodeInfo({ terminal: { copy: "always" } })).toThrow()
+
+  const setting = settings.find((setting) => setting.path.join(".") === "terminal.copy")
+  expect(setting?.values).toEqual(["manual", "select"])
+  expect(setting?.default).toBe(process.platform === "win32" ? "manual" : "select")
+})
+
+test("enables persistent terminals by default except on Windows", () => {
+  const defaults = resolve({}, { terminalSuspend: true })
+  expect(defaults.session.terminal).toBe(process.platform !== "win32")
+  expect(defaults.keybinds.get("theme.switch")).toEqual([])
+  expect(defaults.keybinds.get("terminal.toggle")).toMatchObject([{ key: "<leader>t" }])
+  expect(settings.find((setting) => setting.path.join(".") === "session.terminal")?.default).toBe(
+    process.platform !== "win32",
+  )
+
+  const disabled = resolve({ session: { terminal: false } }, { terminalSuspend: true })
+  expect(disabled.session.terminal).toBe(false)
+
+  const customized = resolve(
+    { session: { terminal: false }, keybinds: { "theme.switch": "<leader>t", "terminal.toggle": "<leader>p" } },
+    { terminalSuspend: true },
+  )
+  expect(customized.keybinds.get("theme.switch")).toMatchObject([{ key: "<leader>t" }])
+  expect(customized.keybinds.get("terminal.toggle")).toMatchObject([{ key: "<leader>p" }])
 })
 
 test("uses command IDs as keybind keys", () => {
@@ -97,6 +149,7 @@ test("preserves migrated v1 keybind defaults", () => {
   const pairs = [
     ["app.exit", "app_exit"],
     ["prompt.paste", "input_paste"],
+    ["prompt.queue", "prompt_queue"],
     ["session.delete", "session_delete"],
     ["session.list", "session_list"],
     ["agent.list", "agent_list"],

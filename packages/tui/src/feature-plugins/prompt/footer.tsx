@@ -1,10 +1,16 @@
 import { Plugin } from "@opencode-ai/plugin/tui"
-import { createMemo, Match, Show, Switch } from "solid-js"
+import { createMemo, createSignal, Match, Show, Switch } from "solid-js"
 import { contextUsage, formatContextUsage } from "../../util/session"
 import { useTerminalDimensions } from "@opentui/solid"
 import { useI18n } from "../../context/i18n"
+import { stringWidth } from "../../util/string-width"
 
-export function PromptFooter(props: { context: Plugin.Context; sessionID?: string; mode: "normal" | "shell" }) {
+export function PromptFooter(props: {
+  context: Plugin.Context
+  sessionID?: string
+  mode: "normal" | "shell"
+  showDetails: boolean
+}) {
   const i18n = useI18n()
   const dimensions = useTerminalDimensions()
   const money = createMemo(
@@ -14,6 +20,7 @@ export function PromptFooter(props: { context: Plugin.Context; sessionID?: strin
         currency: "USD",
       }),
   )
+  const [liveHovered, setLiveHovered] = createSignal(false)
   const subagents = createMemo(() => {
     if (!props.sessionID) return 0
     const count = props.context.data.session
@@ -49,32 +56,62 @@ export function PromptFooter(props: { context: Plugin.Context; sessionID?: strin
   })
   const live = createMemo(() => Boolean(subagents() || shells()))
   const shortcut = (id: string) => props.context.keymap.shortcuts(id)[0]
+  const layout = createMemo(() => {
+    const command = shortcut("command.palette.show")
+    const commands = i18n.t("feature.promptFooter.commands")
+    if (status().length === 0) return { usage: false, shortcuts: dimensions().width >= 44 }
+    return promptFooterLayout({
+      width: Math.max(0, dimensions().width - 8),
+      usage: status(),
+      shortcuts: command ? [`${command} ${commands}`] : [],
+    })
+  })
 
   return (
     <Switch>
       <Match when={props.mode === "normal"}>
         <Switch>
           <Match when={live() || status().length > 0}>
-            <text fg={props.context.theme.text.subdued} wrapMode="none" truncate flexShrink={1}>
-              <Show when={live() && shortcut("session.child.first")}>
-                {(value) => <span style={{ fg: props.context.theme.text.default }}>{value()} </span>}
+            <box flexDirection="row" flexShrink={props.showDetails && layout().usage ? 0 : 1} minWidth={0}>
+              <Show when={live()}>
+                <box
+                  flexShrink={0}
+                  onMouseOver={() => setLiveHovered(true)}
+                  onMouseOut={() => setLiveHovered(false)}
+                  onMouseUp={() => props.context.keymap.dispatch("session.child.first")}
+                >
+                  <text
+                    fg={liveHovered() ? props.context.theme.text.default : props.context.theme.text.subdued}
+                    wrapMode="none"
+                  >
+                    <Show when={shortcut("session.child.first")}>
+                      {(value) => <span style={{ fg: props.context.theme.text.default }}>{value()} </span>}
+                    </Show>
+                    <Show when={subagents()}>{(value) => <>{value()}</>}</Show>
+                    <Show when={subagents() && shells()}> · </Show>
+                    <Show when={shells()}>{(value) => <>{value()}</>}</Show>
+                  </text>
+                </box>
               </Show>
-              <Show when={subagents()}>{(value) => <span>{value()}</span>}</Show>
-              <Show when={subagents() && shells()}> · </Show>
-              <Show when={shells()}>{(value) => <span>{value()}</span>}</Show>
-              <Show when={live() && status().length > 0}> · </Show>
-              <Show when={status().length > 0}>{status().join(" · ")}</Show>
-            </text>
+              <Show when={props.showDetails && layout().usage && status().length > 0}>
+                <text fg={props.context.theme.text.subdued} wrapMode="none" flexShrink={0}>
+                  <Show when={live()}> · </Show>
+                  {status().join(" · ")}
+                </text>
+              </Show>
+            </box>
           </Match>
-          <Match when={dimensions().width >= 44}>
+          <Match when={props.showDetails && layout().shortcuts}>
             <text fg={props.context.theme.text.default} flexShrink={0}>
-              {shortcut("agent.cycle")} <span style={{ fg: props.context.theme.text.subdued }}>{i18n.t("feature.promptFooter.agents")}</span>
+              {shortcut("agent.cycle")}{" "}
+              <span style={{ fg: props.context.theme.text.subdued }}>{i18n.t("feature.promptFooter.agents")}</span>
             </text>
           </Match>
         </Switch>
-        <Show when={dimensions().width >= 44}>
-          <text fg={props.context.theme.text.default} flexShrink={0}>
-            {shortcut("command.palette.show")} <span style={{ fg: props.context.theme.text.subdued }}>{i18n.t("feature.promptFooter.commands")}</span>
+        <Show when={props.showDetails && layout().shortcuts}>
+          <text fg={props.context.theme.text.default} wrapMode="none" flexShrink={0}>
+            {shortcut("command.palette.show")}{" "}
+            <span style={{ fg: props.context.theme.text.subdued }}>{i18n.t("feature.promptFooter.commands")}</span>
           </text>
         </Show>
       </Match>
@@ -82,7 +119,9 @@ export function PromptFooter(props: { context: Plugin.Context; sessionID?: strin
         <text fg={props.context.theme.text.default} flexShrink={0}>
           esc{" "}
           <span style={{ fg: props.context.theme.text.subdued }}>
-            {dimensions().width < 44 ? i18n.t("feature.promptFooter.shell") : i18n.t("feature.promptFooter.exitShellMode")}
+            {dimensions().width < 44
+              ? i18n.t("feature.promptFooter.shell")
+              : i18n.t("feature.promptFooter.exitShellMode")}
           </span>
         </text>
       </Match>
@@ -91,11 +130,30 @@ export function PromptFooter(props: { context: Plugin.Context; sessionID?: strin
 }
 
 export default Plugin.define({
-  id: "opencode.prompt-footer",
+  id: "opencode.prompt.footer",
   setup(context) {
     context.ui.slot({
       append: "prompt.footer",
-      render: (props) => <PromptFooter context={context} sessionID={props.sessionID} mode={props.mode} />,
+      render: (props) => (
+        <PromptFooter
+          context={context}
+          sessionID={props.sessionID}
+          mode={props.mode}
+          showDetails={props.showDetails}
+        />
+      ),
     })
   },
 })
+
+function promptFooterLayout(input: { width: number; usage: string[]; shortcuts: string[] }) {
+  const usage = input.usage.join(" · ")
+  const shortcuts = input.shortcuts.join(" · ")
+  const available = Math.max(0, input.width - Math.min(28, Math.floor(input.width / 2)))
+  if (usage && shortcuts && stringWidth(`${usage} · ${shortcuts}`) <= available) {
+    return { usage: true, shortcuts: true }
+  }
+  if (usage && stringWidth(usage) <= available) return { usage: true, shortcuts: false }
+  if (!usage && shortcuts && stringWidth(shortcuts) <= available) return { usage: false, shortcuts: true }
+  return { usage: false, shortcuts: false }
+}

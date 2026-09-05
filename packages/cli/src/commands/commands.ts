@@ -1,6 +1,14 @@
-import { Argument, Command, Flag } from "effect/unstable/cli"
+import { Argument, Flag, GlobalFlag } from "effect/unstable/cli"
+import { Schema } from "effect"
 import { Spec } from "../framework/spec"
-import { GlobalFlags } from "./global-flags"
+import { Updater } from "../services/updater"
+
+export const PrintLogs = GlobalFlag.setting("print-logs")({
+  flag: Flag.boolean("print-logs").pipe(
+    Flag.withDescription("Print logs to stderr (server logs require --standalone)"),
+    Flag.withDefault(false),
+  ),
+})
 
 declare const OPENCODE_CLI_NAME: string | undefined
 
@@ -49,6 +57,21 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
     prompt: Flag.string("prompt").pipe(Flag.withDescription("Prompt to use"), Flag.optional),
   },
   commands: [
+    Spec.make("upgrade", {
+      description: "Upgrade OpenCode to the latest or a specific version",
+      aliases: ["update"],
+      params: {
+        target: Argument.string("target").pipe(
+          Argument.withDescription("Version to upgrade to (with or without a leading v)"),
+          Argument.optional,
+        ),
+        method: Flag.choice("method", Updater.methods).pipe(
+          Flag.withAlias("m"),
+          Flag.withDescription("Installation method to use"),
+          Flag.optional,
+        ),
+      },
+    }),
     Spec.make("acp", { description: "Start an Agent Client Protocol server" }),
     Spec.make("api", {
       description: "Make a request to the running server",
@@ -72,6 +95,7 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
       commands: [
         Spec.make("agents", { description: "List all agents" }),
         Spec.make("config", { description: "List configuration sources" }),
+        Spec.make("paths", { description: "Show global paths (data, config, cache, state)" }),
       ],
     }),
     Spec.make("console", {
@@ -86,12 +110,37 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
       ],
     }),
     Spec.make("auth", {
-      description: "Manage authentication",
+      description: "manage AI providers and credentials",
       commands: [
-        Spec.make("login", {
-          description: "Log in to a well-known authentication provider",
+        Spec.make("list", {
+          description: "list providers and credentials",
           params: {
-            url: Argument.string("url").pipe(Argument.withDescription("Well-known provider URL")),
+            ...ServerParams,
+            format: Flag.choice("format", ["default", "json"]).pipe(
+              Flag.withDescription("Output format"),
+              Flag.withDefault("default"),
+            ),
+          },
+        }),
+        Spec.make("login", {
+          description: "log in to a provider",
+          params: {
+            ...ServerParams,
+            target: Argument.string("target").pipe(
+              Argument.withDescription("Integration ID, name, or well-known provider URL"),
+              Argument.optional,
+            ),
+            method: Flag.string("method").pipe(Flag.withDescription("Authentication method ID"), Flag.optional),
+          },
+        }),
+        Spec.make("logout", {
+          description: "log out from a configured provider",
+          params: {
+            ...ServerParams,
+            target: Argument.string("target").pipe(
+              Argument.withDescription("Integration ID or name"),
+              Argument.optional,
+            ),
           },
         }),
       ],
@@ -135,21 +184,88 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
     }),
     Spec.make("plugin", {
       description: "Manage plugins",
-      commands: [Spec.make("list", { description: "List active plugins" })],
+      commands: [
+        Spec.make("list", {
+          description: "List plugins",
+          params: {
+            builtin: Flag.boolean("builtin").pipe(
+              Flag.withDescription("Include built-in server plugins"),
+              Flag.withDefault(false),
+            ),
+          },
+        }),
+        Spec.make("add", {
+          description: "Install a plugin and add it to the global configuration",
+          params: {
+            package: Argument.string("package").pipe(Argument.withDescription("npm registry or Git package specifier")),
+          },
+        }),
+        Spec.make("check", {
+          description: "Check package plugins for updates",
+          params: {
+            target: Argument.string("target").pipe(
+              Argument.withDescription("Configured package target"),
+              Argument.optional,
+            ),
+          },
+        }),
+        Spec.make("update", {
+          description: "Update package plugins",
+          params: {
+            target: Argument.string("target").pipe(
+              Argument.withDescription("Configured package target; omit to update all outdated plugins"),
+              Argument.optional,
+            ),
+          },
+        }),
+        Spec.make("remove", {
+          description: "Remove a plugin from global configuration",
+          params: {
+            package: Argument.string("package").pipe(Argument.withDescription("configured package specifier")),
+          },
+        }),
+      ],
     }),
     Spec.make("models", {
       description: "List all available models",
       params: ServerParams,
     }),
+    Spec.make("stats", {
+      description: "Show shareable usage statistics",
+      params: {
+        ...ServerParams,
+        days: Flag.integer("days").pipe(
+          Flag.withSchema(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+          Flag.withDescription("Show the last N days; 0 means today"),
+          Flag.optional,
+        ),
+        year: Flag.integer("year").pipe(
+          Flag.withSchema(Schema.Int.check(Schema.isBetween({ minimum: 1970, maximum: 9_999 }))),
+          Flag.withDescription("Show a calendar year"),
+          Flag.optional,
+        ),
+        all: Flag.boolean("all").pipe(Flag.withDescription("Show lifetime statistics"), Flag.withDefault(false)),
+        project: Flag.string("project").pipe(
+          Flag.withDescription('Filter by project ID, or use "." for the current project'),
+          Flag.optional,
+        ),
+        models: Flag.boolean("models").pipe(Flag.withDescription("Show model usage"), Flag.withDefault(false)),
+        tools: Flag.boolean("tools").pipe(Flag.withDescription("Show tool reliability"), Flag.withDefault(false)),
+        cost: Flag.boolean("cost").pipe(Flag.withDescription("Show cost and token details"), Flag.withDefault(false)),
+        full: Flag.boolean("full").pipe(Flag.withDescription("Show every detailed section"), Flag.withDefault(false)),
+        limit: Flag.integer("limit").pipe(
+          Flag.withSchema(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
+          Flag.withDescription("Number of rows in detailed sections"),
+          Flag.withDefault(5),
+        ),
+        json: Flag.boolean("json").pipe(Flag.withDescription("Output statistics as JSON"), Flag.withDefault(false)),
+      },
+    }),
     Spec.make("export", {
       description: "Export session data as JSON",
       params: {
         ...ServerParams,
-        session: Flag.string("session").pipe(
-          Flag.withAlias("s"),
-          Flag.withDescription("Session ID to export to stdout"),
-          Flag.optional,
-        ),
+        session: Argument.string("session").pipe(Argument.withDescription("Session ID to export"), Argument.optional),
         sanitize: Flag.boolean("sanitize").pipe(
           Flag.withDescription("Redact sensitive transcript and file data"),
           Flag.withDefault(false),
@@ -252,17 +368,48 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
         Spec.make("restart", { description: "Restart the background server" }),
         Spec.make("status", { description: "Show background server status" }),
         Spec.make("stop", { description: "Stop the background server" }),
+        Spec.make("drain", {
+          description: "Check or drain active assistant sidecars for rollback",
+          params: {
+            database: Flag.string("database").pipe(Flag.withDescription("Database path"), Flag.optional),
+            check: Flag.boolean("check").pipe(
+              Flag.withDescription("Check without modifying data"),
+              Flag.withDefault(false),
+            ),
+          },
+        }),
         Spec.make("get", {
           description: "Get service configuration",
-          params: { key: Argument.string("key").pipe(Argument.optional) },
+          params: {
+            key: Argument.string("key").pipe(Argument.withDescription("Service setting or env"), Argument.optional),
+            name: Argument.string("name").pipe(
+              Argument.withDescription("Environment variable name"),
+              Argument.optional,
+            ),
+          },
         }),
         Spec.make("set", {
           description: "Set service configuration",
-          params: { key: Argument.string("key"), value: Argument.string("value") },
+          params: {
+            key: Argument.string("key").pipe(Argument.withDescription("Service setting or env")),
+            value: Argument.string("value").pipe(
+              Argument.withDescription("Setting value or environment variable name"),
+            ),
+            nestedValue: Argument.string("env-value").pipe(
+              Argument.withDescription("Environment variable value"),
+              Argument.optional,
+            ),
+          },
         }),
         Spec.make("unset", {
           description: "Unset service configuration",
-          params: { key: Argument.string("key") },
+          params: {
+            key: Argument.string("key").pipe(Argument.withDescription("Service setting or env")),
+            name: Argument.string("name").pipe(
+              Argument.withDescription("Environment variable name"),
+              Argument.optional,
+            ),
+          },
         }),
       ],
     }),
@@ -279,4 +426,4 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
   ],
 })
 
-export const Commands = { ...Root, spec: Root.spec.pipe(Command.withGlobalFlags(GlobalFlags.all)) }
+export const Commands = Root

@@ -143,6 +143,35 @@ const schema: Omit<DatabaseMigration.Migration, "id"> = {
         );
       `)
       yield* tx.run(`
+        CREATE TABLE \`session_assistant_active\` (
+          \`message_id\` text PRIMARY KEY,
+          \`session_id\` text NOT NULL,
+          \`data\` text NOT NULL,
+          \`time_created\` integer NOT NULL,
+          \`time_updated\` integer NOT NULL,
+          CONSTRAINT \`fk_session_assistant_active_message_id_session_message_id_fk\` FOREIGN KEY (\`message_id\`) REFERENCES \`session_message\`(\`id\`) ON DELETE CASCADE,
+          CONSTRAINT \`fk_session_assistant_active_session_id_session_v2_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session_v2\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`
+        CREATE TABLE \`session_assistant_part\` (
+          \`message_id\` text NOT NULL,
+          \`position\` integer NOT NULL,
+          \`type\` text NOT NULL,
+          \`type_ordinal\` integer NOT NULL,
+          \`tool_id\` text,
+          \`data\` text NOT NULL,
+          \`time_created\` integer NOT NULL,
+          \`time_updated\` integer NOT NULL,
+          CONSTRAINT \`session_assistant_part_pk\` PRIMARY KEY(\`message_id\`, \`position\`),
+          CONSTRAINT \`fk_session_assistant_part_message_id_session_assistant_active_message_id_fk\` FOREIGN KEY (\`message_id\`) REFERENCES \`session_assistant_active\`(\`message_id\`) ON DELETE CASCADE,
+          CONSTRAINT "session_assistant_part_position_check" CHECK("position" >= 0),
+          CONSTRAINT "session_assistant_part_type_ordinal_check" CHECK("type_ordinal" >= 0),
+          CONSTRAINT "session_assistant_part_type_check" CHECK("type" in ('text', 'reasoning', 'tool')),
+          CONSTRAINT "session_assistant_part_tool_id_check" CHECK(("type" = 'tool' and "tool_id" is not null) or ("type" <> 'tool' and "tool_id" is null))
+        );
+      `)
+      yield* tx.run(`
         CREATE TABLE \`session_inbox\` (
           \`id\` text PRIMARY KEY,
           \`session_id\` text NOT NULL,
@@ -179,6 +208,41 @@ const schema: Omit<DatabaseMigration.Migration, "id"> = {
         );
       `)
       yield* tx.run(`
+        CREATE TABLE \`session_subagent_continuation\` (
+          \`id\` text PRIMARY KEY,
+          \`parent_session_id\` text NOT NULL,
+          \`parent_message_id\` text NOT NULL,
+          \`parent_tool_call_id\` text NOT NULL,
+          \`child_session_id\` text NOT NULL,
+          \`agent\` text NOT NULL,
+          \`description\` text NOT NULL,
+          \`inbox_id\` text NOT NULL,
+          \`turn_id\` text,
+          \`state\` text NOT NULL,
+          \`prompt_digest\` text NOT NULL,
+          \`time_terminal\` integer,
+          \`time_created\` integer NOT NULL,
+          \`time_updated\` integer NOT NULL,
+          CONSTRAINT \`fk_session_subagent_continuation_parent_session_id_session_v2_id_fk\` FOREIGN KEY (\`parent_session_id\`) REFERENCES \`session_v2\`(\`id\`) ON DELETE CASCADE,
+          CONSTRAINT \`fk_session_subagent_continuation_child_session_id_session_v2_id_fk\` FOREIGN KEY (\`child_session_id\`) REFERENCES \`session_v2\`(\`id\`) ON DELETE CASCADE,
+          CONSTRAINT \`fk_session_subagent_continuation_turn_id_session_subagent_turn_id_fk\` FOREIGN KEY (\`turn_id\`) REFERENCES \`session_subagent_turn\`(\`id\`) ON DELETE SET NULL
+        );
+      `)
+      yield* tx.run(`
+        CREATE TABLE \`session_subagent_turn\` (
+          \`id\` text PRIMARY KEY,
+          \`child_session_id\` text NOT NULL,
+          \`state\` text NOT NULL,
+          \`assistant_message_id\` text,
+          \`output\` text,
+          \`error\` text,
+          \`time_terminal\` integer,
+          \`time_created\` integer NOT NULL,
+          \`time_updated\` integer NOT NULL,
+          CONSTRAINT \`fk_session_subagent_turn_child_session_id_session_v2_id_fk\` FOREIGN KEY (\`child_session_id\`) REFERENCES \`session_v2\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`
         CREATE TABLE \`session_v2\` (
           \`id\` text PRIMARY KEY,
           \`project_id\` text NOT NULL,
@@ -210,6 +274,9 @@ const schema: Omit<DatabaseMigration.Migration, "id"> = {
           \`model\` text,
           \`time_created\` integer NOT NULL,
           \`time_updated\` integer NOT NULL,
+          \`time_idle\` integer,
+          \`time_viewed\` integer,
+          \`idle_outcome\` text,
           \`time_compacting\` integer,
           \`time_archived\` integer,
           \`time_suspended\` integer,
@@ -226,7 +293,7 @@ const schema: Omit<DatabaseMigration.Migration, "id"> = {
         CREATE TABLE \`workspace\` (
           \`id\` text PRIMARY KEY,
           \`provider\` text NOT NULL,
-          \`binding\` text NOT NULL,
+          \`binding\` text,
           \`created_at\` integer NOT NULL,
           \`last_used_at\` integer NOT NULL
         );
@@ -245,6 +312,18 @@ const schema: Omit<DatabaseMigration.Migration, "id"> = {
       yield* tx.run(`CREATE INDEX \`event_aggregate_type_seq_idx\` ON \`event\` (\`aggregate_id\`,\`type\`,\`seq\`);`)
       yield* tx.run(
         `CREATE UNIQUE INDEX \`permission_project_action_resource_idx\` ON \`permission\` (\`project_id\`,\`action\`,\`resource\`);`,
+      )
+      yield* tx.run(
+        `CREATE UNIQUE INDEX \`session_assistant_active_session_idx\` ON \`session_assistant_active\` (\`session_id\`);`,
+      )
+      yield* tx.run(
+        `CREATE UNIQUE INDEX \`session_assistant_part_message_type_ordinal_idx\` ON \`session_assistant_part\` (\`message_id\`,\`type\`,\`type_ordinal\`);`,
+      )
+      yield* tx.run(
+        `CREATE INDEX \`session_assistant_part_message_type_position_idx\` ON \`session_assistant_part\` (\`message_id\`,\`type\`,\`position\`);`,
+      )
+      yield* tx.run(
+        `CREATE INDEX \`session_assistant_part_message_tool_position_idx\` ON \`session_assistant_part\` (\`message_id\`,\`tool_id\`,\`position\`) WHERE "session_assistant_part"."type" = 'tool';`,
       )
       yield* tx.run(
         `CREATE INDEX \`session_inbox_session_delivery_seq_idx\` ON \`session_inbox\` (\`session_id\`,\`delivery\`,\`enqueued_seq\`);`,
@@ -270,6 +349,21 @@ const schema: Omit<DatabaseMigration.Migration, "id"> = {
       )
       yield* tx.run(
         `CREATE UNIQUE INDEX \`session_pending_session_admitted_seq_idx\` ON \`session_pending\` (\`session_id\`,\`admitted_seq\`);`,
+      )
+      yield* tx.run(
+        `CREATE UNIQUE INDEX \`session_subagent_continuation_parent_call_idx\` ON \`session_subagent_continuation\` (\`parent_session_id\`,\`parent_message_id\`,\`parent_tool_call_id\`);`,
+      )
+      yield* tx.run(
+        `CREATE UNIQUE INDEX \`session_subagent_continuation_inbox_idx\` ON \`session_subagent_continuation\` (\`inbox_id\`);`,
+      )
+      yield* tx.run(
+        `CREATE INDEX \`session_subagent_continuation_child_state_idx\` ON \`session_subagent_continuation\` (\`child_session_id\`,\`state\`);`,
+      )
+      yield* tx.run(
+        `CREATE INDEX \`session_subagent_continuation_turn_state_idx\` ON \`session_subagent_continuation\` (\`turn_id\`,\`state\`);`,
+      )
+      yield* tx.run(
+        `CREATE UNIQUE INDEX \`session_subagent_turn_child_active_idx\` ON \`session_subagent_turn\` (\`child_session_id\`) WHERE "session_subagent_turn"."state" = 'active';`,
       )
       yield* tx.run(`CREATE INDEX \`session_v2_project_idx\` ON \`session_v2\` (\`project_id\`);`)
       yield* tx.run(`CREATE INDEX \`session_v2_workspace_idx\` ON \`session_v2\` (\`workspace_id\`);`)

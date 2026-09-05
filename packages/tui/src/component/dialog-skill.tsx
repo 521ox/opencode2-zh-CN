@@ -14,10 +14,10 @@ export type DialogSkillProps = {
 }
 
 export function DialogSkill(props: DialogSkillProps) {
+  const { t } = useI18n()
   const dialog = useDialog()
   const data = useData()
   const theme = useTheme()
-  const { t } = useI18n()
   dialog.setSize("large")
 
   const [loadError, setLoadError] = createSignal<unknown>()

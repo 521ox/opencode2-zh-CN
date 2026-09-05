@@ -13,8 +13,8 @@ function isSuggestedPaletteCommand(command: KeymapCommand) {
 }
 
 export function CommandPaletteDialog() {
-  const commands = Keymap.useCommands()
   const { t } = useI18n()
+  const commands = Keymap.useCommands()
   const shortcuts = Keymap.useShortcuts()
   const options = createMemo(() =>
     commands().flatMap((command) => {

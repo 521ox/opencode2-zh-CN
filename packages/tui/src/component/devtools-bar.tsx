@@ -8,8 +8,8 @@ import { createMemo, createResource, createSignal, For, onCleanup, onMount, Show
 import { useClient } from "../context/client"
 import { useConfig } from "../config"
 import { useData } from "../context/data"
-import { useLocation } from "../context/location"
 import { useI18n } from "../context/i18n"
+import { useLocation } from "../context/location"
 import { useRoute } from "../context/route"
 import { Keymap } from "../context/keymap"
 import { useTheme, useThemes } from "../context/theme"
@@ -101,7 +101,15 @@ export function DevToolsBar() {
   const offEscape = keymap.intercept(
     "key",
     ({ event }) => {
-      if (!panel() || event.name !== "escape") return
+      if (!panel() || keymap.mode.current() !== "base") return
+      if (event.name !== "escape" && !(event.ctrl && event.name === "c")) return
+      if (renderer.getSelection()?.getSelectedText()) {
+        if ((config.data.terminal?.copy ?? (process.platform === "win32" ? "manual" : "select")) !== "select") return
+        renderer.clearSelection()
+        event.preventDefault()
+        event.stopPropagation()
+        return
+      }
       event.preventDefault()
       event.stopPropagation()
       close()
@@ -282,7 +290,9 @@ export function DevToolsBar() {
             <Show when={client.connection.attempt() > 0}>
               <Row label={t("ui.devtools.reconnect")} value={String(client.connection.attempt())} />
             </Show>
-            <Show when={client.connection.error()}>{(error) => <Row label={t("ui.devtools.lastError")} value={error()} />}</Show>
+            <Show when={client.connection.error()}>
+              {(error) => <Row label={t("ui.devtools.lastError")} value={error()} />}
+            </Show>
             <Show when={server()}>
               {(value) => (
                 <>
@@ -346,7 +356,9 @@ export function DevToolsBar() {
         </Show>
       </BarItem>
       <BarItem active={panel() === "theme"} onClick={() => toggle("theme")}>
-        <text fg={panel() === "theme" ? theme.text.action.primary.focused : theme.text.subdued}>{t("ui.devtools.theme")}</text>
+        <text fg={panel() === "theme" ? theme.text.action.primary.focused : theme.text.subdued}>
+          {t("ui.devtools.theme")}
+        </text>
         <Show when={panel() === "theme"}>
           <PanelBox>
             <PanelTitle>{t("ui.devtools.theme")}</PanelTitle>
@@ -362,7 +374,9 @@ export function DevToolsBar() {
         </Show>
       </BarItem>
       <BarItem active={panel() === "tools"} onClick={() => toggle("tools")}>
-        <text fg={panel() === "tools" ? theme.text.action.primary.focused : theme.text.subdued}>{t("ui.devtools.tools")}</text>
+        <text fg={panel() === "tools" ? theme.text.action.primary.focused : theme.text.subdued}>
+          {t("ui.devtools.tools")}
+        </text>
         <Show when={panel() === "tools"}>
           <PanelBox>
             <PanelTitle>{t("ui.devtools.tools")}</PanelTitle>
@@ -443,7 +457,12 @@ export function DevToolsBar() {
         <text fg={theme.text.subdued}>{t("ui.devtools.experiments")}</text>
       </BarItem>
       <box flexGrow={1} minWidth={0}>
-        <TimeToFirstDraw visible={timing()} width="100%" fg={theme.text.subdued} label={t("ui.devtools.timeToFirstDraw")} />
+        <TimeToFirstDraw
+          visible={timing()}
+          width="100%"
+          fg={theme.text.subdued}
+          label={t("ui.devtools.timeToFirstDraw")}
+        />
       </box>
     </box>
   )

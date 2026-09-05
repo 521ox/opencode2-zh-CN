@@ -8,11 +8,11 @@ import { useConfig } from "../config"
 import { useI18n } from "../context/i18n"
 
 export function DialogWorktreeName(props: { onConfirm: (name: string) => void }) {
+  const { t } = useI18n()
   const dialog = useDialog()
   const theme = useTheme("elevated")
   const shortcuts = Keymap.useShortcuts()
   const config = useConfig().data
-  const { t } = useI18n()
   const [inputTarget, setInputTarget] = createSignal<InputRenderable>()
   let input: InputRenderable
 
@@ -74,7 +74,8 @@ export function DialogWorktreeName(props: { onConfirm: (name: string) => void })
           enter <span style={{ fg: theme.text.subdued }}>{t("dialog.worktreeName.submit")}</span>
         </text>
         <text fg={theme.text.default}>
-          {shortcuts.get("dialog.worktree.generate")} <span style={{ fg: theme.text.subdued }}>{t("dialog.worktreeName.generateOne")}</span>
+          {shortcuts.get("dialog.worktree.generate")}{" "}
+          <span style={{ fg: theme.text.subdued }}>{t("dialog.worktreeName.generateOne")}</span>
         </text>
       </box>
     </box>

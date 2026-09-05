@@ -7,26 +7,20 @@ import { useI18n } from "../context/i18n"
 
 type Experiment = {
   id: string
-  title: "dialog.experiments.tabScroll.title"
-  description: "dialog.experiments.tabScroll.description"
+  title: string
+  description: string
 }
 
 // In-flight features anyone can opt into. Each entry is temporary: an
 // experiment either graduates (delete the entry, make the behavior
 // unconditional) or dies (delete the entry and the branch it gated).
-export const experiments: Experiment[] = [
-  {
-    id: "tab_scroll",
-    title: "dialog.experiments.tabScroll.title",
-    description: "dialog.experiments.tabScroll.description",
-  },
-]
+export const experiments: Experiment[] = []
 
 export function DialogExperiments() {
   const config = useConfig()
+  const { t } = useI18n()
   const theme = useTheme()
   const toast = useToast()
-  const { t } = useI18n()
   const [selected, setSelected] = createSignal<Experiment>()
   const [saving, setSaving] = createSignal(false)
 
@@ -34,8 +28,12 @@ export function DialogExperiments() {
 
   const options = createMemo(() =>
     experiments.map((experiment) => ({
-      title: t(experiment.title),
-      searchText: t(experiment.description),
+      title:
+        experiment.id === "session-preview-tabs" ? t("dialog.experiments.sessionPreviewTabs.title") : experiment.title,
+      searchText:
+        experiment.id === "session-preview-tabs"
+          ? t("dialog.experiments.sessionPreviewTabs.description")
+          : experiment.description,
       footer: enabled(experiment) ? t("dialog.experiments.on") : t("dialog.experiments.off"),
       value: experiment,
     })),

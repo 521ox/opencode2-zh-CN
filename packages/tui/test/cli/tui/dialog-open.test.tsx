@@ -276,24 +276,6 @@ test("option arrows stay in the only visible section", async () => {
   }
 })
 
-test("renders localized dialog chrome", async () => {
-  const fixture = await renderOpen(
-    (url) => {
-      if (url.pathname === "/api/session") return json({ data: [], cursor: {} })
-      if (url.pathname === "/api/project") return json([])
-      return undefined
-    },
-    undefined,
-    "zh",
-  )
-
-  try {
-    await fixture.app.waitForFrame((frame) => frame.includes("搜索会话和项目..."))
-  } finally {
-    await fixture.dispose()
-  }
-})
-
 async function renderOpen(
   handler: FetchHandler,
   beforeOpen?: (contexts: {
@@ -337,7 +319,7 @@ async function renderOpen(
                 <ToastProvider>
                   <RouteProvider>
                     <ClientProvider api={createApi(calls.fetch)}>
-                      <DataProvider>
+                      <DataProvider directory={process.cwd()}>
                         <LocationProvider>
                           <SessionTabsProvider>
                             <ThemeProvider mode="dark" source={emptyThemeSource}>

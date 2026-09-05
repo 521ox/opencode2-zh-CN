@@ -1,7 +1,10 @@
 import { Plugin } from "@opencode-ai/plugin/tui"
 import { useTerminalDimensions } from "@opentui/solid"
 import { createSignal, For, type JSX } from "solid-js"
+import { useI18n } from "../../../context/i18n"
+import type { Translator } from "../../../i18n"
 import { StoryFooter } from "./footer"
+import { mermanLayoutsStory } from "./merman-layouts"
 import { sessionTabsStory } from "./session-tabs"
 import { sessionLocationMissingStory } from "./session-location-missing"
 
@@ -15,16 +18,24 @@ export type Story = {
   render: (context: Plugin.Context) => JSX.Element
 }
 
-const stories: Story[] = [sessionTabsStory, sessionLocationMissingStory]
+const stories: Story[] = [mermanLayoutsStory, sessionTabsStory, sessionLocationMissingStory]
+
+export function storyTitle(story: Story, t: Translator) {
+  if (story.id === "merman-layouts") return t("feature.storybook.story.mermanLayouts")
+  if (story.id === "session-tabs") return t("feature.storybook.story.sessionTabs")
+  if (story.id === "session-location-missing") return t("feature.storybook.story.sessionLocationMissing")
+  return story.title
+}
 
 function Commands(props: { context: Plugin.Context }) {
+  const i18n = useI18n()
   props.context.keymap.layer(() => ({
     mode: "global",
     commands: [
       {
         id: "app.storybook",
-        title: "Open storybook",
-        group: "Debug",
+        title: i18n.t("feature.storybook.command.open"),
+        group: i18n.t("feature.storybook.debugGroup"),
         palette: true,
         run() {
           props.context.ui.router.navigate({ type: "plugin", name: "storybook" })
@@ -33,8 +44,8 @@ function Commands(props: { context: Plugin.Context }) {
       },
       ...stories.map((story) => ({
         id: `app.storybook.${story.id}`,
-        title: `Storybook: ${story.title}`,
-        group: "Debug",
+        title: i18n.t("feature.storybook.command.openStory", { title: storyTitle(story, i18n.t) }),
+        group: i18n.t("feature.storybook.debugGroup"),
         palette: true as const,
         run() {
           props.context.ui.router.navigate({ type: "plugin", name: "storybook", data: { story: story.id } })
@@ -49,6 +60,7 @@ function Commands(props: { context: Plugin.Context }) {
 function StorybookIndex(props: { context: Plugin.Context }) {
   const dimensions = useTerminalDimensions()
   const theme = props.context.theme
+  const i18n = useI18n()
   const [selected, setSelected] = createSignal(0)
   const open = (story: Story) =>
     props.context.ui.router.navigate({ type: "plugin", name: "storybook", data: { story: story.id } })
@@ -57,34 +69,34 @@ function StorybookIndex(props: { context: Plugin.Context }) {
     commands: [
       {
         bind: "escape",
-        title: "Back home",
-        group: "Storybook",
+        title: i18n.t("feature.storybook.command.backHome"),
+        group: i18n.t("feature.storybook.group"),
         run() {
           props.context.ui.router.navigate({ type: "home" })
         },
       },
       {
         bind: "up,k",
-        title: "Previous story",
-        group: "Storybook",
+        title: i18n.t("feature.storybook.command.previousStory"),
+        group: i18n.t("feature.storybook.group"),
         run: () => setSelected((current) => (current + stories.length - 1) % stories.length),
       },
       {
         bind: "down,j",
-        title: "Next story",
-        group: "Storybook",
+        title: i18n.t("feature.storybook.command.nextStory"),
+        group: i18n.t("feature.storybook.group"),
         run: () => setSelected((current) => (current + 1) % stories.length),
       },
       {
         bind: "return",
-        title: "Open story",
-        group: "Storybook",
+        title: i18n.t("feature.storybook.command.open"),
+        group: i18n.t("feature.storybook.group"),
         run: () => open(stories[selected()]),
       },
       ...stories.map((story, index) => ({
         bind: String(index + 1),
-        title: `Open ${story.title}`,
-        group: "Storybook",
+        title: i18n.t("feature.storybook.command.openStory", { title: storyTitle(story, i18n.t) }),
+        group: i18n.t("feature.storybook.group"),
         run: () => open(story),
       })),
     ],
@@ -98,14 +110,14 @@ function StorybookIndex(props: { context: Plugin.Context }) {
       backgroundColor={theme.background.default}
     >
       <box paddingTop={2} paddingLeft={2} flexDirection="column">
-        <text fg={theme.text.default}>storybook</text>
-        <text fg={theme.text.subdued}>fixture-driven simulations of production components</text>
+        <text fg={theme.text.default}>{i18n.t("feature.storybook.title")}</text>
+        <text fg={theme.text.subdued}>{i18n.t("feature.storybook.description")}</text>
         <box height={1} />
         <For each={stories}>
           {(story, index) => (
             <text fg={index() === selected() ? theme.text.default : theme.text.subdued}>
               {index() === selected() ? "› " : "  "}
-              {index() + 1} {story.title}
+              {index() + 1} {storyTitle(story, i18n.t)}
             </text>
           )}
         </For>
@@ -113,11 +125,11 @@ function StorybookIndex(props: { context: Plugin.Context }) {
       <box flexGrow={1} />
       <StoryFooter
         context={props.context}
-        title="storybook"
+        title={i18n.t("feature.storybook.title")}
         controls={[
-          { shortcut: "↑/↓", label: "select" },
-          { shortcut: "enter", label: "open" },
-          { shortcut: "esc", label: "home" },
+          { shortcut: "↑/↓", label: i18n.t("feature.storybook.control.select") },
+          { shortcut: "enter", label: i18n.t("feature.storybook.control.open") },
+          { shortcut: "esc", label: i18n.t("feature.storybook.control.home") },
         ]}
       />
     </box>

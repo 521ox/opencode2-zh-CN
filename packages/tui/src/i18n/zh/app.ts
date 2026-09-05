@@ -65,7 +65,7 @@ export const dict = {
   "app.mcp.needsAuth.title": "MCP 服务器需要认证",
   "app.model.invalid": "模型格式无效：{{model}}",
   "app.service.restarted": "服务已重启",
-  "app.service.restarting": "正在重启服务...",
+  "app.service.restarting": "正在重启服务…",
   "app.session.deleted.current": "当前会话已删除",
   "app.session.deleted.named": "会话“{{title}}”已删除",
   "app.variant.none.message": "当前模型不支持任何变体。",

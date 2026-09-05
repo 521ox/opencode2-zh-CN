@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test"
+import type { JsonValue, OpenCodeEvent, SessionMessageAssistant, SessionMessageInfo } from "@opencode-ai/client/promise"
 import { mockOpenCodeServer } from "../utils/mock-server"
 import { expectAppVisible, expectSessionTitle } from "../utils/waits"
 import {
@@ -17,11 +18,6 @@ const model = { providerID: "opencode", modelID: "claude-opus-4-6", variant: "ma
 const contextIDs = ["ctx_0100_read", "ctx_0101_glob", "ctx_0102_grep", "ctx_0103_list"]
 const followingTextID = `${id("msg_assistant", 10)}:text:0`
 
-type Message = {
-  info: Record<string, unknown> & { id: string; role: "user" | "assistant" }
-  parts: Record<string, unknown>[]
-}
-
 const messages = [...Array.from({ length: 8 }, (_, index) => turn(index, false)).flat(), ...turn(10, true)]
 
 test.describe("regression: session timeline context group resize", () => {
@@ -30,7 +26,7 @@ test.describe("regression: session timeline context group resize", () => {
     await mockServer(page)
     await configurePage(page)
 
-    await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
+    await page.goto(sessionHref())
     await expectSessionTitle(page, title)
     await expectAppVisible(page.locator(`[data-timeline-part-ids="${contextIDs.join(",")}"]`).first())
     await expectAppVisible(page.locator(`[data-timeline-part-id="${followingTextID}"]`).first())
@@ -44,8 +40,8 @@ test.describe("regression: session timeline context group resize", () => {
     expect(samples.at(-1)?.expanded).toBe("true")
   })
 
-  test("paints a stable exploring to explored transition", async ({ page }) => {
-    const events: { directory: string; payload: Record<string, unknown> }[] = []
+  test("keeps a grouped tool summary stable as its calls complete", async ({ page }) => {
+    const events: OpenCodeEvent[] = []
     await page.setViewportSize({ width: 1400, height: 900 })
     await mockServer(page, events, [
       ...Array.from({ length: 8 }, (_, index) => turn(index, false)).flat(),
@@ -53,19 +49,18 @@ test.describe("regression: session timeline context group resize", () => {
     ])
     await configurePage(page)
 
-    await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
+    await page.goto(sessionHref())
     await expectSessionTitle(page, title)
     const devtools = await page.context().newCDPSession(page)
     await devtools.send("Emulation.setCPUThrottlingRate", { rate: 4 })
     const context = page.locator(`[data-timeline-part-ids="${contextIDs.join(",")}"]`).first()
     await expectAppVisible(context)
-    await expect(context.locator('[data-component="tool-status-title"]')).toHaveAttribute("aria-label", "Exploring")
+    await expect(context.getByRole("button")).toHaveAccessibleName("Used 1 Read, 1 Glob, 1 Grep, 1 List")
 
     const contextSelector = `[data-timeline-part-ids="${contextIDs.join(",")}"]`
     const regions = defineVisualRegions({
       status: {
-        selector: `${contextSelector} [data-component="tool-status-title"]`,
-        opacitySelectors: ['[data-slot="tool-status-active"]', '[data-slot="tool-status-done"]'],
+        selector: `${contextSelector} [data-component="context-tool-group-trigger"]`,
       },
       context: { selector: contextSelector, closest: '[data-timeline-row="AssistantPart"]' },
       following: {
@@ -75,29 +70,25 @@ test.describe("regression: session timeline context group resize", () => {
     })
     await startVisualProbe(page, regions)
     for (const [index, delay] of [120, 350, 80, 500].entries()) {
-      events.push({
-        directory,
-        payload: {
-          type: "message.part.updated",
-          properties: {
-            part: contextTool(
-              contextIDs[index]!,
-              id("msg_assistant", 10),
-              ["read", "glob", "grep", "list"][index]!,
-              [
-                { filePath: "src/recent-a.ts" },
-                { path: directory, pattern: "**/*.ts" },
-                { path: directory, pattern: "Explored" },
-                { path: "src" },
-              ][index]!,
-            ),
-          },
-        },
-      })
+      events.push(
+        ...toolEvents(
+          contextTool(
+            contextIDs[index]!,
+            id("msg_assistant", 10),
+            ["read", "glob", "grep", "list"][index]!,
+            [
+              { path: "src/recent-a.ts" },
+              { path: directory, pattern: "**/*.ts" },
+              { path: directory, pattern: "Explored" },
+              { path: "src" },
+            ][index]!,
+          ),
+        ),
+      )
       await page.waitForTimeout(delay)
     }
 
-    await expect(context.locator('[data-component="tool-status-title"]')).toHaveAttribute("aria-label", "Explored")
+    await expect(context.getByRole("button")).toHaveAccessibleName("Used 1 Read, 1 Glob, 1 Grep, 1 List")
     await page.waitForTimeout(700)
     const trace = await stopVisualProbe<keyof typeof regions>(page)
     const labels = trace.samples
@@ -116,7 +107,7 @@ test.describe("regression: session timeline context group resize", () => {
       ]),
     )
 
-    expect(labels).toEqual(["Exploring", "Explored"])
+    expect(labels).toEqual(["Used 1 Read, 1 Glob, 1 Grep, 1 List"])
     expect(issues, JSON.stringify(trace.samples, null, 2)).toEqual([])
   })
 })
@@ -211,74 +202,45 @@ async function sampleExpansion(page: Page) {
   )
 }
 
-function turn(index: number, target: boolean, status: "running" | "completed" = "completed"): Message[] {
+function turn(index: number, target: boolean, status: "running" | "completed" = "completed"): SessionMessageInfo[] {
   const userID = id("msg_user", index)
   const assistantID = id("msg_assistant", index)
+  const content: SessionMessageAssistant["content"] = target
+    ? [
+        toolContent(
+          contextTool(contextIDs[0]!, assistantID, "read", { path: "src/recent-a.ts", offset: 0, limit: 120 }, status),
+        ),
+        toolContent(contextTool(contextIDs[1]!, assistantID, "glob", { path: directory, pattern: "**/*.ts" }, status)),
+        toolContent(
+          contextTool(
+            contextIDs[2]!,
+            assistantID,
+            "grep",
+            { path: directory, pattern: "Explored", include: "*.ts" },
+            status,
+          ),
+        ),
+        toolContent(contextTool(contextIDs[3]!, assistantID, "list", { path: "src" }, status)),
+        { type: "text", text: "This assistant text is immediately after the explored context group." },
+      ]
+    : [{ type: "text", text: `Assistant filler ${index}. ${"filler ".repeat(60)}` }]
   return [
     {
-      info: {
-        id: userID,
-        sessionID,
-        role: "user",
-        time: { created: 1700000000000 + index * 10_000 },
-        summary: { diffs: [] },
-        agent: "build",
-        model,
-      },
-      parts: [{ id: id("prt_user", index), sessionID, messageID: userID, type: "text", text: `User message ${index}` }],
+      id: userID,
+      type: "user",
+      time: { created: 1700000000000 + index * 10_000 },
+      text: `User message ${index}`,
     },
     {
-      info: {
-        id: assistantID,
-        sessionID,
-        role: "assistant",
-        time: { created: 1700000000000 + index * 10_000 + 1_000, completed: 1700000000000 + index * 10_000 + 2_000 },
-        parentID: userID,
-        modelID: model.modelID,
-        providerID: model.providerID,
-        mode: "build",
-        agent: "build",
-        path: { cwd: directory, root: directory },
-        cost: 0.01,
-        tokens: { input: 100, output: 200, reasoning: 0, cache: { read: 0, write: 0 } },
-        variant: "max",
-        finish: "stop",
-      },
-      parts: target
-        ? [
-            contextTool(
-              contextIDs[0]!,
-              assistantID,
-              "read",
-              { filePath: "src/recent-a.ts", offset: 0, limit: 120 },
-              status,
-            ),
-            contextTool(contextIDs[1]!, assistantID, "glob", { path: directory, pattern: "**/*.ts" }, status),
-            contextTool(
-              contextIDs[2]!,
-              assistantID,
-              "grep",
-              { path: directory, pattern: "Explored", include: "*.ts" },
-              status,
-            ),
-            contextTool(contextIDs[3]!, assistantID, "list", { path: "src" }, status),
-            {
-              id: followingTextID,
-              sessionID,
-              messageID: assistantID,
-              type: "text",
-              text: "This assistant text is immediately after the explored context group.",
-            },
-          ]
-        : [
-            {
-              id: id("prt_text", index),
-              sessionID,
-              messageID: assistantID,
-              type: "text",
-              text: `Assistant filler ${index}. ${"filler ".repeat(60)}`,
-            },
-          ],
+      id: assistantID,
+      type: "assistant",
+      time: { created: 1700000000000 + index * 10_000 + 1_000, completed: 1700000000000 + index * 10_000 + 2_000 },
+      model: { id: model.modelID, providerID: model.providerID, variant: model.variant },
+      agent: "build",
+      cost: 0.01,
+      tokens: { input: 100, output: 200, reasoning: 0, cache: { read: 0, write: 0 } },
+      finish: "stop",
+      content,
     },
   ]
 }
@@ -301,18 +263,83 @@ function contextTool(
       status,
       input,
       output: `Completed ${tool}.\n${"detail line\n".repeat(8)}`,
-      title: input.filePath || input.path || input.pattern || "completed",
+      title: input.path || input.pattern || "completed",
       metadata: {},
       time: { start: 1700000000000, end: 1700000000100 },
     },
   }
 }
 
-async function mockServer(
-  page: Page,
-  events: { directory: string; payload: Record<string, unknown> }[] = [],
-  fixtureMessages = messages,
-) {
+type ContextTool = ReturnType<typeof contextTool>
+
+function toolContent(part: ContextTool): SessionMessageAssistant["content"][number] {
+  const base = {
+    type: "tool" as const,
+    id: part.callID,
+    name: part.tool,
+    time: {
+      created: part.state.time.start,
+      ran: part.state.time.start,
+      ...(part.state.status === "completed" ? { completed: part.state.time.end } : {}),
+    },
+  }
+  if (part.state.status === "running")
+    return {
+      ...base,
+      state: {
+        status: "running",
+        input: part.state.input as Record<string, JsonValue>,
+        metadata: part.state.metadata as Record<string, JsonValue>,
+      },
+    }
+  return {
+    ...base,
+    state: {
+      status: "completed",
+      input: part.state.input as Record<string, JsonValue>,
+      content: [{ type: "text", text: part.state.output }],
+      metadata: part.state.metadata as Record<string, JsonValue>,
+    },
+  }
+}
+
+let eventSequence = -1
+
+function toolEvents(part: ContextTool): OpenCodeEvent[] {
+  return [
+    eventValue(
+      "session.tool.success",
+      {
+        sessionID,
+        assistantMessageID: part.messageID,
+        id: part.callID,
+        content: [{ type: "text", text: part.state.output }],
+        metadata: part.state.metadata,
+        executed: true,
+      },
+      2,
+    ),
+  ]
+}
+
+function eventValue<Type extends OpenCodeEvent["type"]>(
+  type: Type,
+  data: Extract<OpenCodeEvent, { type: Type }>["data"],
+  version: 1 | 2,
+): Extract<OpenCodeEvent, { type: Type }> {
+  eventSequence++
+  return {
+    id: `evt_context_resize_${eventSequence}`,
+    created: 1700000002000 + eventSequence,
+    type,
+    data,
+    location: { directory },
+    durable: { aggregateID: sessionID, seq: eventSequence, version },
+  } as unknown as Extract<OpenCodeEvent, { type: Type }>
+}
+
+async function mockServer(page: Page, events: OpenCodeEvent[] = [], fixtureMessages = messages) {
+  eventSequence = -1
   await mockOpenCodeServer(page, {
     directory,
     project: project(),
@@ -371,4 +398,9 @@ function provider() {
 
 function base64Encode(value: string) {
   return Buffer.from(value, "utf8").toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "")
+}
+
+function sessionHref() {
+  const server = `http://${process.env.PLAYWRIGHT_SERVER_HOST ?? "127.0.0.1"}:${process.env.PLAYWRIGHT_SERVER_PORT ?? "4096"}`
+  return `/server/${base64Encode(server)}/session/${sessionID}`
 }

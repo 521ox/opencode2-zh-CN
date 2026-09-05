@@ -17,13 +17,12 @@ import { Connection } from "@opencode-ai/schema/connection"
 import { Credential } from "@opencode-ai/schema/credential"
 import { FileSystem } from "@opencode-ai/schema/filesystem"
 import { Integration } from "@opencode-ai/schema/integration"
-import { AI } from "@opencode-ai/schema/ai"
 import { LLM } from "@opencode-ai/schema/llm"
 import { Permission } from "@opencode-ai/schema/permission"
 import { Pty } from "@opencode-ai/schema/pty"
 import { Reference } from "@opencode-ai/schema/reference"
 import { Skill } from "@opencode-ai/schema/skill"
-import { AbsolutePath, DateTimeUtcFromMillis, optional, statics } from "@opencode-ai/schema/schema"
+import { AbsolutePath, optional, statics } from "@opencode-ai/schema/schema"
 
 test("Core reuses the canonical shared schemas", async () => {
   const schemaAgent = await import("@opencode-ai/schema/agent")
@@ -96,7 +95,6 @@ test("Core reuses the canonical shared schemas", async () => {
     [coreIntegration.Method, Integration.Method],
     [coreIntegration.Ref, Integration.Ref],
     [coreLocation.Ref, Location.Ref],
-    [coreAI.ProviderMetadata, AI.ProviderMetadata],
     [coreAI.FinishReason, LLM.FinishReason],
     [coreModel.ID, Model.ID],
     [coreModel.VariantID, Model.VariantID],
@@ -164,7 +162,6 @@ test("Core reuses the canonical shared schemas", async () => {
   ]
   for (const [core, shared] of schemas) expect(core).toBe(shared)
 
-  expect(Agent.Info.default(Agent.ID.make("test"))).toEqual(Agent.Info.default(Agent.ID.make("test")))
   expect(coreModel.Info.default(coreProvider.ID.make("test"), coreModel.ID.make("model"))).toEqual(
     Model.Info.default(Provider.ID.make("test"), Model.ID.make("model")),
   )

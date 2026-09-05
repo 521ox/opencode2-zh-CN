@@ -15,7 +15,6 @@ import { Environment } from "../../environment/index.js"
 
 export const name = "read"
 const FILENAME = "AGENTS.md"
-const SUPPORTED_MEDIA_MIMES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp", "application/pdf"])
 const LocationInput = Schema.Struct({
   path: Schema.String.annotate({ description: "File or directory to read" }),
   offset: ReadToolFileSystem.PageInput.fields.offset.annotate({
@@ -39,8 +38,8 @@ export const Plugin = {
     const location = yield* Location.Service
 
     yield* ctx.tool
-      .transform((draft) =>
-        draft.add({
+      .transform((editor) =>
+        editor.add({
           name,
           options: { codemode: false },
           description:
@@ -104,7 +103,11 @@ export const Plugin = {
                 Effect.catch(() => Effect.void),
                 Effect.catchDefect(() => Effect.void),
               )
-              if (content.type === "file" && content.encoding === "base64" && !SUPPORTED_MEDIA_MIMES.has(content.mime))
+              if (
+                content.type === "file" &&
+                content.encoding === "base64" &&
+                !ReadToolFileSystem.MEDIA_MIMES.has(content.mime)
+              )
                 return yield* Effect.fail(new ReadToolFileSystem.BinaryFileError({ resource }))
               return content
             }).pipe(
@@ -142,7 +145,7 @@ export const Plugin = {
             .map((entry) => join(dirname(input), entry))
             .slice(0, 3),
         ),
-        Effect.catch(() => Effect.succeed([] as string[])),
+        Effect.orElseSucceed(() => [] as string[]),
       )
       const message =
         suggestions.length === 0

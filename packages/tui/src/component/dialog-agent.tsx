@@ -6,8 +6,8 @@ import { useDialog } from "../ui/dialog"
 
 export function DialogAgent() {
   const local = useLocal()
-  const dialog = useDialog()
   const { t } = useI18n()
+  const dialog = useDialog()
 
   const options = createMemo(() =>
     local.agent.list().map((item) => {

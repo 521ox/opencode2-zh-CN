@@ -10,7 +10,7 @@ import { configuredSettings } from "./configured.js"
 const providerID = Provider.ID.make("cloudflare-workers-ai")
 
 export const CloudflareWorkersAIPlugin = define({
-  id: "opencode.provider.cloudflare-workers-ai",
+  id: "opencode.provider.cloudflare.workers.ai",
   effect: Effect.fn(function* (ctx) {
     const configured = yield* configuredSettings(providerID)
     const form = iife(() => {
@@ -25,8 +25,8 @@ export const CloudflareWorkersAIPlugin = define({
         },
       ])
     })
-    yield* ctx.integration.transform((draft) => {
-      draft.method.update({
+    yield* ctx.integration.transform((editor) => {
+      editor.method.update({
         integrationID: providerID,
         method: {
           type: "key",

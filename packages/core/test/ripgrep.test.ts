@@ -2,7 +2,6 @@ import { describe, expect } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
 import { Effect } from "effect"
-import { LayerNode } from "@opencode-ai/util/effect/layer-node"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { Location } from "@opencode-ai/core/location"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
@@ -22,7 +21,8 @@ describe("Ripgrep", () => {
           yield* Effect.promise(() => fs.mkdir(path.join(tmp.path, "src")))
           yield* Effect.promise(() => fs.writeFile(path.join(tmp.path, "src", "match.ts"), "needle\n"))
 
-          const result = yield* (yield* Ripgrep.Service).glob({ cwd: tmp.path, pattern: "**/*.ts", limit: 10 })
+          const ripgrep = yield* Ripgrep.Service
+          const result = yield* ripgrep.glob({ cwd: tmp.path, pattern: "**/*.ts", limit: 10 })
           expect(result.map((item) => item.path)).toEqual([RelativePath.make("src/match.ts")])
         }),
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
@@ -38,7 +38,8 @@ describe("Ripgrep", () => {
           yield* Effect.promise(() => fs.writeFile(path.join(tmp.path, "src", "match.ts"), "needle\n"))
           yield* Effect.promise(() => fs.writeFile(path.join(tmp.path, "src", "skip.txt"), "needle\n"))
 
-          const result = yield* (yield* Ripgrep.Service).grep({
+          const ripgrep = yield* Ripgrep.Service
+          const result = yield* ripgrep.grep({
             cwd: tmp.path,
             pattern: "needle",
             include: "*.ts",
@@ -47,6 +48,65 @@ describe("Ripgrep", () => {
           expect(result).toHaveLength(1)
           expect(result[0]?.entry.path).toBe(RelativePath.make("src/match.ts"))
           expect(result[0]?.submatches[0]?.text).toBe("needle")
+        }),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  it.live("supports literal and case-insensitive grep matching", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() => fs.writeFile(path.join(tmp.path, "match.txt"), "Needle[1]\n"))
+          const ripgrep = yield* Ripgrep.Service
+
+          const literal = yield* ripgrep.grep({ cwd: tmp.path, pattern: "needle[1]", literal: true, limit: 10 })
+          expect(literal).toEqual([])
+          const insensitive = yield* ripgrep.grep({
+            cwd: tmp.path,
+            pattern: "needle[1]",
+            literal: true,
+            caseSensitive: false,
+            limit: 10,
+          })
+          expect(insensitive.map((item) => item.entry.path)).toEqual([RelativePath.make("match.txt")])
+          expect(insensitive[0]?.submatches[0]?.text).toBe("Needle[1]")
+        }),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  it.live("includes hidden files only when requested by glob", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() => fs.mkdir(path.join(tmp.path, ".hidden")))
+          yield* Effect.promise(() => fs.writeFile(path.join(tmp.path, ".hidden", "match.ts"), "hidden\n"))
+          const ripgrep = yield* Ripgrep.Service
+
+          const ordinary = yield* ripgrep.glob({ cwd: tmp.path, pattern: "**/*.ts", limit: 10 })
+          expect(ordinary).toEqual([])
+          const hidden = yield* ripgrep.glob({ cwd: tmp.path, pattern: "**/*.ts", hidden: true, limit: 10 })
+          expect(hidden.map((item) => item.path)).toEqual([RelativePath.make(".hidden/match.ts")])
+        }),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  it.live("settles concurrent short-lived no-match greps", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() => fs.writeFile(path.join(tmp.path, "empty.txt"), "haystack\n"))
+          const ripgrep = yield* Ripgrep.Service
+          const results = yield* Effect.all(
+            Array.from({ length: 12 }, () => ripgrep.grep({ cwd: tmp.path, pattern: "needle", limit: 10 })),
+            { concurrency: "unbounded" },
+          )
+          expect(results).toEqual(Array.from({ length: 12 }, () => []))
         }),
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
     ),
@@ -64,7 +124,8 @@ describe("Ripgrep", () => {
           yield* Effect.promise(() => fs.writeFile(path.join(tmp.path, "node_modules", "pkg", "index.js"), "ignored\n"))
           yield* Effect.promise(() => fs.writeFile(path.join(tmp.path, "src", "index.js"), "included\n"))
 
-          const files = yield* (yield* Ripgrep.Service).find({ cwd: tmp.path, pattern: "*", limit: 10 })
+          const ripgrep = yield* Ripgrep.Service
+          const files = yield* ripgrep.find({ cwd: tmp.path, pattern: "*", limit: 10 })
           expect(files.map((item) => item.path)).toContain(RelativePath.make("src/index.js"))
           expect(files.map((item) => item.path)).not.toContain(RelativePath.make("node_modules/pkg/index.js"))
         }),
@@ -113,7 +174,8 @@ describe("Ripgrep", () => {
           yield* Effect.promise(() => fs.writeFile(path.join(tmp.path, "Pictures", "private.jpg"), "private\n"))
           yield* Effect.promise(() => fs.writeFile(path.join(tmp.path, "visible.txt"), "visible\n"))
 
-          const files = yield* (yield* Ripgrep.Service).find({
+          const ripgrep = yield* Ripgrep.Service
+          const files = yield* ripgrep.find({
             cwd: tmp.path,
             pattern: "*",
             limit: 10,
@@ -136,7 +198,8 @@ describe("Ripgrep", () => {
             fs.writeFile(path.join(tmp.path, "generated.ts"), `Cloudflare${"x".repeat(70 * 1024)}\n`),
           )
 
-          const matches = yield* (yield* Ripgrep.Service).grep({
+          const ripgrep = yield* Ripgrep.Service
+          const matches = yield* ripgrep.grep({
             cwd: tmp.path,
             pattern: "Cloudflare",
             limit: 10,

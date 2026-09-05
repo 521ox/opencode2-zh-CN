@@ -1,4 +1,4 @@
-import { base64Encode } from "@opencode-ai/core/util/encode"
+import { base64Encode } from "@opencode-ai/util/encode"
 import { expect, test, type Page } from "@playwright/test"
 import { mockOpenCodeServer } from "../utils/mock-server"
 import { expectSessionTitle } from "../utils/waits"
@@ -22,6 +22,7 @@ test("restores review mode and selected file per session", async ({ page }) => {
   await selectFile(page, "alpha.ts")
 
   await switchSession(page, titleB)
+  await page.getByRole("button", { name: "Toggle review" }).click()
   await expect(page.getByRole("button", { name: "Git changes" })).toBeVisible()
   await selectFile(page, "gamma.ts")
 
@@ -54,7 +55,6 @@ async function switchSession(page: Page, title: string) {
 
 async function setup(page: Page) {
   await mockOpenCodeServer(page, {
-    protocol: "v2",
     directory,
     project: {
       id: projectID,
@@ -103,7 +103,6 @@ async function setup(page: Page) {
   )
   await page.addInitScript(
     ({ directory, server, sessions }) => {
-      localStorage.setItem("settings.v3", JSON.stringify({ general: { newLayoutDesigns: true } }))
       localStorage.setItem(
         "opencode.global.dat:server",
         JSON.stringify({

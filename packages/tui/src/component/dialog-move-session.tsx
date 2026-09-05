@@ -37,6 +37,7 @@ type DialogMoveSessionProps = {
 }
 
 export function DialogMoveSession(props: DialogMoveSessionProps) {
+  const { t } = useI18n()
   const dialog = useDialog()
   const client = useClient()
   const dimensions = useTerminalDimensions()
@@ -46,7 +47,6 @@ export function DialogMoveSession(props: DialogMoveSessionProps) {
   const toast = useToast()
   const paths = useTuiPaths()
   const shortcuts = Keymap.useShortcuts()
-  const { t } = useI18n()
   const location = createMemo(() => sessionData.location.info())
   const [working, setWorking] = createSignal(Boolean(props.initialRemoving))
   const [toDelete, setToDelete] = createSignal<string>()
@@ -163,7 +163,9 @@ export function DialogMoveSession(props: DialogMoveSessionProps) {
       return {
         title,
         titleView: isRemoving ? (
-          <span style={{ fg: theme.text.feedback.error.default }}>{t("dialog.moveSession.deleting", { directory: item.location })}</span>
+          <span style={{ fg: theme.text.feedback.error.default }}>
+            {t("dialog.moveSession.deleting", { directory: item.location })}
+          </span>
         ) : deleting ? (
           <span style={{ fg: theme.text.action.destructive.default }}>
             {t("dialog.moveSession.confirmDelete", { shortcut: shortcuts.get("dialog.move_session.delete") ?? "" })}

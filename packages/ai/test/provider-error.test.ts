@@ -13,19 +13,24 @@ describe("provider error classification", () => {
       "Prompt has 5,958,968 tokens, but the configured context size is 256,000 tokens",
       "Too many tokens",
       "Token limit exceeded",
-      "Invalid 'input': array too long. Expected an array with maximum length 16384, but got an array with length 39997 instead.",
     ]
 
     expect(messages.every(isContextOverflow)).toBe(true)
   })
 
-  test("classifies request size failures separately from context overflow", () => {
-    const failures = [
-      classifyProviderFailure({ message: "request too large", status: 413 }),
+  test("classifies Anthropic request_too_large as recoverable overflow", () => {
+    expect(
       classifyProviderFailure({
         message: '{"error":{"type":"request_too_large","message":"Request exceeds the maximum size"}}',
         status: 400,
       }),
+    ).toMatchObject({ _tag: "InvalidRequest", classification: "context-overflow" })
+    expect(isContextOverflow("413 status code (no body)")).toBe(true)
+  })
+
+  test("classifies generic request size failures separately from context overflow", () => {
+    const failures = [
+      classifyProviderFailure({ message: "request too large", status: 413 }),
       classifyProviderFailure({ message: "upstream request entity too large", status: 502 }),
     ]
 
@@ -34,7 +39,6 @@ describe("provider error classification", () => {
         expect.objectContaining({ _tag: "InvalidRequest", classification: "payload-too-large" }),
       ),
     )
-    expect(isContextOverflow("413 status code (no body)")).toBe(false)
   })
 
   test("does not classify rate limits as context overflow", () => {
@@ -70,10 +74,20 @@ describe("provider error classification", () => {
 
   test("classifies V1 overloaded provider codes", () => {
     expect(
-      ['{"code":"resource_exhausted"}', '{"code":"service_unavailable"}'].map(
+      ['{"code":"resource_exhausted"}', '{"code":"service_unavailable"}', '{"code":"slow_down"}'].map(
         (message) => classifyProviderFailure({ message })._tag,
       ),
-    ).toEqual(["ProviderInternal", "ProviderInternal"])
+    ).toEqual(["ProviderInternal", "ProviderInternal", "ProviderInternal"])
+  })
+
+  test("classifies stream read errors as incomplete streams", () => {
+    const reason = classifyProviderFailure({
+      message: "Stream ended while reading upstream output",
+      rawBody: '{"error":{"code":"stream_read_error"}}',
+    })
+
+    expect(reason).toMatchObject({ _tag: "InvalidProviderOutput", classification: "incomplete-stream" })
+    expect(reason.body).toBe('{"error":{"code":"stream_read_error"}}')
   })
 
   test("classifies transient client statuses as provider internal", () => {
@@ -81,6 +95,12 @@ describe("provider error classification", () => {
       "ProviderInternal",
       "ProviderInternal",
     ])
+  })
+
+  test("classifies network error text as provider internal", () => {
+    expect(
+      ["network error", "network-error", "network_error"].map((message) => classifyProviderFailure({ message })._tag),
+    ).toEqual(["ProviderInternal", "ProviderInternal", "ProviderInternal"])
   })
 
   test("classifies nested provider codes when a top-level code is also present", () => {
@@ -97,5 +117,55 @@ describe("provider error classification", () => {
     expect(classifyProviderFailure({ message: '{"error":{"message":"no_kv_space"}}' })._tag).toBe("UnknownProvider")
     expect(classifyProviderFailure({ message: '{"type":"error","error":{"code":123}}' })._tag).toBe("UnknownProvider")
     expect(classifyProviderFailure({ message: "not-json" })._tag).toBe("UnknownProvider")
+  })
+})
+
+describe("provider error rawBody classification", () => {
+  test("classifies provider envelopes without separate code inputs", () => {
+    const cases = [
+      ['{"type":"error","error":{"type":"overloaded_error","message":"Try again"}}', "ProviderInternal"],
+      ['{"error":{"code":"insufficient_quota","message":"Request failed"}}', "QuotaExceeded"],
+      [
+        '{"type":"response.failed","response":{"error":{"code":"authentication_error","message":"Denied"}}}',
+        "Authentication",
+      ],
+      ['{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"Try again"}}', "ProviderInternal"],
+      ['{"exception":{"type":"throttlingException","details":{"message":"Try again"}}}', "RateLimit"],
+    ] as const
+    for (const [rawBody, expected] of cases) {
+      const reason = classifyProviderFailure({ message: "Request failed", rawBody })
+      expect(reason._tag).toBe(expected)
+      expect(reason.body).toBe(rawBody)
+      expect(reason).not.toHaveProperty("code")
+    }
+  })
+
+  test("classifies separately supplied SDK data without replacing the response body", () => {
+    const data = { error: { code: "authentication_error" } }
+    for (const value of [data, JSON.stringify(data)]) {
+      const reason = classifyProviderFailure({
+        message: "Request failed",
+        status: 400,
+        rawBody: '{"message":"Request failed"}',
+        data: value,
+      })
+      expect(reason._tag).toBe("Authentication")
+      expect(reason.body).toBe('{"message":"Request failed"}')
+    }
+  })
+
+  test("classifies overflow signals buried in the raw payload when the summary is vague", () => {
+    const reason = classifyProviderFailure({
+      message: "Request failed",
+      rawBody: '{"error":{"message":"This model\'s maximum context length is 40960 tokens"}}',
+    })
+    expect(reason._tag).toBe("InvalidRequest")
+    expect(reason).toMatchObject({ classification: "context-overflow" })
+  })
+
+  test("extracts nested codes from the raw payload", () => {
+    expect(
+      classifyProviderFailure({ message: "Request failed", rawBody: '{"error":{"code":"insufficient_quota"}}' })._tag,
+    ).toBe("QuotaExceeded")
   })
 })

@@ -3,157 +3,21 @@ import { matchesRemoteFunctionCall, remoteFunctionCallIDs } from "../remote-comp
 import { Option, Schema } from "effect"
 import { fileURLToPath } from "url"
 import type { Model } from "../../model.js"
-import { Token } from "../../util/token.js"
 import { SessionMessage } from "../message.js"
 import type { FileAttachment } from "@opencode-ai/schema/prompt"
 
 const imageMimes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"])
-const TOOL_RESULT_CONTEXT_RATIO = 0.1
-const TOOL_RESULT_MIN_TOKENS = 10_000
-const TOOL_RESULT_MAX_TOKENS = 64_000
-const TOOL_RESULT_BLOCK_SIZE = 32
-const TOOL_RESULT_ARCHIVED_TOKENS = 64
-const TOOL_RESULT_TRIMMED = "[... earlier tool result trimmed for context ...]"
 
-type ToolContent = SessionMessage.ToolStateCompleted["content"]
-
-export const toolResultTokenBudget = (contextWindow: number | undefined) => {
-  if (contextWindow === undefined || contextWindow <= 0) return TOOL_RESULT_MAX_TOKENS
-  return Math.max(
-    TOOL_RESULT_MIN_TOKENS,
-    Math.min(TOOL_RESULT_MAX_TOKENS, Math.floor(contextWindow * TOOL_RESULT_CONTEXT_RATIO)),
-  )
+export interface ToLLMMessagesOptions {
+  readonly toolResultPruneMarker?: symbol
 }
 
-const toolText = (content: ToolContent) =>
-  content.flatMap((item) => (item.type === "text" ? [item.text] : [])).join("\n")
+export const TOOL_RESULT_PRUNE_METADATA = "opencode.internal.toolResultPrune"
 
-const outputPath = (tool: SessionMessage.AssistantTool) => {
-  if (tool.state.status !== "completed") return undefined
-  const value = tool.state.metadata?.outputPath
-  return typeof value === "string" ? value : undefined
-}
-
-const replaceToolText = (content: ToolContent, text: string): ToolContent => {
-  const next: ToolContent[number][] = []
-  let inserted = false
-  for (const item of content) {
-    if (item.type !== "text") {
-      next.push(item)
-      continue
-    }
-    if (inserted) continue
-    inserted = true
-    next.push({ type: "text", text })
-  }
-  const first = next[0]
-  return first ? [first, ...next.slice(1)] : content
-}
-
-const recoveryNotice = (tool: SessionMessage.AssistantTool) => {
-  const file = outputPath(tool)
-  if (file) return `[... earlier tool result trimmed for context; full content is available at ${file} ...]`
-  return TOOL_RESULT_TRIMMED
-}
-
-const minimumPreviewTokens = (value: string, marker: string) => {
-  const chars = Array.from(value)
-  const separator = `\n\n${marker}\n\n`
-  const first = chars[0]?.length ?? 0
-  const last = chars.at(-1)?.length ?? 0
-  return Math.ceil((separator.length + first + last) / 4)
-}
-
-const truncateMiddle = (value: string, maxTokens: number, marker: string) => {
-  const chars = Array.from(value)
-  const separator = `\n\n${marker}\n\n`
-  const first = chars[0]
-  const last = chars.at(-1)
-  if (!first || !last) return value
-
-  const head = [first]
-  const tail = [last]
-  let left = 1
-  let right = chars.length - 2
-  let units = separator.length + first.length + last.length
-  let preferHead = true
-
-  while (left <= right) {
-    const primary = chars[preferHead ? left : right]
-    const alternate = chars[preferHead ? right : left]
-    if (primary && units + primary.length <= maxTokens * 4) {
-      if (preferHead) {
-        head.push(primary)
-        left++
-      } else {
-        tail.push(primary)
-        right--
-      }
-      units += primary.length
-      preferHead = !preferHead
-      continue
-    }
-    if (!alternate || units + alternate.length > maxTokens * 4) break
-    if (preferHead) {
-      tail.push(alternate)
-      right--
-    } else {
-      head.push(alternate)
-      left++
-    }
-    units += alternate.length
-    preferHead = !preferHead
-  }
-
-  return `${head.join("")}${separator}${tail.reverse().join("")}`
-}
-
-const boundedToolContent = (messages: readonly SessionMessage.Info[], tokenBudget: number | undefined) => {
-  const replacements = new Map<string, ToolContent>()
-  if (tokenBudget === undefined) return replacements
-  const candidates: Array<{
-    readonly tool: SessionMessage.AssistantTool
-    readonly content: ToolContent
-    readonly text: string
-    readonly tokens: number
-    readonly marker: string
-  }> = []
-
-  // Fixed-size blocks make pruning deterministic across restarts and append-stable
-  // within a block. Only a block rollover archives the previous block, so cache
-  // invalidation is batched instead of shifting on every completed tool result.
-  for (const message of messages) {
-    if (!message || message.type !== "assistant") continue
-    for (const tool of message.content) {
-      if (!tool || tool.type !== "tool" || tool.executed === true || tool.state.status !== "completed") continue
-      const text = toolText(tool.state.content)
-      if (!text) continue
-      candidates.push({
-        tool,
-        content: tool.state.content,
-        text,
-        tokens: Token.estimate(text),
-        marker: recoveryNotice(tool),
-      })
-    }
-  }
-  if (candidates.length === 0) return replacements
-
-  const activeStart = Math.floor((candidates.length - 1) / TOOL_RESULT_BLOCK_SIZE) * TOOL_RESULT_BLOCK_SIZE
-  const activeLimit = Math.max(TOOL_RESULT_ARCHIVED_TOKENS, Math.floor(tokenBudget / TOOL_RESULT_BLOCK_SIZE))
-  for (let index = 0; index < candidates.length; index++) {
-    const candidate = candidates[index]
-    if (!candidate) continue
-    const limit = index < activeStart ? TOOL_RESULT_ARCHIVED_TOKENS : activeLimit
-    if (candidate.tokens <= limit) continue
-    const marker = candidate.marker
-    const previewLimit = Math.max(limit, minimumPreviewTokens(candidate.text, marker))
-    replacements.set(
-      candidate.tool.id,
-      replaceToolText(candidate.content, truncateMiddle(candidate.text, previewLimit, marker)),
-    )
-  }
-  return replacements
+export interface ToolResultPruneInfo {
+  readonly marker: symbol
+  readonly outputPath?: string
+  readonly trustedSubagentFinal?: true
 }
 
 const media = (file: FileAttachment): ContentPart => ({
@@ -216,7 +80,7 @@ const directoryAttachment = (file: FileAttachment): ContentPart => ({
 const attachmentContent = (file: FileAttachment): ContentPart[] => {
   if (file.mime === "text/plain") return [textAttachment(file)]
   if (file.mime === "application/x-directory") return [directoryAttachment(file)]
-  if (imageMimes.has(file.mime)) {
+  if (imageMimes.has(file.mime) || file.mime === "application/pdf") {
     const location = attachmentLocation(file)
     return [...(location === undefined ? [] : [Message.text(`Attached file: ${location}`)]), media(file)]
   }
@@ -242,7 +106,7 @@ const userAttachmentContent = (files: readonly FileAttachment[]) => {
   })
 }
 
-const decodeToolInput = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)
+const decodeToolInput = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))
 
 const providerMetadata = (
   provider: string,
@@ -263,34 +127,53 @@ const toolCall = (tool: SessionMessage.AssistantTool, providerMetadata: Provider
     providerMetadata,
   })
 
+const isTrustedSubagentFinal = (tool: SessionMessage.AssistantTool) =>
+  tool.name === "subagent" &&
+  tool.state.status === "completed" &&
+  tool.state.metadata?.status === "completed" &&
+  tool.state.metadata.truncated === false &&
+  tool.state.metadata.subagentFinal === true &&
+  typeof tool.state.metadata.sessionID === "string"
+
 const toolResult = (
   tool: SessionMessage.AssistantTool,
   providerMetadata: ProviderMetadata | undefined,
-  contentOverride?: ToolContent,
+  options?: ToLLMMessagesOptions,
 ) => {
   if (tool.state.status === "completed") {
     // TODO: Materialize remote and managed URIs before provider-history lowering.
-    const content = contentOverride ?? tool.state.content
+    const content = tool.state.content
+    const single = content.length === 1 ? content[0] : undefined
+    const outputPath = typeof tool.state.metadata?.outputPath === "string" ? tool.state.metadata.outputPath : undefined
+    const trustedSubagentFinal = isTrustedSubagentFinal(tool)
     const subagentSessionID =
       tool.name === "subagent" &&
       tool.state.metadata?.status === "completed" &&
       typeof tool.state.metadata.sessionID === "string"
         ? tool.state.metadata.sessionID
         : undefined
-    const single = content.length === 1 ? content[0] : undefined
+    const pruneInfo =
+      options?.toolResultPruneMarker !== undefined &&
+      tool.executed !== true &&
+      tool.name !== "skill" &&
+      (outputPath !== undefined || trustedSubagentFinal)
+        ? {
+            marker: options.toolResultPruneMarker,
+            ...(outputPath === undefined ? {} : { outputPath }),
+            ...(trustedSubagentFinal ? { trustedSubagentFinal: true as const } : {}),
+          }
+        : undefined
     return ToolResultPart.make({
       id: tool.id,
       name: tool.name,
       result:
         subagentSessionID !== undefined
-          ? {
-              type: "text" as const,
-              value: JSON.stringify({ sessionID: subagentSessionID, output: content }),
-            }
+          ? { type: "text" as const, value: JSON.stringify({ sessionID: subagentSessionID, output: content }) }
           : single?.type === "text"
-          ? { type: "text" as const, value: single.text }
-          : { type: "content" as const, value: content },
+            ? { type: "text" as const, value: single.text }
+            : { type: "content" as const, value: content },
       providerExecuted: tool.executed,
+      metadata: pruneInfo === undefined ? undefined : { [TOOL_RESULT_PRUNE_METADATA]: pruneInfo },
       providerMetadata,
     })
   }
@@ -310,10 +193,7 @@ const interruptedToolResult = (tool: SessionMessage.AssistantTool) =>
   ToolResultPart.make({
     id: tool.id,
     name: tool.name,
-    result: {
-      error: { type: "unknown", message: "[Tool execution was interrupted]" },
-      content: [],
-    },
+    result: { error: { type: "unknown", message: "[Tool execution was interrupted]" }, content: [] },
     resultType: "error",
     providerExecuted: tool.executed,
   })
@@ -323,7 +203,7 @@ const assistant = (
   model: Model.Ref,
   providerMetadataKey: string,
   remoteFunctionCalls: ReadonlySet<string>,
-  toolContent: ReadonlyMap<string, ToolContent>,
+  options?: ToLLMMessagesOptions,
 ) => {
   const sameProvider = String(message.model.providerID) === String(model.providerID)
   const sameModel = sameProvider && String(message.model.id) === String(model.id)
@@ -334,9 +214,12 @@ const assistant = (
         {
           type: "text",
           text: item.text,
-          providerMetadata: sameProvider ? providerMetadata(providerMetadataKey, item.state) : undefined,
+          // Text can carry provider-bound state (e.g. Gemini thought signatures),
+          // which is only replayable against the model that produced it.
+          providerMetadata: reuseProviderMetadata ? providerMetadata(providerMetadataKey, item.state) : undefined,
         },
       ]
+    // Let the destination adapter handle readable reasoning after a model/provider switch.
     if (item.type === "reasoning")
       return reuseProviderMetadata
         ? [
@@ -347,10 +230,12 @@ const assistant = (
             },
           ]
         : item.text.length > 0
-          ? [{ type: "text", text: item.text }]
+          ? [{ type: message.error === undefined ? "reasoning" : "text", text: item.text }]
           : []
-    if (item.executed === true && matchesRemoteFunctionCall(item.id, remoteFunctionCalls)) return []
-    if (item.executed !== true && matchesRemoteFunctionCall(item.id, remoteFunctionCalls)) return []
+    if (matchesRemoteFunctionCall(item.id, remoteFunctionCalls)) return []
+    // Call-side metadata is model-scoped proof of generation (Gemini thought
+    // signatures, OpenAI encrypted reasoning): only the producing model may
+    // replay it.
     const reuseToolProviderMetadata =
       reuseProviderMetadata ||
       (sameModel && item.executed === true && (item.state.status === "completed" || item.state.status === "error"))
@@ -359,16 +244,20 @@ const assistant = (
       reuseToolProviderMetadata ? providerMetadata(providerMetadataKey, item.providerState) : undefined,
     )
     if (item.executed !== true) return [call]
-    // Hosted result payloads are provider-format state, not model state:
-    // replay must survive a model switch within the same provider.
+    // Hosted tools (e.g. google_search) run inside the provider, so their
+    // result payload (`providerResultState`) is provider-format data rather
+    // than model-scoped proof: it stays replayable across models of the same
+    // provider. After a model switch, echo only that payload — never fall
+    // back to `providerState`, whose call-side values are bound to the old
+    // model.
     const result = toolResult(
       item,
       reuseToolProviderMetadata
         ? providerMetadata(providerMetadataKey, item.providerResultState ?? item.providerState)
-        : sameProvider && item.executed === true && item.providerResultState !== undefined
+        : sameProvider && item.providerResultState !== undefined
           ? providerMetadata(providerMetadataKey, item.providerResultState)
           : undefined,
-      toolContent.get(item.id),
+      options,
     )
     return result ? [call, result] : [call]
   })
@@ -383,12 +272,12 @@ const assistant = (
       const metadata = reuseProviderMetadata
         ? providerMetadata(providerMetadataKey, item.providerResultState ?? item.providerState)
         : undefined
-      const result = toolResult(item, metadata, toolContent.get(item.id))
-      if (result) return result
-      if (matchesRemoteFunctionCall(item.id, remoteFunctionCalls)) return interruptedToolResult(item)
+      const result =
+        toolResult(item, metadata, options) ??
+        (matchesRemoteFunctionCall(item.id, remoteFunctionCalls) ? interruptedToolResult(item) : undefined)
+      return result === undefined ? undefined : Message.tool(result)
     })
     .filter((message) => message !== undefined)
-    .map(Message.tool)
   if (meaningful.length === 0) return results
   return [
     Message.make({ id: message.id, role: "assistant", content: meaningful, metadata: message.metadata }),
@@ -400,8 +289,8 @@ function toLLMMessage(
   message: SessionMessage.Info,
   model: Model.Ref,
   providerMetadataKey: string,
-  remoteFunctionCalls: ReadonlySet<string> = new Set(),
-  toolContent: ReadonlyMap<string, ToolContent> = new Map(),
+  remoteFunctionCalls: ReadonlySet<string>,
+  options?: ToLLMMessagesOptions,
 ): Message[] {
   switch (message.type) {
     case "agent-switched":
@@ -418,7 +307,7 @@ function toLLMMessage(
       ]
     case "user":
       const content = [
-        ...(message.skills ?? []).map((skill) => Message.text(skill.text)),
+        ...(message.skills ?? []).flatMap((skill) => (skill.text === undefined ? [] : [Message.text(skill.text)])),
         ...(message.text === "" ? [] : [Message.text(message.text)]),
         ...userAttachmentContent(message.files ?? []),
       ]
@@ -450,7 +339,7 @@ function toLLMMessage(
         }),
       ]
     case "assistant":
-      return assistant(message, model, providerMetadataKey, remoteFunctionCalls, toolContent)
+      return assistant(message, model, providerMetadataKey, remoteFunctionCalls, options)
     case "compaction":
       if (message.status !== "completed") return []
       if (message.remote?.length)
@@ -494,14 +383,13 @@ export const toLLMMessages = (
   messages: readonly SessionMessage.Info[],
   model: Model.Ref,
   providerMetadataKey: string = model.providerID,
-  options?: { readonly toolResultTokens?: number },
+  options?: ToLLMMessagesOptions,
 ) => {
   const remoteFunctionCalls = new Set<string>()
-  const toolContent = boundedToolContent(messages, options?.toolResultTokens)
   return messages.flatMap((message) => {
     if (message.type === "compaction" && message.status === "completed") {
       for (const id of remoteFunctionCallIDs(message.remote)) remoteFunctionCalls.add(id)
     }
-    return toLLMMessage(message, model, providerMetadataKey, remoteFunctionCalls, toolContent)
+    return toLLMMessage(message, model, providerMetadataKey, remoteFunctionCalls, options)
   })
 }

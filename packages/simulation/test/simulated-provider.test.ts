@@ -83,7 +83,7 @@ test("streams a Drive-controlled provider response and removes the finished invo
           jsonrpc: "2.0",
           id: 3,
           method: "llm.finish",
-          params: { id: params.id, reason: "stop" },
+          params: { id: params.id },
         }),
       )
       expect(yield* Queue.take(messages)).toMatchObject({ id: 3, result: { ok: true } })
@@ -250,7 +250,7 @@ test("controls arbitrary tools through scoped SDK overlays", async () => {
           Layer.build(locations.get(Location.Ref.make({ directory: AbsolutePath.make(secondDirectory) }))),
         ])
         yield* Effect.forEach([primary, secondary], (context) =>
-          PluginSupervisor.Service.use((supervisor) => supervisor.flush).pipe(Effect.provide(context)),
+          PluginSupervisor.Service.use((supervisor) => supervisor.awaitActivation).pipe(Effect.provide(context)),
         )
         expect(activations).toBe(2)
 

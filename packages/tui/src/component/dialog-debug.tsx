@@ -12,6 +12,7 @@ import { useTuiApp } from "../context/runtime"
 import { useI18n } from "../context/i18n"
 
 export function DialogDebug() {
+  const { t } = useI18n()
   const theme = useTheme()
   const dialog = useDialog()
   const route = useRoute()
@@ -19,7 +20,6 @@ export function DialogDebug() {
   const clipboard = useClipboard()
   const toast = useToast()
   const app = useTuiApp()
-  const { t } = useI18n()
   const [copied, setCopied] = createSignal(false)
 
   dialog.setSize("large")
@@ -31,8 +31,14 @@ export function DialogDebug() {
       { label: t("dialog.debug.date"), value: new Date().toISOString() },
       { label: t("dialog.debug.os"), value: describeOS() },
       { label: t("dialog.debug.terminal"), value: describeTerminal() },
-      { label: t("dialog.debug.sessionID"), value: route.data.type === "session" ? route.data.sessionID : t("dialog.debug.notAvailable") },
-      { label: t("dialog.debug.model"), value: model ? `${model.providerID}/${model.modelID}` : t("dialog.debug.notAvailable") },
+      {
+        label: t("dialog.debug.sessionID"),
+        value: route.data.type === "session" ? route.data.sessionID : t("dialog.debug.notAvailable"),
+      },
+      {
+        label: t("dialog.debug.model"),
+        value: model ? `${model.providerID}/${model.modelID}` : t("dialog.debug.notAvailable"),
+      },
     ]
   })
 

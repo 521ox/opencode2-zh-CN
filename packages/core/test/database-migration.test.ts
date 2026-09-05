@@ -4,20 +4,29 @@ import { fileURLToPath } from "url"
 import path from "path"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
 import { EffectDrizzleSqlite } from "@opencode-ai/core/database/drizzle"
-import { Effect, Layer } from "effect"
+import { Deferred, Effect, Fiber, Layer } from "effect"
+import { Reactivity } from "effect/unstable/reactivity"
+import { SqlClient, Statement } from "effect/unstable/sql"
 import { sql } from "drizzle-orm"
 import { DatabaseMigration } from "@opencode-ai/core/database/migration"
 import { migrations } from "@opencode-ai/core/database/migration.gen"
+import workspaceNameMigration from "@opencode-ai/core/database/migration/20260410174513_workspace-name"
 import { Database } from "@opencode-ai/core/database/database"
 import { tmpdir } from "./fixture/tmpdir"
-import type { SqlClient } from "effect/unstable/sql/SqlClient"
 import legacyCredentialsMigration from "@opencode-ai/core/database/migration/20260805200742_import_legacy_credentials"
 import worktreeMigration from "@opencode-ai/core/database/migration/20260812213948_worktree"
+import previousV2Migration from "@opencode-ai/core/database/migration/20260804233008_loose_psylocke"
+import workspaceMigration from "@opencode-ai/core/database/migration/20260808023530_workspace_domain"
+import executionClaimsMigration from "@opencode-ai/core/database/migration/20260811161259_execution_claim_attempts"
+import sessionInboxMigration from "@opencode-ai/core/database/migration/20260812181746_session_inbox"
+import sessionViewedStateMigration from "@opencode-ai/core/database/migration/20260819222447_session_viewed_state"
 import sessionStartDirectoryMigration from "@opencode-ai/core/database/migration/20260815081049_session_start_directory"
+import sessionExecutionLeaseMigration from "@opencode-ai/core/database/migration/20260816053649_session_execution_lease"
+import sessionSubagentContinuationMigration from "@opencode-ai/core/database/migration/20260828113155_session_subagent_continuation"
 import { Global } from "@opencode-ai/util/global"
 
 const run = <A, E>(
-  effect: Effect.Effect<A, E, SqlClient | Global.Service>,
+  effect: Effect.Effect<A, E, SqlClient.SqlClient | Global.Service>,
   global = Global.make({ data: path.join(process.cwd(), ".test-data") }),
 ) =>
   Effect.runPromise(
@@ -30,7 +39,94 @@ const run = <A, E>(
 
 const makeDb = EffectDrizzleSqlite.makeWithDefaults()
 
+// A real in-memory SqlClient whose schema inspection signals `arrived` and then
+// waits on `gate`. Bootstrap inspects the schema as its first locked statement,
+// so a database built over this client parks while holding its migration lock.
+const parkedClient = (arrived: Deferred.Deferred<void>, gate: Deferred.Deferred<void>) =>
+  Layer.effect(
+    SqlClient.SqlClient,
+    Effect.gen(function* () {
+      const client = yield* SqlClient.SqlClient
+      const connection = yield* client.reserve
+      const park = <A, E>(query: string, effect: Effect.Effect<A, E>) =>
+        query.includes("sqlite_master")
+          ? Deferred.succeed(arrived, undefined).pipe(Effect.andThen(Deferred.await(gate)), Effect.andThen(effect))
+          : effect
+      return yield* SqlClient.make({
+        acquirer: Effect.succeed({
+          ...connection,
+          execute: (query, params, transform) => park(query, connection.execute(query, params, transform)),
+          executeRaw: (query, params) => park(query, connection.executeRaw(query, params)),
+        }),
+        compiler: Statement.makeCompilerSqlite(),
+        spanAttributes: [],
+      })
+    }),
+  ).pipe(Layer.provide(SqliteClient.layer({ filename: ":memory:", disableWAL: true })), Layer.provide(Reactivity.layer))
+
 describe("DatabaseMigration", () => {
+  test("defaults missing workspace names while preserving legacy workspace data", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`
+          CREATE TABLE workspace (
+            id text PRIMARY KEY,
+            type text NOT NULL,
+            branch text,
+            directory text,
+            extra text,
+            project_id text NOT NULL
+          )
+        `)
+        yield* db.run(sql`
+          INSERT INTO workspace (id, type, branch, directory, extra, project_id)
+          VALUES ('wrk_legacy', 'remote', 'main', '/repo', '{}', 'proj_legacy')
+        `)
+
+        yield* DatabaseMigration.applyOnly(db, [workspaceNameMigration])
+
+        expect(yield* db.get(sql`SELECT id, name, branch, directory, extra FROM workspace`)).toEqual({
+          id: "wrk_legacy",
+          name: "",
+          branch: "main",
+          directory: "/repo",
+          extra: "{}",
+        })
+      }),
+    )
+  })
+
+  test("imports unnamed legacy Drizzle journal entries by their actual migration timestamps", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`CREATE TABLE __drizzle_migrations (id integer PRIMARY KEY, hash text, created_at integer)`)
+        yield* db.run(sql`
+          INSERT INTO __drizzle_migrations (hash, created_at)
+          VALUES ('', ${Date.UTC(2026, 3, 10, 17, 45, 13)})
+        `)
+
+        yield* DatabaseMigration.applyOnly(db, [workspaceNameMigration])
+
+        expect(yield* db.all(sql`SELECT id FROM migration`)).toEqual([{ id: "20260410174513_workspace-name" }])
+      }),
+    )
+  })
+
+  test("rejects unknown legacy Drizzle journal timestamps instead of guessing completed migrations", async () => {
+    await expect(
+      run(
+        Effect.gen(function* () {
+          const db = yield* makeDb
+          yield* db.run(sql`CREATE TABLE __drizzle_migrations (id integer PRIMARY KEY, hash text, created_at integer)`)
+          yield* db.run(sql`INSERT INTO __drizzle_migrations (hash, created_at) VALUES ('', 1234567890000)`)
+          yield* DatabaseMigration.applyOnly(db, [workspaceNameMigration])
+        }),
+      ),
+    ).rejects.toThrow("does not match any known migration")
+  })
+
   test("serializes concurrent embedded initialization for one database path", async () => {
     await using tmp = await tmpdir()
     const filename = path.join(tmp.path, "embedded.sqlite")
@@ -42,6 +138,31 @@ describe("DatabaseMigration", () => {
         ),
         { concurrency: "unbounded" },
       ).pipe(Effect.provideService(Global.Service, Global.make({ data: tmp.path }))),
+    )
+  })
+
+  test("bootstraps distinct databases without waiting on each other's lock", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const arrived = yield* Deferred.make<void>()
+        const gate = yield* Deferred.make<void>()
+        // Park the first database inside its bootstrap, after it holds its lock.
+        const parked = yield* Effect.forkScoped(
+          Layer.build(Database.layerFromClient.pipe(Layer.provide(parkedClient(arrived, gate)))),
+        )
+        yield* Deferred.await(arrived)
+
+        yield* Layer.build(
+          Database.layerFromClient.pipe(Layer.provide(SqliteClient.layer({ filename: ":memory:", disableWAL: true }))),
+        ).pipe(Effect.timeout("2 seconds"))
+
+        expect(parked.pollUnsafe()).toBeUndefined()
+        yield* Deferred.succeed(gate, undefined)
+        yield* Fiber.join(parked)
+      }).pipe(
+        Effect.provideService(Global.Service, Global.make({ data: path.join(process.cwd(), ".test-data") })),
+        Effect.scoped,
+      ),
     )
   })
 
@@ -69,7 +190,308 @@ describe("DatabaseMigration", () => {
         expect(
           yield* db.get(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_pending'`),
         ).toEqual({ name: "session_pending" })
+        expect(
+          yield* db.get(sql`SELECT name FROM pragma_table_info('session_v2') WHERE name = 'start_directory'`),
+        ).toEqual({
+          name: "start_directory",
+        })
+        expect(yield* db.get(sql`SELECT name FROM pragma_table_info('session_v2') WHERE name = 'claim_owner'`)).toEqual(
+          {
+            name: "claim_owner",
+          },
+        )
+        expect(
+          yield* db.get(
+            sql`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'session_v2_claim_expires_idx'`,
+          ),
+        ).toEqual({ name: "session_v2_claim_expires_idx" })
+        expect(
+          yield* db.get(
+            sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_subagent_continuation'`,
+          ),
+        ).toEqual({ name: "session_subagent_continuation" })
+        expect(
+          yield* db.get(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_subagent_turn'`),
+        ).toEqual({
+          name: "session_subagent_turn",
+        })
+        expect(
+          yield* db.get(
+            sql`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'session_subagent_turn_child_active_idx'`,
+          ),
+        ).toEqual({ name: "session_subagent_turn_child_active_idx" })
         expect(yield* db.get(sql`SELECT count(*) AS count FROM migration`)).toEqual({ count: migrations.length })
+        const migrationIDs = migrations.map((migration) => migration.id)
+        expect(migrationIDs).toContain(sessionStartDirectoryMigration.id)
+        expect(migrationIDs).toContain(sessionExecutionLeaseMigration.id)
+        expect(migrationIDs.indexOf(sessionStartDirectoryMigration.id)).toBeLessThan(
+          migrationIDs.indexOf(sessionExecutionLeaseMigration.id),
+        )
+        expect(migrationIDs.indexOf(sessionExecutionLeaseMigration.id)).toBeLessThan(
+          migrationIDs.indexOf(sessionSubagentContinuationMigration.id),
+        )
+      }),
+    )
+  })
+
+  test("adds nullable attention state to existing sessions", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`CREATE TABLE session_v2 (id text PRIMARY KEY, title text)`)
+        yield* db.run(sql`INSERT INTO session_v2 (id, title) VALUES ('ses_existing', 'Existing')`)
+
+        yield* DatabaseMigration.applyOnly(db, [sessionViewedStateMigration])
+        yield* DatabaseMigration.applyOnly(db, [sessionViewedStateMigration])
+
+        expect(yield* db.get(sql`SELECT id, title, time_idle, time_viewed, idle_outcome FROM session_v2`)).toEqual({
+          id: "ses_existing",
+          title: "Existing",
+          time_idle: null,
+          time_viewed: null,
+          idle_outcome: null,
+        })
+        expect(yield* db.get(sql`SELECT count(*) AS count FROM migration`)).toEqual({ count: 1 })
+      }),
+    )
+  })
+
+  test("adds immutable start directories to existing sessions", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`CREATE TABLE session_v2 (id text PRIMARY KEY, title text)`)
+        yield* db.run(sql`INSERT INTO session_v2 (id, title) VALUES ('ses_existing', 'Existing')`)
+
+        yield* DatabaseMigration.applyOnly(db, [sessionStartDirectoryMigration])
+        yield* DatabaseMigration.applyOnly(db, [sessionStartDirectoryMigration])
+
+        expect(yield* db.get(sql`SELECT id, start_directory FROM session_v2`)).toEqual({
+          id: "ses_existing",
+          start_directory: null,
+        })
+        expect(yield* db.get(sql`SELECT count(*) AS count FROM migration`)).toEqual({ count: 1 })
+      }),
+    )
+  })
+
+  test("backfills immutable Session start directories only from exact persisted creation facts", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`CREATE TABLE session_v2 (id text PRIMARY KEY)`)
+        yield* db.run(
+          sql`CREATE TABLE event (aggregate_id text NOT NULL, seq integer NOT NULL, type text NOT NULL, data text NOT NULL)`,
+        )
+        yield* db.run(sql`CREATE TABLE session (id text PRIMARY KEY, start_directory text)`)
+        const direct = path.resolve("legacy-direct-start")
+        const created = path.resolve("v2-created-start")
+        const oldCreated = path.resolve("v1-created-start")
+        const normalize = (value: string) => (process.platform === "win32" ? value.replaceAll("\\", "/") : value)
+        yield* db.run(sql`
+          INSERT INTO session_v2 (id) VALUES
+            ('ses_direct'), ('ses_created'), ('ses_old_created'), ('ses_invalid'), ('ses_duplicate'),
+            ('ses_late'), ('ses_mismatch'), ('ses_info_mismatch'), ('ses_external')
+        `)
+        yield* db.run(sql`
+          INSERT INTO session (id, start_directory) VALUES
+            ('ses_direct', ${direct}),
+            ('ses_invalid', 'relative/path')
+        `)
+        yield* db.run(sql`
+          INSERT INTO event (aggregate_id, seq, type, data) VALUES
+            ('ses_created', 0, 'session.created.1', ${JSON.stringify({ sessionID: "ses_created", location: { directory: created } })}),
+            ('ses_old_created', 0, 'session.created.1', ${JSON.stringify({ sessionID: "ses_old_created", info: { id: "ses_old_created", directory: oldCreated } })}),
+            ('ses_invalid', 0, 'session.created.1', ${JSON.stringify({ sessionID: "ses_invalid", location: { directory: "relative/path" } })}),
+            ('ses_duplicate', 0, 'session.created.1', ${JSON.stringify({ sessionID: "ses_duplicate", location: { directory: created } })}),
+            ('ses_duplicate', 0, 'session.created.1', ${JSON.stringify({ sessionID: "ses_duplicate", location: { directory: created } })}),
+            ('ses_late', 1, 'session.created.1', ${JSON.stringify({ sessionID: "ses_late", location: { directory: created } })}),
+            ('ses_mismatch', 0, 'session.created.1', ${JSON.stringify({ sessionID: "ses_other", location: { directory: created } })}),
+            ('ses_info_mismatch', 0, 'session.created.1', ${JSON.stringify({ sessionID: "ses_info_mismatch", info: { id: "ses_other", directory: oldCreated } })}),
+            ('outside', 0, 'session.created.1', ${JSON.stringify({ sessionID: "ses_external", location: { directory: created } })})
+        `)
+
+        yield* DatabaseMigration.applyOnly(db, [sessionStartDirectoryMigration])
+
+        expect(yield* db.all(sql`SELECT id, start_directory FROM session_v2 ORDER BY id`)).toEqual([
+          { id: "ses_created", start_directory: normalize(created) },
+          { id: "ses_direct", start_directory: normalize(direct) },
+          { id: "ses_duplicate", start_directory: null },
+          { id: "ses_external", start_directory: null },
+          { id: "ses_info_mismatch", start_directory: null },
+          { id: "ses_invalid", start_directory: null },
+          { id: "ses_late", start_directory: null },
+          { id: "ses_mismatch", start_directory: null },
+          { id: "ses_old_created", start_directory: normalize(oldCreated) },
+        ])
+      }),
+    )
+  })
+
+  test("adds execution lease columns to existing sessions", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`CREATE TABLE session_v2 (id text PRIMARY KEY, title text)`)
+        yield* db.run(sql`INSERT INTO session_v2 (id, title) VALUES ('ses_existing', 'Existing')`)
+
+        yield* DatabaseMigration.applyOnly(db, [sessionExecutionLeaseMigration])
+        yield* DatabaseMigration.applyOnly(db, [sessionExecutionLeaseMigration])
+
+        expect(
+          yield* db.get(
+            sql`SELECT id, claim_owner, claim_pid, claim_hostname, claim_updated_at, claim_expires_at FROM session_v2`,
+          ),
+        ).toEqual({
+          id: "ses_existing",
+          claim_owner: null,
+          claim_pid: null,
+          claim_hostname: null,
+          claim_updated_at: null,
+          claim_expires_at: null,
+        })
+        expect(
+          yield* db.get(
+            sql`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'session_v2_claim_expires_idx'`,
+          ),
+        ).toEqual({ name: "session_v2_claim_expires_idx" })
+        expect(yield* db.get(sql`SELECT count(*) AS count FROM migration`)).toEqual({ count: 1 })
+      }),
+    )
+  })
+
+  test("adds private continuation ledger tables to an existing Session database", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`PRAGMA foreign_keys = ON`)
+        yield* db.run(sql`CREATE TABLE session_v2 (id text PRIMARY KEY)`)
+        yield* db.run(sql`INSERT INTO session_v2 (id) VALUES ('parent'), ('child')`)
+
+        yield* DatabaseMigration.applyOnly(db, [sessionSubagentContinuationMigration])
+        yield* DatabaseMigration.applyOnly(db, [sessionSubagentContinuationMigration])
+
+        expect(
+          yield* db.get(
+            sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_subagent_continuation'`,
+          ),
+        ).toEqual({ name: "session_subagent_continuation" })
+        expect(
+          yield* db.get(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_subagent_turn'`),
+        ).toEqual({
+          name: "session_subagent_turn",
+        })
+        expect(
+          yield* db.get(
+            sql`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'session_subagent_continuation_parent_call_idx'`,
+          ),
+        ).toEqual({ name: "session_subagent_continuation_parent_call_idx" })
+
+        yield* db.run(sql`
+          INSERT INTO session_subagent_turn
+            (id, child_session_id, state, time_created, time_updated)
+          VALUES ('turn', 'child', 'active', 1, 1)
+        `)
+        yield* db.run(sql`
+          INSERT INTO session_subagent_continuation
+            (id, parent_session_id, parent_message_id, parent_tool_call_id, child_session_id, agent, description,
+             inbox_id, turn_id, state, prompt_digest, time_created, time_updated)
+          VALUES ('request', 'parent', 'message', 'call', 'child', 'reviewer', 'Review', 'inbox', 'turn',
+                  'bound', 'digest', 1, 1)
+        `)
+        yield* db.run(sql`DELETE FROM session_v2 WHERE id = 'child'`)
+
+        expect(yield* db.get(sql`SELECT id FROM session_subagent_turn`)).toBeUndefined()
+        expect(yield* db.get(sql`SELECT id FROM session_subagent_continuation`)).toBeUndefined()
+        expect(yield* db.get(sql`SELECT count(*) AS count FROM migration`)).toEqual({ count: 1 })
+      }),
+    )
+  })
+
+  test("accepts the predecessor execution lease journal without replaying its DDL", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        const predecessorLeaseID = "20260816053649_session_execution_lease"
+        expect(sessionExecutionLeaseMigration.id).toBe(predecessorLeaseID)
+        expect(
+          migrations
+            .filter((migration) => migration.id.endsWith("_session_execution_lease"))
+            .map((migration) => migration.id),
+        ).toEqual([predecessorLeaseID])
+
+        yield* db.run(sql`
+          CREATE TABLE session_v2 (
+            id text PRIMARY KEY,
+            time_suspended integer,
+            resume_attempts integer DEFAULT 0 NOT NULL,
+            claim_owner text,
+            claim_pid integer,
+            claim_hostname text,
+            claim_updated_at integer,
+            claim_expires_at integer
+          )
+        `)
+        yield* db.run(
+          sql`CREATE INDEX session_v2_claim_expires_idx ON session_v2 (claim_expires_at) WHERE "session_v2"."claim_expires_at" is not null`,
+        )
+        yield* db.run(sql`CREATE TABLE migration (id TEXT PRIMARY KEY, time_completed INTEGER NOT NULL)`)
+        yield* Effect.forEach(
+          migrations.filter((migration) => migration.id !== predecessorLeaseID),
+          (migration) =>
+            db.run(sql`INSERT INTO migration (id, time_completed) VALUES (${migration.id}, ${Date.now()})`),
+          { discard: true },
+        )
+        yield* db.run(sql`INSERT INTO migration (id, time_completed) VALUES (${predecessorLeaseID}, ${Date.now()})`)
+
+        yield* DatabaseMigration.apply(db)
+
+        expect(
+          yield* db.all(sql`SELECT id FROM migration WHERE id LIKE '%session_execution_lease' ORDER BY id`),
+        ).toEqual([{ id: predecessorLeaseID }])
+        expect(
+          yield* db.get(
+            sql`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'session_v2_claim_expires_idx'`,
+          ),
+        ).toEqual({ name: "session_v2_claim_expires_idx" })
+      }),
+    )
+  })
+
+  test("accepts the predecessor start-directory journal without replaying its DDL", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        const predecessorStartDirectoryID = "20260815081049_session_start_directory"
+        expect(sessionStartDirectoryMigration.id).toBe(predecessorStartDirectoryID)
+        expect(
+          migrations
+            .filter((migration) => migration.id.endsWith("_session_start_directory"))
+            .map((migration) => migration.id),
+        ).toEqual([predecessorStartDirectoryID])
+
+        yield* db.run(sql`CREATE TABLE session_v2 (id text PRIMARY KEY, start_directory text)`)
+        yield* db.run(sql`CREATE TABLE migration (id TEXT PRIMARY KEY, time_completed INTEGER NOT NULL)`)
+        yield* Effect.forEach(
+          migrations.filter((migration) => migration.id !== predecessorStartDirectoryID),
+          (migration) =>
+            db.run(sql`INSERT INTO migration (id, time_completed) VALUES (${migration.id}, ${Date.now()})`),
+          { discard: true },
+        )
+        yield* db.run(
+          sql`INSERT INTO migration (id, time_completed) VALUES (${predecessorStartDirectoryID}, ${Date.now()})`,
+        )
+
+        yield* DatabaseMigration.apply(db)
+
+        expect(
+          yield* db.all(sql`SELECT id FROM migration WHERE id LIKE '%session_start_directory' ORDER BY id`),
+        ).toEqual([{ id: predecessorStartDirectoryID }])
+        expect(
+          yield* db.get(sql`SELECT name FROM pragma_table_info('session_v2') WHERE name = 'start_directory'`),
+        ).toEqual({
+          name: "start_directory",
+        })
       }),
     )
   })
@@ -129,6 +551,142 @@ describe("DatabaseMigration", () => {
     )
   })
 
+  test("preserves previous V2 state through the current migration lineage", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`PRAGMA foreign_keys = ON`)
+        yield* db.run(sql`CREATE TABLE migration (id text PRIMARY KEY, time_completed integer NOT NULL)`)
+        yield* db.run(sql`
+          INSERT INTO migration (id, time_completed)
+          VALUES ('20260730195856_optional_session_title', 1)
+        `)
+        yield* db.run(sql`CREATE TABLE project (id text PRIMARY KEY)`)
+        yield* db.run(sql`
+          CREATE TABLE project_directory (
+            project_id text NOT NULL,
+            directory text NOT NULL,
+            type text,
+            strategy text,
+            time_created integer NOT NULL,
+            PRIMARY KEY (project_id, directory)
+          )
+        `)
+        yield* db.run(sql`
+          CREATE TABLE workspace (
+            id text PRIMARY KEY,
+            type text NOT NULL,
+            name text NOT NULL,
+            project_id text NOT NULL,
+            time_used integer NOT NULL
+          )
+        `)
+        yield* db.run(sql`
+          CREATE TABLE session (
+            id text PRIMARY KEY,
+            project_id text NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+            workspace_id text,
+            parent_id text,
+            time_suspended integer
+          )
+        `)
+        yield* db.run(sql`CREATE INDEX session_project_idx ON session (project_id)`)
+        yield* db.run(sql`CREATE INDEX session_workspace_idx ON session (workspace_id)`)
+        yield* db.run(sql`CREATE INDEX session_parent_idx ON session (parent_id)`)
+        yield* db.run(
+          sql`CREATE INDEX session_time_suspended_idx ON session (time_suspended) WHERE "session"."time_suspended" IS NOT NULL`,
+        )
+        yield* db.run(sql`
+          CREATE TABLE session_message (
+            id text PRIMARY KEY,
+            session_id text NOT NULL REFERENCES session(id) ON DELETE CASCADE,
+            data text NOT NULL
+          )
+        `)
+        yield* db.run(sql`CREATE TABLE message (id text PRIMARY KEY, session_id text NOT NULL)`)
+        yield* db.run(sql`
+          CREATE TABLE session_pending (
+            id text PRIMARY KEY,
+            session_id text NOT NULL REFERENCES session(id) ON DELETE CASCADE
+          )
+        `)
+        yield* db.run(sql`CREATE TABLE event_sequence (aggregate_id text PRIMARY KEY, seq integer NOT NULL)`)
+        yield* db.run(sql`
+          CREATE TABLE event (
+            id text PRIMARY KEY,
+            aggregate_id text NOT NULL REFERENCES event_sequence(aggregate_id) ON DELETE CASCADE,
+            seq integer NOT NULL,
+            created integer NOT NULL,
+            type text NOT NULL,
+            data text NOT NULL
+          )
+        `)
+        yield* db.run(sql`CREATE TABLE data_migration (name text PRIMARY KEY)`)
+        yield* db.run(sql`INSERT INTO project VALUES ('project')`)
+        yield* db.run(sql`INSERT INTO project_directory VALUES ('project', '/repo', 'main', NULL, 1)`)
+        yield* db.run(sql`INSERT INTO session VALUES ('session', 'project', NULL, NULL, NULL)`)
+        yield* db.run(sql`INSERT INTO session_message VALUES ('message', 'session', '{"text":"preserved"}')`)
+        yield* db.run(sql`INSERT INTO session_pending VALUES ('pending', 'session')`)
+        yield* db.run(sql`INSERT INTO event_sequence VALUES ('session', 41)`)
+        yield* db.run(sql`INSERT INTO event VALUES ('event', 'session', 41, 1, 'session.text.ended.1', '{}')`)
+
+        yield* DatabaseMigration.applyOnly(db, [
+          previousV2Migration,
+          workspaceMigration,
+          executionClaimsMigration,
+          sessionInboxMigration,
+          worktreeMigration,
+        ])
+
+        expect(yield* db.get(sql`SELECT id, resume_attempts FROM session_v2`)).toEqual({
+          id: "session",
+          resume_attempts: 0,
+        })
+        expect(yield* db.get(sql`SELECT id, data FROM session_message`)).toEqual({
+          id: "message",
+          data: '{"text":"preserved"}',
+        })
+        expect(yield* db.get(sql`SELECT id FROM session_pending`)).toEqual({ id: "pending" })
+        expect(yield* db.get(sql`SELECT seq FROM event_sequence`)).toEqual({ seq: 41 })
+        expect(yield* db.get(sql`SELECT id, seq FROM event`)).toEqual({ id: "event", seq: 41 })
+        expect(
+          yield* db.get(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session'`),
+        ).toBeUndefined()
+        expect(yield* db.get(sql`SELECT directory FROM worktree`)).toEqual({ directory: "/repo" })
+        expect(yield* db.all<{ table: string }>(sql`PRAGMA foreign_key_list(session_message)`)).toContainEqual(
+          expect.objectContaining({ table: "session_v2" }),
+        )
+        expect(yield* db.all<{ table: string }>(sql`PRAGMA foreign_key_list(session_pending)`)).toContainEqual(
+          expect.objectContaining({ table: "session_v2" }),
+        )
+      }),
+    )
+  })
+
+  test("rejects previous V2 databases with V1-only session history", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`CREATE TABLE migration (id text PRIMARY KEY, time_completed integer NOT NULL)`)
+        yield* db.run(sql`
+          INSERT INTO migration (id, time_completed)
+          VALUES ('20260730195856_optional_session_title', 1)
+        `)
+        yield* db.run(sql`CREATE TABLE session (id text PRIMARY KEY)`)
+        yield* db.run(sql`CREATE TABLE session_message (id text PRIMARY KEY, session_id text NOT NULL)`)
+        yield* db.run(sql`CREATE TABLE message (id text PRIMARY KEY, session_id text NOT NULL)`)
+        yield* db.run(sql`INSERT INTO session VALUES ('session')`)
+        yield* db.run(sql`INSERT INTO message VALUES ('message', 'session')`)
+
+        expect((yield* Effect.exit(DatabaseMigration.applyOnly(db, [previousV2Migration])))._tag).toBe("Failure")
+        expect(yield* db.get(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session'`)).toEqual({
+          name: "session",
+        })
+        expect(yield* db.get(sql`SELECT id FROM migration WHERE id = ${previousV2Migration.id}`)).toBeUndefined()
+      }),
+    )
+  })
+
   test("copies project directories into worktrees without removing the old table", async () => {
     await run(
       Effect.gen(function* () {
@@ -154,65 +712,15 @@ describe("DatabaseMigration", () => {
     )
   })
 
-  test("backfills immutable Session start directories only from exact persisted creation facts", async () => {
-    await run(
-      Effect.gen(function* () {
-        const db = yield* makeDb
-        yield* db.run(sql`CREATE TABLE session_v2 (id text PRIMARY KEY)`)
-        yield* db.run(
-          sql`CREATE TABLE event (aggregate_id text NOT NULL, seq integer NOT NULL, type text NOT NULL, data text NOT NULL)`,
-        )
-        yield* db.run(sql`CREATE TABLE session (id text PRIMARY KEY, start_directory text)`)
-        const direct = path.resolve("legacy-direct-start")
-        const created = path.resolve("v2-created-start")
-        const oldCreated = path.resolve("v1-created-start")
-        const normalize = (value: string) => (process.platform === "win32" ? value.replaceAll("\\", "/") : value)
-        yield* db.run(sql`
-          INSERT INTO session_v2 (id) VALUES
-            ('ses_direct'), ('ses_created'), ('ses_old_created'), ('ses_invalid'), ('ses_duplicate'),
-            ('ses_late'), ('ses_mismatch'), ('ses_info_mismatch'), ('ses_external')
-        `)
-        yield* db.run(sql`
-          INSERT INTO session (id, start_directory) VALUES
-            ('ses_direct', ${direct}),
-            ('ses_invalid', 'relative/path')
-        `)
-        yield* db.run(sql`
-          INSERT INTO event (aggregate_id, seq, type, data) VALUES
-            ('ses_created', 0, 'session.created.1', ${JSON.stringify({ sessionID: "ses_created", location: { directory: created } })}),
-            ('ses_old_created', 0, 'session.created.1', ${JSON.stringify({ sessionID: "ses_old_created", info: { id: "ses_old_created", directory: oldCreated } })}),
-            ('ses_invalid', 0, 'session.created.1', ${JSON.stringify({ sessionID: "ses_invalid", location: { directory: "relative/path" } })}),
-            ('ses_duplicate', 0, 'session.created.1', ${JSON.stringify({ sessionID: "ses_duplicate", location: { directory: created } })}),
-            ('ses_duplicate', 0, 'session.created.1', ${JSON.stringify({ sessionID: "ses_duplicate", location: { directory: created } })}),
-            ('ses_late', 1, 'session.created.1', ${JSON.stringify({ sessionID: "ses_late", location: { directory: created } })}),
-            ('ses_mismatch', 0, 'session.created.1', ${JSON.stringify({ sessionID: "ses_other", location: { directory: created } })}),
-            ('ses_info_mismatch', 0, 'session.created.1', ${JSON.stringify({ sessionID: "ses_info_mismatch", info: { id: "ses_other", directory: oldCreated } })}),
-            ('outside', 0, 'session.created.1', ${JSON.stringify({ sessionID: "ses_external", location: { directory: created } })})
-        `)
-
-        yield* DatabaseMigration.applyOnly(db, [sessionStartDirectoryMigration])
-
-        expect(yield* db.all(sql`SELECT id, start_directory FROM session_v2 ORDER BY id`)).toEqual([
-          { id: "ses_created", start_directory: normalize(created) },
-          { id: "ses_direct", start_directory: normalize(direct) },
-          { id: "ses_duplicate", start_directory: null },
-          { id: "ses_external", start_directory: null },
-          { id: "ses_info_mismatch", start_directory: null },
-          { id: "ses_invalid", start_directory: null },
-          { id: "ses_late", start_directory: null },
-          { id: "ses_mismatch", start_directory: null },
-          { id: "ses_old_created", start_directory: normalize(oldCreated) },
-        ])
-      }),
-    )
-  })
-
   test("imports legacy JSON credentials without changing the source file or existing credentials", async () => {
     await using tmp = await tmpdir()
     const source = path.join(tmp.path, "auth.json")
     const content = JSON.stringify({
       openai: { type: "oauth", refresh: "refresh", access: "access", expires: 123, accountId: "account" },
       anthropic: { type: "api", key: "legacy-key", metadata: { region: "us" } },
+      google: { type: "api", key: "google-key", metadata: { region: "us" } },
+      "github-copilot": { type: "oauth", refresh: "refresh", access: "access", expires: 123 },
+      "custom-provider": { type: "api", key: "custom-key" },
       "https://example.com/": { type: "wellknown", key: "TOKEN", token: "wellknown-key" },
       invalid: { type: "unknown" },
     })
@@ -230,6 +738,7 @@ describe("DatabaseMigration", () => {
 
         yield* db.run(sql`DELETE FROM migration WHERE id = ${legacyCredentialsMigration.id}`)
         yield* DatabaseMigration.applyOnly(db, [legacyCredentialsMigration])
+        yield* DatabaseMigration.applyOnly(db, [legacyCredentialsMigration])
 
         expect(yield* db.all(sql`SELECT integration_id, label, value FROM credential ORDER BY integration_id`)).toEqual(
           [
@@ -239,13 +748,34 @@ describe("DatabaseMigration", () => {
               value: JSON.stringify({ type: "key", key: "current-key" }),
             },
             {
+              integration_id: "custom-provider",
+              label: "API key",
+              value: JSON.stringify({ type: "key", key: "custom-key" }),
+            },
+            {
+              integration_id: "github-copilot",
+              label: "OAuth",
+              value: JSON.stringify({
+                type: "oauth",
+                methodID: "device",
+                refresh: "refresh",
+                access: "access",
+                expires: 123,
+              }),
+            },
+            {
+              integration_id: "google",
+              label: "API key",
+              value: JSON.stringify({ type: "key", key: "google-key", metadata: { region: "us" } }),
+            },
+            {
               integration_id: "https://example.com",
-              label: "default",
+              label: "API key",
               value: JSON.stringify({ type: "key", key: "wellknown-key" }),
             },
             {
               integration_id: "openai",
-              label: "default",
+              label: "OAuth",
               value: JSON.stringify({
                 type: "oauth",
                 methodID: "chatgpt-browser",

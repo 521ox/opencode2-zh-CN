@@ -1,7 +1,7 @@
 export * as SessionStore from "./store.js"
 
-import { and, eq, isNotNull, isNull, lte, or, sql } from "drizzle-orm"
-import { Context, Effect, Layer, Schema } from "effect"
+import { and, eq, isNotNull, isNull, lte, notInArray, or, sql } from "drizzle-orm"
+import { Context, Effect, Layer } from "effect"
 import { Database } from "../database/database.js"
 import { makeGlobalNode } from "@opencode-ai/util/effect/app-node"
 import { SessionHistory } from "./history.js"
@@ -30,31 +30,31 @@ export interface Interface {
   /** Reads immutable lineage facts used to derive one Session rules directory. */
   readonly rulesParent: (sessionID: Session.ID) => Effect.Effect<SessionRulesLocation.SessionParent | undefined>
   readonly context: (sessionID: Session.ID) => Effect.Effect<SessionMessage.Info[], MessageDecodeError>
+  readonly pendingToolCalls: (
+    sessionID: Session.ID,
+  ) => Effect.Effect<ReadonlyArray<SessionHistory.PendingToolCall>, MessageDecodeError>
   readonly message: (
     messageID: SessionMessage.ID,
   ) => Effect.Effect<{ readonly sessionID: Session.ID; readonly message: SessionMessage.Info } | undefined>
   /**
-   * Top-level Sessions holding an execution claim. Child (subagent) Sessions
-   * are excluded: a resumed parent re-runs its tool call and spawns fresh
-   * children, so resuming orphaned children would duplicate their work.
+   * Top-level Sessions holding an execution claim. Recoverable background
+   * children are resumed separately through their durable Job records.
    */
   readonly listSuspended: () => Effect.Effect<ReadonlyArray<Session.ID>>
   /**
-   * Records the execution claim: the durable write-ahead intent that a turn is
-   * (or was) in flight. Set when execution starts; a claim that survives to the
-   * next boot marks a turn that never completed — its process crashed or shut
-   * down mid-turn.
+   * Atomically acquires or renews a process-scoped execution lease. A surviving
+   * claim marks a turn that did not terminalize before its owner stopped.
    */
   readonly claim: (sessionID: Session.ID, owner: Owner) => Effect.Effect<boolean>
+  readonly owns: (sessionID: Session.ID, owner: Owner) => Effect.Effect<boolean>
   readonly touch: (sessionID: Session.ID, owner: Owner) => Effect.Effect<boolean>
   /** Releases the claim and resets resume accounting. Terminal events call this on commit. */
   readonly release: (sessionID: Session.ID, owner: Owner) => Effect.Effect<boolean>
   /**
-   * Clears orphaned child (subagent) claims. Children are never resumed
-   * independently, so a dead child's claim is noise no terminal will ever
-   * release.
+   * Clears unowned, legacy, or expired non-recoverable child claims. A fresh
+   * child lease or a current recoverable Job remains untouched during cleanup.
    */
-  readonly releaseChildClaims: (owner: Owner) => Effect.Effect<void>
+  readonly releaseChildClaims: (recoverable: ReadonlyArray<Session.ID>, owner?: Owner) => Effect.Effect<void>
   readonly expireOwner: (owner: Owner) => Effect.Effect<void>
   /**
    * Durably counts one more resume of an orphaned claim, returning the new
@@ -69,10 +69,9 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const { db } = yield* Database.Service
-    const decodeMessage = Schema.decodeUnknownEffect(SessionMessage.Info)
 
     return Service.of({
-      get: Effect.fn("SessionStore.get")(function* (sessionID) {
+      get: Effect.fnUntraced(function* (sessionID) {
         const row = yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie)
         return row ? fromRow(row) : undefined
       }),
@@ -95,9 +94,10 @@ const layer = Layer.effect(
             }
           : undefined
       }),
-      context: Effect.fn("SessionStore.context")(function* (sessionID) {
-        return yield* SessionHistory.load(db, sessionID)
-      }),
+      context: Effect.fn("SessionStore.context")((sessionID) => SessionHistory.load(db, sessionID)),
+      pendingToolCalls: Effect.fn("SessionStore.pendingToolCalls")((sessionID) =>
+        SessionHistory.pendingToolCalls(db, sessionID),
+      ),
       message: Effect.fn("SessionStore.message")(function* (messageID) {
         const row = yield* db
           .select()
@@ -105,12 +105,9 @@ const layer = Layer.effect(
           .where(eq(SessionMessageTable.id, messageID))
           .get()
           .pipe(Effect.orDie)
-        return row
-          ? {
-              sessionID: Session.ID.make(row.session_id),
-              message: yield* decodeMessage({ ...row.data, id: row.id, type: row.type }).pipe(Effect.orDie),
-            }
-          : undefined
+        if (!row) return undefined
+        const [message] = yield* SessionHistory.hydrateMessageRows(db, [row]).pipe(Effect.orDie)
+        return { sessionID: Session.ID.make(row.session_id), message }
       }),
       listSuspended: Effect.fn("SessionStore.listSuspended")(function* () {
         return yield* db
@@ -152,6 +149,16 @@ const layer = Layer.effect(
           .pipe(Effect.orDie)
         return row !== undefined
       }),
+      owns: Effect.fn("SessionStore.owns")(function* (sessionID, owner) {
+        const row = yield* db
+          .update(SessionTable)
+          .set({ time_updated: sql`${SessionTable.time_updated}` })
+          .where(and(eq(SessionTable.id, sessionID), eq(SessionTable.claim_owner, owner.id)))
+          .returning({ id: SessionTable.id })
+          .get()
+          .pipe(Effect.orDie)
+        return row !== undefined
+      }),
       touch: Effect.fn("SessionStore.touch")(function* (sessionID, owner) {
         const now = Date.now()
         const row = yield* db
@@ -186,8 +193,11 @@ const layer = Layer.effect(
           .pipe(Effect.orDie)
         return row !== undefined
       }),
-      releaseChildClaims: Effect.fn("SessionStore.releaseChildClaims")(function* (owner) {
+      releaseChildClaims: Effect.fn("SessionStore.releaseChildClaims")(function* (recoverable, owner) {
         const now = Date.now()
+        const ownerLegacyClaim = owner
+          ? and(eq(SessionTable.claim_owner, owner.id), isNull(SessionTable.claim_expires_at))
+          : undefined
         yield* db
           .update(SessionTable)
           .set({
@@ -204,11 +214,8 @@ const layer = Layer.effect(
             and(
               isNotNull(SessionTable.time_suspended),
               isNotNull(SessionTable.parent_id),
-              or(
-                isNull(SessionTable.claim_owner),
-                lte(SessionTable.claim_expires_at, now),
-                and(eq(SessionTable.claim_owner, owner.id), isNull(SessionTable.claim_expires_at)),
-              ),
+              recoverable.length > 0 ? notInArray(SessionTable.id, Array.from(recoverable)) : undefined,
+              or(isNull(SessionTable.claim_owner), lte(SessionTable.claim_expires_at, now), ownerLegacyClaim),
             ),
           )
           .run()

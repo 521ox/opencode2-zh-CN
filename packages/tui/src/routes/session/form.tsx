@@ -12,8 +12,7 @@ import {
 import open from "open"
 import { useTheme, useThemes } from "../../context/theme"
 import type { FormAnswer, FormField, FormValue } from "@opencode-ai/client"
-import type { FormWithLocation } from "../../context/data"
-import { useClient } from "../../context/client"
+import { useData, type FormWithLocation } from "../../context/data"
 import { useClipboard } from "../../context/clipboard"
 import { SplitBorder } from "../../ui/border"
 import { useToast } from "../../ui/toast"
@@ -42,22 +41,8 @@ function truncate(label: string, max: number) {
   return label.length > max ? label.slice(0, max - 1).trimEnd() + "…" : label
 }
 
-function requestOptions(form: FormWithLocation) {
-  if (form.sessionID !== "global" || !form.location) return undefined
-  return {
-    headers: {
-      "x-opencode-directory": encodeURIComponent(form.location.directory),
-      ...(form.location.workspaceID ? { "x-opencode-workspace": form.location.workspaceID } : {}),
-    },
-  }
-}
-
-export function FormPrompt(props: {
-  form: FormWithLocation
-  onReply?: (answer: FormAnswer) => void | Promise<void>
-  onCancel?: () => void | Promise<void>
-}) {
-  const client = useClient()
+export function FormPrompt(props: { form: FormWithLocation }) {
+  const data = useData()
   const i18n = useI18n()
   const themes = useThemes()
   const theme = useTheme("elevated")
@@ -265,16 +250,9 @@ export function FormPrompt(props: {
   }
 
   function reply(answer: FormAnswer) {
-    void Promise.resolve()
-      .then(() =>
-        props.onReply
-          ? props.onReply(answer)
-          : client.api.form.reply(
-              { sessionID: props.form.sessionID, formID: props.form.id, answer },
-              requestOptions(props.form),
-            ),
-      )
-      .catch((error: unknown) => setStore("error", errorMessage(error)))
+    void data.session.form
+      .reply({ sessionID: props.form.sessionID, formID: props.form.id, answer }, props.form.location)
+      .catch(showError)
   }
 
   function replySingle(field: FormAnswerField, value: FormValue) {
@@ -347,15 +325,41 @@ export function FormPrompt(props: {
     pick(row.value)
   }
 
+  function pasteCustom(value: string) {
+    const current = answerField()
+    if (!current || textual() || !custom() || confirm()) return false
+    setStore("selected", rows().length)
+    updateCustom(current, input() + value)
+    setStore("editing", true)
+    return true
+  }
+
   usePaste((event) => {
     if (keymap.mode.current() !== FORM_MODE) return
-    const current = answerField()
-    if (!current || textual() || !custom() || confirm()) return
+    const value = stripAnsiSequences(decodePasteBytes(event.bytes)).replace(/\r\n?/g, "\n")
+    if (store.editing && renderer.currentFocusedEditor === textarea) {
+      textarea.insertText(value)
+      event.preventDefault()
+      return
+    }
+    if (!pasteCustom(value)) return
     event.preventDefault()
-    setStore("selected", rows().length)
-    updateCustom(current, input() + stripAnsiSequences(decodePasteBytes(event.bytes)).replace(/\r\n?/g, "\n"))
-    setStore("editing", true)
   })
+
+  function pasteClipboard() {
+    return clipboard
+      .read()
+      .then((content) => {
+        if (content?.mime !== "text/plain") return
+        const value = stripAnsiSequences(content.data).replace(/\r\n?/g, "\n")
+        if (store.editing || textual()) {
+          textarea?.insertText(value)
+          return
+        }
+        pasteCustom(value)
+      })
+      .catch(toast.error)
+  }
 
   function commitInput(text: string) {
     const current = answerField()
@@ -444,11 +448,13 @@ export function FormPrompt(props: {
   }
 
   function cancel() {
-    if (props.onCancel) {
-      void props.onCancel()
-      return
-    }
-    void client.api.form.cancel({ sessionID: props.form.sessionID, formID: props.form.id }, requestOptions(props.form))
+    void data.session.form
+      .cancel({ sessionID: props.form.sessionID, formID: props.form.id }, props.form.location)
+      .catch(showError)
+  }
+
+  function showError(error: unknown) {
+    setStore("error", errorMessage(error))
   }
 
   function openExternal() {
@@ -517,6 +523,23 @@ export function FormPrompt(props: {
 
   Keymap.createLayer(() => ({
     mode: FORM_MODE,
+    enabled: !confirm() && answerField() !== undefined,
+    commands: [
+      {
+        id: "prompt.paste",
+        title: i18n.t("ui.prompt.paste"),
+        group: i18n.t("session.group.form"),
+        run: (_input, event) => {
+          event?.preventDefault()
+          event?.stopPropagation()
+          return pasteClipboard()
+        },
+      },
+    ],
+  }))
+
+  Keymap.createLayer(() => ({
+    mode: FORM_MODE,
     priority: 1,
     enabled: (store.editing || textual()) && !confirm(),
     commands: [
@@ -527,6 +550,10 @@ export function FormPrompt(props: {
         run() {
           const text = textarea?.plainText ?? ""
           if (!text) {
+            if (textual()) {
+              cancel()
+              return
+            }
             setStore("editing", false)
             return
           }
@@ -794,12 +821,12 @@ export function FormPrompt(props: {
         <Show when={!single() && !tabbed()}>
           <box flexDirection="row" gap={3} paddingLeft={1}>
             <text fg={theme.text.subdued}>
-                {confirm()
-                  ? i18n.t("session.form.review")
-                  : i18n.t("session.form.fieldProgress", {
-                      current: Math.min(store.tab, fields().length - 1) + 1,
-                      total: fields().length,
-                    })}
+              {confirm()
+                ? i18n.t("session.form.review")
+                : i18n.t("session.form.fieldProgress", {
+                    current: Math.min(store.tab, fields().length - 1) + 1,
+                    total: fields().length,
+                  })}
             </text>
             <Show when={fields().length > 0}>
               <text fg={theme.text.subdued}>
@@ -977,7 +1004,13 @@ export function FormPrompt(props: {
                               <text
                                 width={4}
                                 flexShrink={0}
-                                fg={picked() ? theme.text.feedback.success.default : theme.text.subdued}
+                                fg={
+                                  active()
+                                    ? theme.text.formfield.focused
+                                    : picked()
+                                      ? theme.text.formfield.selected
+                                      : theme.text.subdued
+                                }
                               >
                                 [{picked() ? "✓" : " "}]
                               </text>
@@ -987,7 +1020,7 @@ export function FormPrompt(props: {
                             </text>
                           </box>
                           <Show when={!multi()}>
-                            <text fg={theme.text.feedback.success.default}>{picked() ? " ✓" : ""}</text>
+                            <text fg={theme.text.formfield.selected}>{picked() ? " ✓" : ""}</text>
                           </Show>
                         </box>
                         <Show when={row.description}>
@@ -1026,7 +1059,13 @@ export function FormPrompt(props: {
                           <text
                             width={4}
                             flexShrink={0}
-                            fg={customChecked() ? theme.text.feedback.success.default : theme.text.subdued}
+                            fg={
+                              other()
+                                ? theme.text.formfield.focused
+                                : customChecked()
+                                  ? theme.text.formfield.selected
+                                  : theme.text.subdued
+                            }
                           >
                             [{customChecked() ? "✓" : " "}]
                           </text>
@@ -1039,7 +1078,7 @@ export function FormPrompt(props: {
                                 {input() || i18n.t("session.form.ownAnswer")}
                               </text>
                               <Show when={!multi() && customPicked()}>
-                                <text fg={theme.text.feedback.success.default}>✓</text>
+                                <text fg={theme.text.formfield.selected}>✓</text>
                               </Show>
                             </>
                           }
@@ -1109,8 +1148,7 @@ export function FormPrompt(props: {
                     </box>
                   )
                 }
-                const value = () =>
-                  formDisplayValue(item, store.answers[item.key], i18n.t("session.form.none"), i18n.t)
+                const value = () => formDisplayValue(item, store.answers[item.key], i18n.t("session.form.none"), i18n.t)
                 const answered = () => store.answers[item.key] !== undefined
                 const missing = () => !answered() && item.required === true
                 const invalid = () => formValidateValue(item, store.answers[item.key], i18n.t)
@@ -1128,12 +1166,12 @@ export function FormPrompt(props: {
                                 : theme.text.subdued,
                         }}
                       >
-                          {invalid() ??
-                            (answered()
-                              ? value()
-                              : missing()
-                                ? i18n.t("session.form.required")
-                                : i18n.t("session.form.notAnswered"))}
+                        {invalid() ??
+                          (answered()
+                            ? value()
+                            : missing()
+                              ? i18n.t("session.form.required")
+                              : i18n.t("session.form.notAnswered"))}
                       </span>
                     </text>
                   </box>

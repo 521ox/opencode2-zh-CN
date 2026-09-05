@@ -142,9 +142,9 @@ type Permit = {
 }
 
 type State = {
-  t: Translator
   id: string
   thinking: boolean
+  t: Translator
   footer: FooterApi
   msg: number
   part: number
@@ -157,9 +157,9 @@ type State = {
 }
 
 type Input = {
-  t: Translator
   sessionID: string
   thinking: boolean
+  t: Translator
   footer: FooterApi
 }
 
@@ -911,9 +911,9 @@ function intro(state: State): void {
 
 export function createRunDemo(input: Input) {
   const state: State = {
-    t: input.t,
     id: input.sessionID,
     thinking: input.thinking,
+    t: input.t,
     footer: input.footer,
     msg: 0,
     part: 0,
@@ -1023,8 +1023,8 @@ export function createRunDemo(input: Input) {
     doneTool(state, form.ref, {
       output: `${state.t("mini.demo.formSubmitted", {
         answer: Object.entries(input.answer)
-        .map(([key, value]) => `${key}=${Array.isArray(value) ? value.join(", ") : String(value)}`)
-        .join("; "),
+          .map(([key, value]) => `${key}=${Array.isArray(value) ? value.join(", ") : String(value)}`)
+          .join("; "),
       })}\n`,
       metadata: { answer: input.answer },
     })

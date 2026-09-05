@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { subscribeNotifications } from "../../../../src/feature-plugins/system/notifications"
 import type { OpenCodeEvent, PermissionAsked } from "@opencode-ai/client"
-import type { AttentionNotifyOptions, Context } from "@opencode-ai/plugin/tui/context"
+import type { AttentionNotifyOptions, Context, Route, ToastOptions } from "@opencode-ai/plugin/tui/context"
 import { translate, type Translator } from "../../../../src/i18n"
 
 type Session = { id: string; title: string; parentID?: string }
@@ -9,11 +9,15 @@ const english: Translator = (key, params) => translate("en", key, params)
 const cleanups: Array<() => void> = []
 
 afterEach(() => {
-  cleanups.splice(0).reverse().forEach((cleanup) => cleanup())
+  cleanups
+    .splice(0)
+    .reverse()
+    .forEach((cleanup) => cleanup())
 })
 
-async function setup() {
+async function setup(route: Route = { type: "session", sessionID: "session" }, t: Translator = english) {
   const notifications: AttentionNotifyOptions[] = []
+  const toasts: ToastOptions[] = []
   const handlers = new Map<OpenCodeEvent["type"], ((event: OpenCodeEvent) => void)[]>()
   const session = (id: string, title: string, parentID?: string): Session => ({
     id,
@@ -28,6 +32,10 @@ async function setup() {
   }
 
   const context = {
+    ui: {
+      router: { current: () => route },
+      toast: { show: (toast: ToastOptions) => toasts.push(toast) },
+    },
     attention: {
       async notify(input: AttentionNotifyOptions) {
         notifications.push(input)
@@ -56,10 +64,11 @@ async function setup() {
       },
     },
   } as unknown as Context
-  cleanups.push(subscribeNotifications(context, english))
+  cleanups.push(subscribeNotifications(context, t))
 
   return {
     notifications,
+    toasts,
     emit(event: OpenCodeEvent) {
       for (const handler of handlers.get(event.type) ?? []) handler(event)
     },
@@ -148,6 +157,28 @@ const permissionNotification: AttentionNotifyOptions = {
 }
 
 describe("internal notifications TUI plugin", () => {
+  test("shows localized execution failures only in the viewed session", async () => {
+    const chinese: Translator = (key, params) => translate("zh", key, params)
+    const harness = await setup({ type: "session", sessionID: "session" }, chinese)
+    harness.emit(executionStarted("started"))
+    harness.emit(executionFailed("failed"))
+    harness.emit(executionFailed("duplicate"))
+    expect(harness.toasts).toEqual([{ title: "会话执行失败", message: "boom", variant: "error" }])
+    harness.emit(executionStarted("retry"))
+    harness.emit(executionFailed("failed-again"))
+    expect(harness.toasts).toHaveLength(2)
+  })
+
+  test.each<Route>([{ type: "home" }, { type: "session", sessionID: "other" }])(
+    "keeps other sessions' failures out of the current composer (%j)",
+    async (route) => {
+      const harness = await setup(route)
+      harness.emit(executionFailed("failed"))
+      expect(harness.toasts).toEqual([])
+      expect(harness.notifications).toHaveLength(1)
+    },
+  )
+
   test("notifies for form and permission requests with blurred notifications and always-on sounds", async () => {
     const harness = await setup()
 

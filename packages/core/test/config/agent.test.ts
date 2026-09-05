@@ -5,7 +5,7 @@ import { Effect, Fiber, Schema, Stream } from "effect"
 import { Agent } from "@opencode-ai/core/agent"
 import { Bus } from "@opencode-ai/core/bus"
 import { Config } from "@opencode-ai/core/config"
-import { Directory, Document, Info } from "@opencode-ai/schema/config"
+import { Directory, Document, Event, Info } from "@opencode-ai/schema/config"
 import { ConfigAgentPlugin } from "@opencode-ai/core/config/plugin/agent"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/util/effect/layer-node"
@@ -482,6 +482,27 @@ Use native v2 fields.`,
         }).pipe(Effect.provide(Config.testLayer([directoryEntry(tmp.path)]))),
       ),
     ),
+  )
+
+  it.effect("rebuilds on a config update published immediately after startup", () =>
+    Effect.gen(function* () {
+      const agents = yield* Agent.Service
+      const bus = yield* Bus.Service
+      let reloads = 0
+      yield* ConfigAgentPlugin.Plugin.effect(
+        host({
+          agent: {
+            ...agentHost(agents),
+            reload: () => agents.reload().pipe(Effect.tap(() => Effect.sync(() => reloads++))),
+          },
+          event: { subscribe: () => bus.subscribe(Event.Updated) },
+        }),
+      )
+
+      yield* bus.publish(Event.Updated, {})
+      yield* advance(() => reloads >= 1)
+      expect(reloads).toBe(1)
+    }).pipe(Effect.provide(Config.testLayer([]))),
   )
 
   it.effect("ignores updates outside agent source directories", () =>

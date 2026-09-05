@@ -35,6 +35,7 @@ const configuredRoute = (input: Config) => {
   return BedrockConverse.route.with({
     ...rest,
     provider: id,
+    providerMetadataKey: "bedrock",
     endpoint: { baseURL: baseURL ?? bedrockBaseURL(resolvedRegion) },
     auth: apiKey === undefined ? BedrockConverse.sigV4Auth(credentials) : Auth.bearer(apiKey),
   })
@@ -62,7 +63,6 @@ export const model: ProviderPackage.Definition<Settings>["model"] = (modelID, se
     generation: settings.topP === undefined ? undefined : { topP: settings.topP },
     headers: settings.headers === undefined ? undefined : { ...settings.headers },
     http: settings.body === undefined ? undefined : { body: { ...settings.body } },
-    limits: settings.limits,
     region: settings.region,
   }).model(modelID)
 }

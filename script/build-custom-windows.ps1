@@ -1,9 +1,10 @@
 param(
-  [string] $PublishDirectory = "D:\opencode2-zh-CN-nightly-windows-x64",
+  [string] $PublishDirectory,
   [switch] $SkipInstall,
   [switch] $SkipWebUI,
   [switch] $Baseline,
   [switch] $RunServiceSmoke,
+  [switch] $DryRun,
   [ValidateSet("PinnedCanary", "Current", "MovingCanary")]
   [string] $CompileRuntime = "PinnedCanary",
   [string] $CompileRuntimeCache = "$env:LOCALAPPDATA\opencode-build\bun",
@@ -283,6 +284,12 @@ function Get-PinnedBunRuntime {
 }
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$PublishDirectory = if ([string]::IsNullOrWhiteSpace($PublishDirectory)) {
+  Join-Path $repoRoot "dist\windows-x64"
+}
+else {
+  $PublishDirectory
+}
 $rootPackage = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "package.json") | ConvertFrom-Json
 $cliPackage = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "packages\cli\package.json") | ConvertFrom-Json
 $requiredBun = $rootPackage.packageManager -replace '^bun@', ''
@@ -317,6 +324,10 @@ try {
   $pushedLocation = $true
   $sourceBefore = Get-GitSourceState -Repository $repoRoot -Git "git"
 
+  if ($DryRun -and $RunServiceSmoke) {
+    throw "-DryRun and -RunServiceSmoke cannot be combined"
+  }
+
   switch ($CompileRuntime) {
     "PinnedCanary" {
       $compileRuntimeInfo = Get-PinnedBunRuntime -IsBaseline ([bool] $Baseline) -CacheRoot $CompileRuntimeCache
@@ -340,13 +351,35 @@ try {
     }
   }
 
-  if (-not $SkipInstall) {
-    & $bun install --frozen-lockfile
-    if ($LASTEXITCODE -ne 0) {
-      throw "bun install --frozen-lockfile failed"
+  if ($DryRun) {
+    if ($CompileRuntime -eq "MovingCanary") {
+      throw "MovingCanary cannot be identity-checked without compiling; use PinnedCanary or Current"
     }
+    $sourceAfter = Get-GitSourceState -Repository $repoRoot -Git "git"
+    if ($sourceBefore.Commit -ne $sourceAfter.Commit -or $sourceBefore.Porcelain -cne $sourceAfter.Porcelain) {
+      throw "Source changed during dry identity check"
+    }
+    [pscustomobject]@{
+      DryRun = $true
+      Version = $version
+      SourceCommit = $sourceBefore.Commit
+      SourceDirty = $sourceBefore.Dirty
+      BuildBunVersion = $actualBun
+      CompileTarget = $compileTarget
+      CompileRuntimeMode = $CompileRuntime
+      CompileRuntimeVersion = $compileRuntimeInfo.Version
+      CompileRuntimeRevision = $compileRuntimeInfo.Revision
+      CompileRuntimePath = $compileRuntimeInfo.Path
+      CompileRuntimeSHA256 = $compileRuntimeInfo.SHA256
+      CompileRuntimeAssetId = $compileRuntimeInfo.AssetId
+      CompileRuntimeAssetName = $compileRuntimeInfo.AssetName
+      CompileRuntimeZipSHA256 = $compileRuntimeInfo.ZipSHA256
+      CompileRuntimeCacheHit = $compileRuntimeInfo.CacheHit
+    } | Format-List
+    return
   }
 
+  # Dependency installation is an explicit prerequisite; this wrapper always reuses the current installation.
   $env:OPENCODE_CHANNEL = "latest"
   $env:OPENCODE_VERSION = $version
 
@@ -402,7 +435,7 @@ try {
 
   $publishParent = Split-Path -Parent $PublishDirectory
   if (-not (Test-Path -LiteralPath $publishParent)) {
-    throw "Publish parent directory not found: $publishParent"
+    New-Item -ItemType Directory -Force -Path $publishParent | Out-Null
   }
   if (-not (Test-Path -LiteralPath $PublishDirectory)) {
     New-Item -ItemType Directory -Path $PublishDirectory | Out-Null
@@ -418,11 +451,14 @@ try {
   Copy-Item -Force -LiteralPath $builtExe -Destination $rootExe
   Copy-Item -Force -LiteralPath $builtExe -Destination $timestampedExe
 
+  $builtLength = (Get-Item -LiteralPath $builtExe).Length
+  $rootLength = (Get-Item -LiteralPath $rootExe).Length
+  $timestampedLength = (Get-Item -LiteralPath $timestampedExe).Length
   $builtHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $builtExe).Hash
   $rootHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $rootExe).Hash
   $timestampedHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $timestampedExe).Hash
-  if ($builtHash -ne $rootHash -or $builtHash -ne $timestampedHash) {
-    throw "Exported binary hash mismatch"
+  if ($builtLength -ne $rootLength -or $builtLength -ne $timestampedLength -or $builtHash -ne $rootHash -or $builtHash -ne $timestampedHash) {
+    throw "Exported binary identity mismatch"
   }
 
   $metadata = [ordered]@{
@@ -441,7 +477,7 @@ try {
     CompileRuntimeZipSHA256 = $compileRuntimeInfo.ZipSHA256
     CompileRuntimeCacheHit = $compileRuntimeInfo.CacheHit
     Candidate = $timestampedExe
-    CandidateLength = (Get-Item -LiteralPath $timestampedExe).Length
+    CandidateLength = $timestampedLength
     CandidateSHA256 = $timestampedHash
     WebUI = -not $SkipWebUI
     Baseline = [bool] $Baseline
@@ -466,7 +502,7 @@ try {
     Worktree = $rootExe
     Timestamped = $timestampedExe
     Metadata = $timestampedMetadata
-    Length = (Get-Item -LiteralPath $rootExe).Length
+    Length = $builtLength
     SHA256 = $builtHash
     WebUI = -not $SkipWebUI
     Baseline = [bool] $Baseline

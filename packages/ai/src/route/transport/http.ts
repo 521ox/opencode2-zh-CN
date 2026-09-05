@@ -21,6 +21,7 @@ export interface HttpPrepared<Frame> {
   readonly request: HttpClientRequest.HttpClientRequest
   readonly framing: Framing.Definition<Frame>
   readonly middleware?: HttpMiddleware
+  readonly dispatch?: RequestExecutor.HttpDispatch
 }
 
 const applyQuery = (url: string, query: Record<string, string> | undefined) => {
@@ -30,23 +31,32 @@ const applyQuery = (url: string, query: Record<string, string> | undefined) => {
   return next.toString()
 }
 
-const bodyWithOverlay = <Body>(body: Body, request: LLMRequest, encodeBody: (body: Body) => string) =>
+const bodyWithOverlay = <Body>(
+  body: Body,
+  request: LLMRequest,
+  encodeBody: (body: Body) => string,
+  finalizeBody?: HttpJsonInput<Body, unknown>["finalizeBody"],
+) =>
   Effect.gen(function* () {
-    if (request.http?.body === undefined) return { jsonBody: body, bodyText: encodeBody(body) }
+    if (request.http?.body === undefined && !finalizeBody) return { jsonBody: body, bodyText: encodeBody(body) }
     if (ProviderShared.isRecord(body)) {
-      const overlaid = mergeJsonRecords(body, request.http.body) ?? {}
-      return { jsonBody: overlaid, bodyText: ProviderShared.encodeJson(overlaid) }
+      const overlaid = mergeJsonRecords(body, request.http?.body) ?? {}
+      const finalized = finalizeBody?.(overlaid) ?? overlaid
+      return { jsonBody: finalized, bodyText: ProviderShared.encodeJson(finalized) }
     }
     return yield* ProviderShared.invalidRequest("http.body can only overlay JSON object request bodies")
   })
 
-export const jsonRequestParts = <Body>(input: JsonRequestInput<Body>) =>
+export const jsonRequestParts = <Body>(
+  input: JsonRequestInput<Body>,
+  finalizeBody?: HttpJsonInput<Body, unknown>["finalizeBody"],
+) =>
   Effect.gen(function* () {
     const url = applyQuery(
       renderEndpoint(input.endpoint, { request: input.request, body: input.body }).toString(),
       input.request.http?.query,
     )
-    const body = yield* bodyWithOverlay(input.body, input.request, input.encodeBody)
+    const body = yield* bodyWithOverlay(input.body, input.request, input.encodeBody, finalizeBody)
     const headers = yield* Auth.toEffect(input.auth)({
       request: input.request,
       method: "POST",
@@ -60,8 +70,41 @@ export const jsonRequestParts = <Body>(input: JsonRequestInput<Body>) =>
     return { url, jsonBody: body.jsonBody, bodyText: body.bodyText, headers }
   })
 
+const finalizeRequest = Effect.fn("HttpTransport.finalizeRequest")(function* (input: {
+  readonly candidate: HttpClientRequest.HttpClientRequest
+  readonly request: LLMRequest
+  readonly auth: Auth.Definition
+  readonly finalizeBody: NonNullable<HttpJsonInput<unknown, unknown>["finalizeBody"]>
+}) {
+  const web = yield* HttpClientRequest.toWeb(input.candidate).pipe(
+    Effect.mapError((cause) => ProviderShared.invalidRequest("HTTP middleware produced an invalid request", cause)),
+  )
+  if (web.body === null) return yield* ProviderShared.invalidRequest("HTTP middleware must provide a JSON body")
+  const text = yield* Effect.promise(() => web.clone().text())
+  let decoded: unknown
+  try {
+    decoded = JSON.parse(text)
+  } catch {
+    return yield* ProviderShared.invalidRequest("HTTP middleware produced a malformed JSON body")
+  }
+  if (!ProviderShared.isRecord(decoded))
+    return yield* ProviderShared.invalidRequest("HTTP middleware must provide a JSON object body")
+  const body = ProviderShared.encodeJson(input.finalizeBody(decoded))
+  const candidate = HttpClientRequest.bodyText(input.candidate, body, "application/json")
+  const headers = yield* Auth.toEffect(input.auth)({
+    request: input.request,
+    method: candidate.method,
+    url: web.url,
+    body,
+    headers: candidate.headers,
+  })
+  return HttpClientRequest.updateHeaders(candidate, () => headers)
+})
+
 export interface HttpJsonInput<_Body, Frame> {
   readonly framing: Framing.Definition<Frame>
+  /** Canonicalize the final JSON body after raw overlays and before authentication. */
+  readonly finalizeBody?: (body: Record<string, unknown>) => Record<string, unknown>
 }
 
 export type HttpJsonPatch<Body, Frame> = Partial<HttpJsonInput<Body, Frame>>
@@ -75,20 +118,38 @@ export const httpJson = <Body, Frame>(input: HttpJsonInput<Body, Frame>): HttpJs
   with: (patch) => httpJson({ ...input, ...patch }),
   prepare: (prepareInput) =>
     Effect.gen(function* () {
-      const parts = yield* jsonRequestParts({ ...prepareInput })
+      const parts = yield* jsonRequestParts({ ...prepareInput }, input.finalizeBody)
       const request = ProviderShared.jsonPost({
         url: parts.url,
         body: parts.bodyText,
         headers: parts.headers,
       })
+      const finalizeBody = input.finalizeBody
       return {
         request,
         framing: input.framing,
         middleware: prepareInput.middleware,
+        dispatch:
+          finalizeBody === undefined
+            ? undefined
+            : (candidate) =>
+                finalizeRequest({
+                  candidate,
+                  request: prepareInput.request,
+                  auth: prepareInput.auth,
+                  finalizeBody,
+                }),
       }
     }),
-  frames: (prepared, _request, runtime) =>
-    prepared.framing.frame(RequestExecutor.stream(runtime.http, prepared.request, prepared.middleware)),
+  execute: (prepared, _request, runtime) =>
+    Effect.gen(function* () {
+      const response = yield* runtime.http.execute(prepared.request, prepared.middleware, prepared.dispatch)
+      return {
+        frames: prepared.framing.frame(RequestExecutor.responseStream(response)),
+        http: RequestExecutor.responseHttp(response),
+        body: prepared.framing.body,
+      }
+    }),
 })
 
 export const sseJson = {

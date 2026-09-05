@@ -29,10 +29,7 @@ export const slimAssistantForRemoteFunctionCalls = (
       item.type === "tool" && item.executed !== true && matchesRemoteFunctionCall(item.id, ids),
   )
   if (content.length === 0) return undefined
-  return SessionMessage.Assistant.make({
-    ...assistant,
-    content,
-  })
+  return SessionMessage.Assistant.make({ ...assistant, content })
 }
 
 export const attachRemoteCompactionToolResults = (

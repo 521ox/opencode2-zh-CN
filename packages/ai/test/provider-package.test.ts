@@ -1,8 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { LLM } from "@opencode-ai/ai"
-import { model, webSearch } from "@opencode-ai/ai/providers/openai"
-import { compileRequest } from "@opencode-ai/ai/route/client"
-import { Effect } from "effect"
+import { model } from "@opencode-ai/ai/providers/openai"
 
 describe("provider package entrypoints", () => {
   test("semantic API aliases expose the same contract", async () => {
@@ -29,6 +26,10 @@ describe("provider package entrypoints", () => {
       import("@opencode-ai/ai/providers/amazon-bedrock/mantle"),
       import("@opencode-ai/ai/providers/amazon-bedrock/mantle/chat"),
       import("@opencode-ai/ai/providers/amazon-bedrock/mantle/responses"),
+      import("@opencode-ai/ai/providers/togetherai"),
+      import("@opencode-ai/ai/providers/cerebras"),
+      import("@opencode-ai/ai/providers/deepinfra"),
+      import("@opencode-ai/ai/providers/groq"),
     ])
 
     for (const module of modules) expect(module.model).toBeFunction()
@@ -36,6 +37,24 @@ describe("provider package entrypoints", () => {
     expect(modules[8].model).toBe(modules[9].model)
     expect(modules[12].model).toBe(modules[13].model)
     expect(modules[19].model).toBe(modules[20].model)
+  })
+
+  test("maps DeepInfra package settings onto its native executable model", async () => {
+    const DeepInfra = await import("@opencode-ai/ai/providers/deepinfra")
+    const settings = {
+      apiKey: "fixture",
+      baseURL: "https://provider.example.test/v1/",
+      headers: { "x-application": "opencode" },
+      body: { service_tier: "priority" },
+      providerOptions: { reasoningEffort: "high" as const },
+    }
+    const deepinfra = DeepInfra.model("google/gemma-3-27b-it", settings)
+
+    expect(deepinfra.route.id).toBe("deepinfra-chat")
+    expect(deepinfra.route.endpoint.baseURL).toBe("https://provider.example.test/v1/openai")
+    expect(deepinfra.route.defaults.providerOptions).toEqual(settings.providerOptions)
+    expect(deepinfra.route.defaults.headers).toEqual(settings.headers)
+    expect(deepinfra.route.defaults.http?.body).toEqual(settings.body)
   })
 
   test("maps OpenRouter and xAI package settings onto executable models", async () => {
@@ -46,25 +65,23 @@ describe("provider package entrypoints", () => {
       baseURL: "https://provider.example.test/v1",
       headers: { "x-application": "opencode" },
       body: { service_tier: "priority" },
-      limits: { context: 200_000, output: 64_000 },
     }
     const openrouter = OpenRouter.model("anthropic/claude-sonnet-4", {
       ...settings,
-      providerOptions: { openrouter: { usage: true } },
+      providerOptions: { usage: true },
     })
     const xai = XAI.model("grok-4", {
       ...settings,
-      providerOptions: { xai: { reasoningEffort: "high" } },
+      providerOptions: { reasoningEffort: "high" },
     })
 
     for (const selected of [openrouter, xai]) {
       expect(selected.route.endpoint.baseURL).toBe(settings.baseURL)
       expect(selected.route.defaults.headers).toEqual(settings.headers)
       expect(selected.route.defaults.http?.body).toEqual(settings.body)
-      expect(selected.route.defaults.limits).toEqual(settings.limits)
     }
-    expect(openrouter.route.defaults.providerOptions).toEqual({ openrouter: { usage: true } })
-    expect(xai.route.defaults.providerOptions).toMatchObject({ xai: { reasoningEffort: "high", store: false } })
+    expect(openrouter.route.defaults.providerOptions).toEqual({ usage: true })
+    expect(xai.route.defaults.providerOptions).toMatchObject({ reasoningEffort: "high", store: false })
   })
 
   test("maps package settings onto the executable model", () => {
@@ -73,46 +90,12 @@ describe("provider package entrypoints", () => {
       baseURL: "https://api.openai.test/v1",
       headers: { "x-application": "opencode" },
       body: { service_tier: "priority" },
-      limits: { context: 200_000, output: 64_000 },
       unrelatedInheritedSetting: true,
     })
 
     expect(selected.route.id).toBe("openai-responses")
     expect(selected.route.defaults.headers).toEqual({ "x-application": "opencode" })
     expect(selected.route.defaults.http?.body).toEqual({ service_tier: "priority" })
-    expect(selected.route.defaults.limits).toEqual({ context: 200_000, output: 64_000 })
-  })
-
-  test("lowers flat OpenAI package settings into the Responses request", async () => {
-    const selected = model("gpt-5.6-sol", {
-      apiKey: "fixture",
-      reasoningEffort: "max",
-      reasoningSummary: "auto",
-      textVerbosity: "high",
-      include: ["reasoning.encrypted_content"],
-    })
-    const prepared = await Effect.runPromise(compileRequest(LLM.request({ model: selected, prompt: "Hello" })))
-
-    expect(prepared.body).toMatchObject({
-      store: false,
-      reasoning: { effort: "max", summary: "auto" },
-      text: { verbosity: "high" },
-      include: ["reasoning.encrypted_content"],
-    })
-  })
-
-  test("selects transport without changing the semantic API", () => {
-    expect(model("gpt-5", { apiKey: "fixture" }).route.id).toBe("openai-responses")
-    expect(model("gpt-5", { apiKey: "fixture", transport: "websocket" }).route.id).toBe("openai-responses-websocket")
-  })
-
-  test("exports the OpenAI hosted web search factory", async () => {
-    const selected = model("gpt-5", { apiKey: "fixture" })
-    const prepared = await Effect.runPromise(
-      compileRequest(LLM.request({ model: selected, prompt: "Search", tools: [webSearch()] })),
-    )
-
-    expect(prepared.body.tools).toEqual([{ type: "web_search" }])
   })
 
   test("maps OpenAI-compatible Responses settings onto the executable model", async () => {
@@ -123,8 +106,7 @@ describe("provider package entrypoints", () => {
       provider: "example",
       headers: { "x-application": "opencode" },
       body: { service_tier: "priority" },
-      limits: { context: 200_000, output: 64_000 },
-      providerOptions: { openresponses: { reasoningEffort: "low", store: true } },
+      providerOptions: { reasoningEffort: "low", store: true },
     })
 
     expect(String(selected.provider)).toBe("example")
@@ -135,9 +117,10 @@ describe("provider package entrypoints", () => {
     })
     expect(selected.route.defaults.headers).toEqual({ "x-application": "opencode" })
     expect(selected.route.defaults.http?.body).toEqual({ service_tier: "priority" })
-    expect(selected.route.defaults.limits).toEqual({ context: 200_000, output: 64_000 })
     expect(selected.route.defaults.providerOptions).toEqual({
-      openresponses: { reasoningEffort: "low", store: true },
+      reasoningEffort: "low",
+      store: true,
+      include: ["reasoning.encrypted_content"],
     })
   })
 
@@ -149,8 +132,7 @@ describe("provider package entrypoints", () => {
       provider: "example",
       headers: { "x-application": "opencode" },
       body: { metadata: { user_id: "user_1" } },
-      limits: { context: 200_000, output: 64_000 },
-      providerOptions: { anthropic: { effort: "low" } },
+      providerOptions: { effort: "low" },
     })
 
     expect(String(selected.provider)).toBe("example")
@@ -161,20 +143,17 @@ describe("provider package entrypoints", () => {
     })
     expect(selected.route.defaults.headers).toEqual({ "x-application": "opencode" })
     expect(selected.route.defaults.http?.body).toEqual({ metadata: { user_id: "user_1" } })
-    expect(selected.route.defaults.limits).toEqual({ context: 200_000, output: 64_000 })
-    expect(selected.route.defaults.providerOptions).toEqual({ anthropic: { effort: "low" } })
+    expect(selected.route.defaults.providerOptions).toEqual({ effort: "low" })
   })
 
   test("maps Anthropic provider options onto the executable model", async () => {
     const Anthropic = await import("@opencode-ai/ai/providers/anthropic")
     const selected = Anthropic.model("claude-sonnet-4-6", {
       apiKey: "fixture",
-      providerOptions: { anthropic: { thinking: { type: "adaptive" } } },
+      providerOptions: { thinking: { type: "adaptive" } },
     })
 
-    expect(selected.route.defaults.providerOptions).toEqual({
-      anthropic: { thinking: { type: "adaptive" } },
-    })
+    expect(selected.route.defaults.providerOptions).toEqual({ thinking: { type: "adaptive" } })
   })
 
   test("requires an Anthropic-compatible base URL at runtime", async () => {
@@ -224,7 +203,6 @@ describe("provider package entrypoints", () => {
       resourceName: "opencode-test",
       headers: { "x-application": "opencode" },
       body: { service_tier: "priority" },
-      limits: { context: 200_000, output: 64_000 },
     }
 
     const responses = AzureResponses.model("deployment", settings)
@@ -235,7 +213,6 @@ describe("provider package entrypoints", () => {
     expect(responses.route.endpoint.baseURL).toBe("https://opencode-test.openai.azure.com/openai/v1")
     expect(responses.route.defaults.headers).toEqual({ "x-application": "opencode" })
     expect(responses.route.defaults.http?.body).toEqual({ service_tier: "priority" })
-    expect(responses.route.defaults.limits).toEqual({ context: 200_000, output: 64_000 })
     expect(chat.route.id).toBe("azure-openai-chat")
   })
 
@@ -267,18 +244,14 @@ describe("provider package entrypoints", () => {
       baseURL: "https://generativelanguage.test/v1beta",
       headers: { "x-application": "opencode" },
       body: { safetySettings: [] },
-      limits: { context: 1_000_000, output: 65_536 },
-      providerOptions: { gemini: { thinkingConfig: { thinkingBudget: 1_024 } } },
+      providerOptions: { thinkingConfig: { thinkingBudget: 1_024 } },
     })
 
     expect(selected.route.id).toBe("gemini")
     expect(selected.route.endpoint.baseURL).toBe("https://generativelanguage.test/v1beta")
     expect(selected.route.defaults.headers).toEqual({ "x-application": "opencode" })
     expect(selected.route.defaults.http?.body).toEqual({ safetySettings: [] })
-    expect(selected.route.defaults.limits).toEqual({ context: 1_000_000, output: 65_536 })
-    expect(selected.route.defaults.providerOptions).toEqual({
-      gemini: { thinkingConfig: { thinkingBudget: 1_024 } },
-    })
+    expect(selected.route.defaults.providerOptions).toEqual({ thinkingConfig: { thinkingBudget: 1_024 } })
   })
 
   test("selects Vertex entrypoints with the same model contract", async () => {
@@ -291,7 +264,6 @@ describe("provider package entrypoints", () => {
       apiKey: "fixture",
       headers: { "x-application": "opencode" },
       body: { safetySettings: [] },
-      limits: { context: 1_000_000, output: 65_536 },
     })
     const messages = GoogleVertexMessages.model("claude-sonnet-4-6", {
       accessToken: "fixture",
@@ -315,7 +287,6 @@ describe("provider package entrypoints", () => {
     expect(gemini.route.endpoint.baseURL).toBe("https://aiplatform.googleapis.com/v1/publishers/google")
     expect(gemini.route.defaults.headers).toEqual({ "x-application": "opencode" })
     expect(gemini.route.defaults.http?.body).toEqual({ safetySettings: [] })
-    expect(gemini.route.defaults.limits).toEqual({ context: 1_000_000, output: 65_536 })
     expect(
       GoogleVertex.model("gemini-3.5-flash", {
         accessToken: "fixture",
@@ -340,7 +311,10 @@ describe("provider package entrypoints", () => {
       baseURL: "https://aiplatform.googleapis.com/v1/projects/vertex-project/locations/global/endpoints/openapi",
       path: "/responses",
     })
-    expect(responses.route.defaults.providerOptions).toEqual({ openresponses: { store: false } })
+    expect(responses.route.defaults.providerOptions).toEqual({
+      store: false,
+      include: ["reasoning.encrypted_content"],
+    })
   })
 
   test("rejects conflicting Vertex auth settings at runtime", async () => {

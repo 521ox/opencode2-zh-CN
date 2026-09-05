@@ -3,7 +3,7 @@ export * as Patch from "./patch.js"
 import { Result, Schema } from "effect"
 import { Bom } from "./bom.js"
 
-export class BoundaryError extends Schema.TaggedErrorClass<BoundaryError>()("Patch.BoundaryError", {
+export class BoundaryError extends Schema.TaggedError<BoundaryError>()("Patch.BoundaryError", {
   boundary: Schema.Literals(["first", "last"]),
 }) {
   override get message() {
@@ -11,7 +11,7 @@ export class BoundaryError extends Schema.TaggedErrorClass<BoundaryError>()("Pat
   }
 }
 
-export class InvalidHunkError extends Schema.TaggedErrorClass<InvalidHunkError>()("Patch.InvalidHunkError", {
+export class InvalidHunkError extends Schema.TaggedError<InvalidHunkError>()("Patch.InvalidHunkError", {
   line: Schema.String,
   lineNumber: Schema.Number,
   reason: Schema.optional(Schema.String),
@@ -130,10 +130,9 @@ export function derive(path: string, chunks: ReadonlyArray<UpdateFileChunk>, ori
   const lines = source.text.split("\n")
   if (lines.at(-1) === "") lines.pop()
   const replacements = computeReplacements(lines, path, chunks)
-  const updated = [...lines]
-  for (const [start, remove, insert] of replacements.toReversed()) updated.splice(start, remove, ...insert)
-  if (updated.at(-1) !== "") updated.push("")
-  const next = Bom.split(updated.join("\n"))
+  for (const [start, remove, insert] of replacements.reverse()) lines.splice(start, remove, ...insert)
+  if (lines.at(-1) !== "") lines.push("")
+  const next = Bom.split(lines.join("\n"))
   return { content: next.text, bom: source.bom || next.bom }
 }
 
@@ -339,7 +338,7 @@ function computeReplacements(lines: ReadonlyArray<string>, path: string, chunks:
     replacements.push([found, oldLines.length, newLines])
     lineIndex = found + oldLines.length
   }
-  return replacements.toSorted((left, right) => left[0] - right[0])
+  return replacements.sort((left, right) => left[0] - right[0])
 }
 
 function seek(lines: ReadonlyArray<string>, pattern: ReadonlyArray<string>, start: number, eof = false) {

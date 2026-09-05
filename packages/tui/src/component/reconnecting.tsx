@@ -3,9 +3,9 @@ import { useI18n } from "../context/i18n"
 import { useTheme } from "../context/theme"
 import { Spinner } from "./spinner"
 
-export function Reconnecting() {
-  const theme = useTheme("elevated")
+export function Reconnecting(props: { managed?: boolean }) {
   const { t } = useI18n()
+  const theme = useTheme("elevated")
 
   return (
     <box
@@ -30,8 +30,12 @@ export function Reconnecting() {
         paddingRight={2}
         gap={1}
       >
-        <Spinner color={theme.text.default}>{t("ui.reconnecting.restarting")}</Spinner>
-        <text fg={theme.text.subdued}>{t("ui.reconnecting.resume")}</text>
+        <Spinner color={theme.text.default}>
+          {props.managed ? t("ui.reconnecting.restarting") : t("ui.reconnecting.connectionLost")}
+        </Spinner>
+        <text fg={theme.text.subdued}>
+          {props.managed ? t("ui.reconnecting.resume") : t("ui.reconnecting.reconnecting")}
+        </text>
       </box>
     </box>
   )

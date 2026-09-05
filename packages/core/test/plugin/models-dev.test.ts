@@ -216,6 +216,82 @@ describe("ModelsDevPlugin", () => {
     }),
   )
 
+  it.effect("keeps a shared snapshot pristine while catalog transforms mutate their copies", () =>
+    Effect.gen(function* () {
+      const integrations = yield* Integration.Service
+      const catalog = yield* Catalog.Service
+      const providerID = Provider.ID.make("acme")
+      const modelID = Model.ID.make("gpt-5.4")
+      const body = JSON.parse('{"__proto__":{"service_tier":"priority"},"keep":true}') as Record<
+        string,
+        unknown
+      >
+      const snapshot = [
+        {
+          info: {
+            id: providerID,
+            name: "Acme",
+            activation: "auto",
+            package: Provider.aisdk("@ai-sdk/openai-compatible"),
+            settings: { baseURL: "https://api.acme.test/v1" },
+          },
+          environment: ["ACME_API_KEY"],
+          models: [
+            {
+              id: modelID,
+              modelID,
+              providerID,
+              name: "GPT-5.4",
+              settings: { baseURL: "https://models.acme.test/v1" },
+              body,
+              capabilities: { tools: true, input: ["text"], output: ["text"] },
+              variants: [],
+              time: { released: Date.parse("2026-01-01") },
+              cost: [],
+              status: "active",
+              enabled: true,
+              limit: { context: 1_050_000, output: 128_000 },
+            },
+          ],
+        },
+      ] satisfies readonly ModelsDev.Snapshot[]
+      const pristine = JSON.stringify(snapshot)
+
+      yield* ModelsDevPlugin.effect(
+        host({
+          catalog: catalogHost(catalog),
+          integration: integrationHost(integrations),
+        }),
+      ).pipe(
+        Effect.provideService(
+          ModelsDev.Service,
+          ModelsDev.Service.of({ get: () => Effect.succeed(snapshot), refresh: () => Effect.void }),
+        ),
+      )
+
+      const copied = (yield* catalog.model.get(providerID, modelID))?.body
+      expect(copied).not.toBe(body)
+      expect(Object.hasOwn(copied ?? {}, "__proto__")).toBe(true)
+      expect(Object.keys(copied ?? {})).toEqual(["__proto__", "keep"])
+      expect(JSON.stringify(copied)).toBe(JSON.stringify(body))
+      expect(copied).not.toHaveProperty("service_tier")
+
+      yield* catalog.transform((editor) => {
+        editor.provider.update(providerID, (provider) => {
+          if (provider.settings) provider.settings.baseURL = "https://override.acme.test/v1"
+        })
+        editor.model.update(providerID, modelID, (model) => {
+          if (model.settings) model.settings.baseURL = "https://override.models.acme.test/v1"
+          model.capabilities.input.push("image")
+        })
+      })
+
+      expect((yield* catalog.provider.get(providerID))?.settings?.baseURL).toBe("https://override.acme.test/v1")
+      expect((yield* catalog.model.get(providerID, modelID))?.capabilities.input).toEqual(["text", "image"])
+      expect(JSON.stringify(snapshot)).toBe(pristine)
+    }),
+  )
+
   it.effect("omits deprecated models from the catalog", () =>
     Effect.gen(function* () {
       const integrations = yield* Integration.Service
@@ -421,8 +497,48 @@ describe("ModelsDevPlugin", () => {
       expect(yield* integrations.get(Integration.ID.make("google-vertex"))).toBeDefined()
       expect(yield* integrations.get(Integration.ID.make("azure-cognitive-services"))).toBeUndefined()
       expect(yield* integrations.get(Integration.ID.make("google-vertex-anthropic"))).toBeUndefined()
-      expect(ProviderPlugins.map((plugin) => plugin.id)).not.toContain("opencode.provider.azure-cognitive-services")
-      expect(ProviderPlugins.map((plugin) => plugin.id)).not.toContain("opencode.provider.google-vertex-anthropic")
+      expect(ProviderPlugins.map((plugin) => plugin.id)).not.toContain("opencode.provider.azure.cognitive.services")
+      expect(ProviderPlugins.map((plugin) => plugin.id)).not.toContain("opencode.provider.google.vertex.anthropic")
+    }),
+  )
+
+  it.effect("advertises only key-bearing Google Vertex environment variables", () =>
+    Effect.gen(function* () {
+      const integrations = yield* Integration.Service
+      const catalog = yield* Catalog.Service
+
+      yield* ModelsDevPlugin.effect(
+        host({
+          catalog: catalogHost(catalog),
+          integration: integrationHost(integrations),
+        }),
+      ).pipe(
+        Effect.provideService(
+          ModelsDev.Service,
+          ModelsDev.Service.of({
+            get: () =>
+              Effect.succeed([
+                {
+                  info: {
+                    id: Provider.ID.make("google-vertex"),
+                    name: "Google Vertex",
+                    activation: "auto",
+                    package: Provider.aisdk("@ai-sdk/google-vertex"),
+                  },
+                  environment: ["GOOGLE_VERTEX_PROJECT", "GOOGLE_VERTEX_LOCATION", "GOOGLE_APPLICATION_CREDENTIALS"],
+                  models: [],
+                },
+              ] satisfies readonly ModelsDev.Snapshot[]),
+            refresh: () => Effect.void,
+          }),
+        ),
+      )
+
+      // Vertex authenticates through ADC; project, location, and the credentials
+      // file path are configuration, not API keys.
+      expect(yield* integrations.get(Integration.ID.make("google-vertex"))).toMatchObject({
+        methods: [{ type: "key" }, { type: "env", names: ["GOOGLE_VERTEX_API_KEY"] }],
+      })
     }),
   )
 

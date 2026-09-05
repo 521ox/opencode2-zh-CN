@@ -4,8 +4,8 @@ import { useTheme } from "../context/theme"
 import { Spinner } from "./spinner"
 
 export function StartupLoading(props: { ready: () => boolean }) {
-  const theme = useTheme("elevated")
   const { t } = useI18n()
+  const theme = useTheme("elevated")
   const [show, setShow] = createSignal(false)
   const text = createMemo(() => (props.ready() ? t("ui.startup.finishing") : t("ui.startup.loadingPlugins")))
   let wait: NodeJS.Timeout | undefined

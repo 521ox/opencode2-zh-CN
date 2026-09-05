@@ -5,8 +5,8 @@ import { useData } from "../../../context/data"
 import { useClient } from "../../../context/client"
 import { useTheme } from "../../../context/theme"
 import { Keymap } from "../../../context/keymap"
-import { useComposerTab } from "./index"
 import { useI18n } from "../../../context/i18n"
+import { useComposerTab } from "./index"
 
 export function ShellTab(props: { sessionID: string }) {
   const data = useData()
@@ -45,7 +45,9 @@ export function ShellTab(props: { sessionID: string }) {
       id: "shell",
       label: i18n.t("session.composer.shell"),
       hints: () =>
-        selectedEntry() ? [{ label: i18n.t("session.composer.kill"), shortcut: shortcuts.get("composer.shell.kill") ?? "" }] : [],
+        selectedEntry()
+          ? [{ label: i18n.t("session.composer.kill"), shortcut: shortcuts.get("composer.shell.kill") ?? "" }]
+          : [],
     })
     onCleanup(cleanup)
   })

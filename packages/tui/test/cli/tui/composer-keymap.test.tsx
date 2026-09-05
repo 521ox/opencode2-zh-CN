@@ -93,10 +93,10 @@ async function renderComposer(
   const app = await testRender(
     () => (
       <TestTuiContexts directory={directory}>
-        <ConfigProvider config={createTuiResolvedConfig({ keybinds })}>
+        <ConfigProvider config={createTuiResolvedConfig({ keybinds, session: { terminal: false } })}>
           <Keymap.Provider>
             <ClientProvider api={createApi(calls.fetch)}>
-              <DataProvider>
+              <DataProvider directory={process.cwd()}>
                 <LocationProvider>
                   <RouteProvider initialRoute={{ type: "session", sessionID: "parent" }}>
                     <ThemeProvider mode="dark" source={{ discover: async () => ({}) }}>
@@ -187,18 +187,12 @@ test("configured composer bindings work with a focused textarea", async () => {
   }
 })
 
-test("renders the shared close icon instead of an esc label", async () => {
-  const composer = await renderComposer("subagents", {})
+test("ctrl+c closes the active composer", async () => {
+  const composer = await renderComposer("shell", {})
+
   try {
-    const frame = composer.app.captureCharFrame()
-    const lines = frame.split("\n")
-    const y = lines.findIndex((line) => line.includes("×"))
-    expect(y).toBeGreaterThanOrEqual(0)
-    const header = lines[y] ?? ""
-    const x = header.indexOf("×")
-    expect(x).toBeGreaterThanOrEqual(2)
-    expect(header.slice(x - 2, x + 1)).toBe("  ×")
-    expect(header).not.toContain("esc")
+    composer.app.mockInput.pressKey("c", { ctrl: true })
+    await composer.app.waitFor(() => composer.closed() === 1)
   } finally {
     composer.app.renderer.destroy()
   }

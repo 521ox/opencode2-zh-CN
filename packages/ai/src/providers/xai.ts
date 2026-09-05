@@ -1,19 +1,21 @@
 import { AuthOptions, type ProviderAuthOption } from "../route/auth-options.js"
-import { Route, type RouteDefaultsInput } from "../route/client.js"
+import { Route, type RouteDefaultsInput, type CompactOperation } from "../route/client.js"
 import { Endpoint } from "../route/endpoint.js"
-import { HttpOptions, ProviderID, type ModelID, type ProviderOptions } from "../schema/index.js"
+import { HttpOptions, ProviderID, type ModelID } from "../schema/index.js"
 import * as OpenAICompatibleProfiles from "./openai-compatible-profile.js"
 import * as OpenAICompatibleChat from "../protocols/openai-compatible-chat.js"
 import * as OpenAIChat from "../protocols/openai-chat.js"
-import * as OpenAIResponses from "../protocols/openai-responses.js"
+import { OpenResponsesChannel } from "../protocols/open-responses-channel.js"
+import { XAIResponses } from "../protocols/xai-responses.js"
 import { XAIImages } from "../protocols/xai-images.js"
 import type { OpenAIOptionsInput } from "./openai-options.js"
 import type { ProviderPackage } from "../provider-package.js"
 
 export const id = ProviderID.make("xai")
 
-export type XAIProviderOptionsInput = ProviderOptions & {
-  readonly xai?: OpenAIOptionsInput
+export type XAIProviderOptionsInput = OpenAIOptionsInput & {
+  readonly contextManagement?: never
+  readonly compactThreshold?: never
 }
 
 export type LanguageModelOptions = Omit<RouteDefaultsInput, "providerOptions"> &
@@ -30,14 +32,21 @@ export interface Settings extends ProviderPackage.Settings {
 
 export type { XAIImageOptions } from "../protocols/xai-images.js"
 
+const RESPONSES_WEBSOCKET_ROTATE_AFTER_MS = 24 * 60 * 1000
+
 const responsesRoute = Route.make({
+  compact: XAIResponses.compact,
   id: "openai-responses",
   provider: id,
   providerMetadataKey: "xai",
-  protocol: OpenAIResponses.protocol,
+  protocol: XAIResponses.protocol,
   endpoint: Endpoint.path("/responses", { baseURL: OpenAICompatibleProfiles.profiles.xai.baseURL }),
-  transport: OpenAIResponses.httpTransport,
-  defaults: { providerOptions: { xai: { store: false } } },
+  transport: OpenResponsesChannel.transport({
+    id: "openai-responses",
+    name: "xAI Responses",
+    rotateAfterMs: RESPONSES_WEBSOCKET_ROTATE_AFTER_MS,
+  }),
+  defaults: { providerOptions: { store: false, include: ["reasoning.encrypted_content"] } },
 })
 
 const chatRoute = Route.make({
@@ -97,13 +106,15 @@ export const configure = (input: LanguageModelOptions = {}) => {
 }
 
 export const provider = configure()
-export const model: ProviderPackage.Definition<Settings, XAIProviderOptionsInput>["model"] = (modelID, settings) =>
+export const model: ProviderPackage.Definition<Settings, XAIProviderOptionsInput, CompactOperation>["model"] = (
+  modelID,
+  settings,
+) =>
   configure({
     apiKey: settings.apiKey,
     baseURL: settings.baseURL,
     headers: settings.headers,
     http: settings.body === undefined ? undefined : { body: { ...settings.body } },
-    limits: settings.limits,
     providerOptions: settings.providerOptions,
   }).model(modelID)
 export const responses = provider.responses

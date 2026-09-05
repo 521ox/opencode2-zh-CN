@@ -1,11 +1,11 @@
 import type { IntegrationOAuthMethodRegistration } from "@opencode-ai/plugin/effect/integration"
 import { define } from "@opencode-ai/plugin/effect/plugin"
 import { Deferred, Effect, Option, Schema, Semaphore, Stream } from "effect"
+import type { Server } from "node:http"
 import { App } from "../../app.js"
 import { Credential } from "../../credential.js"
 import { Bus } from "../../bus.js"
 import { Integration } from "../../integration.js"
-import { Model } from "../../model.js"
 import { OauthCallbackPage } from "../../oauth/page.js"
 import { Provider } from "../../provider.js"
 import type { PluginInternal } from "../internal.js"
@@ -13,6 +13,9 @@ import type { PluginInternal } from "../internal.js"
 const clientID = "app_EMoamEEZ73f0CkXaXp7hrann"
 const issuer = "https://auth.openai.com"
 const callbackPort = 1455
+const callbackFallbackPort = 1457
+const callbackBindAttempts = 10
+const callbackBindRetryDelay = 200
 const pollingSafetyMargin = 3000
 const codexBaseURL = "https://chatgpt.com/backend-api/codex"
 const browserMethodID = Integration.MethodID.make("chatgpt-browser")
@@ -56,11 +59,10 @@ const browser = (app: App.Info) =>
         const pkce = yield* Effect.promise(generatePKCE)
         const state = base64UrlEncode(crypto.getRandomValues(new Uint8Array(32)).buffer)
         const code = yield* Deferred.make<string, Error>()
-        const redirect = `http://localhost:${callbackPort}/auth/callback`
         // Lazy so runtimes without a loopback listener (workerd) never evaluate node:http.
         const { createServer } = yield* Effect.promise(() => import("node:http"))
         const server = createServer((request, response) => {
-          const url = new URL(request.url ?? "/", `http://localhost:${callbackPort}`)
+          const url = new URL(request.url ?? "/", "http://localhost")
           if (url.pathname !== "/auth/callback") {
             response.writeHead(404).end("Not found")
             return
@@ -87,11 +89,9 @@ const browser = (app: App.Info) =>
             .writeHead(200, { "Content-Type": "text/html" })
             .end(OauthCallbackPage.success({ provider: "ChatGPT" }))
         })
-        yield* Effect.callback<void, Error>((resume) => {
-          server.once("error", (error) => resume(Effect.fail(error)))
-          server.listen(callbackPort, "localhost", () => resume(Effect.void))
-        })
+        const port = yield* listen(server)
         yield* Effect.addFinalizer(() => Effect.sync(() => server.close()))
+        const redirect = `http://localhost:${port}/auth/callback`
         return {
           mode: "auto" as const,
           url: authorizeURL(redirect, pkce, state),
@@ -104,6 +104,66 @@ const browser = (app: App.Info) =>
       }),
     refresh: (value) => refresh(browserMethodID, value, app),
   }) satisfies IntegrationOAuthMethodRegistration
+
+function listen(server: Server) {
+  return bind(server, callbackPort).pipe(
+    Effect.as(callbackPort),
+    Effect.catchIf(addressInUse, () =>
+      cancel(callbackPort).pipe(
+        Effect.ignore,
+        Effect.andThen(Effect.sleep(callbackBindRetryDelay)),
+        Effect.andThen(bindWithRetry(server, callbackPort, callbackBindAttempts - 1)),
+        Effect.as(callbackPort),
+        Effect.catchIf(addressInUse, () =>
+          bindWithRetry(server, callbackFallbackPort, callbackBindAttempts).pipe(
+            Effect.as(callbackFallbackPort),
+            Effect.catchIf(addressInUse, () =>
+              Effect.fail(
+                new Error(
+                  `OpenAI browser login needs local port ${callbackPort} or ${callbackFallbackPort}, but both are already in use. Stop the processes using those ports or choose ChatGPT Pro/Plus (headless), then try again.`,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  )
+}
+
+function bindWithRetry(server: Server, port: number, attempts: number): Effect.Effect<void, Error> {
+  return bind(server, port).pipe(
+    Effect.catchIf(
+      (error) => addressInUse(error) && attempts > 1,
+      () => Effect.sleep(callbackBindRetryDelay).pipe(Effect.andThen(bindWithRetry(server, port, attempts - 1))),
+    ),
+  )
+}
+
+function bind(server: Server, port: number) {
+  return Effect.callback<void, Error>((resume) => {
+    const onError = (error: Error) => resume(Effect.fail(error))
+    server.once("error", onError)
+    server.listen(port, "localhost", () => {
+      server.off("error", onError)
+      resume(Effect.void)
+    })
+  })
+}
+
+function cancel(port: number) {
+  return Effect.tryPromise({
+    try: (signal) =>
+      fetch(`http://localhost:${port}/cancel`, {
+        signal: AbortSignal.any([signal, AbortSignal.timeout(2000)]),
+      }),
+    catch: (cause) => cause,
+  })
+}
+
+function addressInUse(error: Error) {
+  return "code" in error && error.code === "EADDRINUSE"
+}
 
 const headless = (app: App.Info) =>
   ({
@@ -176,7 +236,7 @@ export const OpenAIPlugin = define({
     const load = Effect.fn("OpenAIPlugin.load")(function* () {
       const connection = yield* ctx.integration.connection.active("openai")
       const credential = connection
-        ? yield* ctx.integration.connection.resolve(connection).pipe(Effect.catch(() => Effect.succeed(undefined)))
+        ? yield* ctx.integration.connection.resolve(connection).pipe(Effect.orElseSucceed(() => undefined))
         : undefined
       chatgpt =
         credential?.type === "oauth" &&
@@ -185,64 +245,63 @@ export const OpenAIPlugin = define({
           : undefined
     })
 
-    yield* ctx.integration.transform((draft) => {
-      draft.method.update(browser(ctx.app))
-      draft.method.update(headless(ctx.app))
+    yield* ctx.integration.transform((editor) => {
+      editor.method.update(browser(ctx.app))
+      editor.method.update(headless(ctx.app))
     })
     yield* load()
     yield* ctx.catalog.transform((evt) => {
-      for (const item of evt.provider.list()) {
-        if (!Provider.isAISDK(item.provider.package)) continue
-        if (Provider.packageName(item.provider.package) !== "@ai-sdk/openai") continue
-        evt.provider.update(item.provider.id, (provider) => {
-          provider.package = "@opencode-ai/ai/providers/openai"
+      const item = evt.provider.get(Provider.ID.openai)
+      if (!item) return
+      for (const model of item.models.values()) {
+        evt.model.update(item.provider.id, model.id, (editor) => {
+          editor.capabilities.responsesWebsockets = true
         })
       }
       if (!chatgpt) return
-      const item = evt.provider.get(Provider.ID.openai)
-      if (!item) return
       item.provider.settings = Provider.mergeOverlay(item.provider.settings, { baseURL: codexBaseURL })
       const account = chatgpt.metadata?.accountID
-      item.provider.headers = Provider.mergeHeaders(
-        item.provider.headers,
-        typeof account === "string" ? { "chatgpt-account-id": account } : undefined,
-      )
+      item.provider.headers = Provider.mergeHeaders(item.provider.headers, {
+        originator: "opencode",
+        ...(typeof account === "string" ? { "chatgpt-account-id": account } : {}),
+      })
       for (const model of item.models.values()) {
         // ChatGPT-plan tokens only authorize codex-eligible models, and the
         // subscription covers usage, so hide the rest and zero the cost.
-        evt.model.update(item.provider.id, model.id, (draft) => {
-          if (Schema.is(Schema.Struct({ mode: Schema.Literal("pro") }))(draft.body?.reasoning)) {
-            draft.enabled = false
+        evt.model.update(item.provider.id, model.id, (editor) => {
+          if (Schema.is(Schema.Struct({ mode: Schema.Literal("pro") }))(editor.body?.reasoning)) {
+            editor.enabled = false
             return
           }
-          const apiID = draft.modelID ?? draft.id
+          const apiID = editor.modelID ?? editor.id
           const match = apiID.match(/^gpt-(\d+\.\d+)/)
           if (
             !codexAllowed.has(apiID) &&
             (codexDisallowed.has(apiID) || !match || Number.parseFloat(match[1]) <= 5.4)
           ) {
-            draft.enabled = false
+            editor.enabled = false
             return
           }
-          draft.cost = []
+          editor.cost = []
           // Match Codex CLI so context consumption and subscription usage stay consistent between clients.
-          draft.limit = { ...draft.limit, context: 400_000, input: 272_000 }
+          editor.limit = { ...editor.limit, context: 400_000, input: 272_000 }
         })
       }
     })
-    yield* ctx.session.hook("http.request", (evt) =>
-      Effect.sync(() => {
-        if (!chatgpt || evt.model.providerID !== Provider.ID.openai) return
-        const url = new URL(evt.request.url)
-        evt.request.headers.set("originator", "opencode")
-        evt.request.headers.set("session-id", evt.sessionID)
-        if (url.origin !== "https://api.openai.com") return
-        evt.request = new Request(`${codexBaseURL}${url.pathname.replace(/^\/v1/, "")}${url.search}`, evt.request)
-      }),
+    yield* ctx.session.hook(
+      "model.request",
+      (evt) =>
+        Effect.sync(() => {
+          if (!chatgpt) return
+          if (evt.baseURL && URL.canParse(evt.baseURL) && new URL(evt.baseURL).origin === "https://api.openai.com")
+            evt.baseURL = codexBaseURL
+          evt.headers.originator = "opencode"
+          evt.headers["session-id"] = evt.sessionID
+        }),
+      { providerID: Provider.ID.openai },
     )
-
     const refresh = () => loading.withPermit(load().pipe(Effect.andThen(ctx.catalog.reload())))
-    yield* bus.subscribe(Integration.Event.ConnectionUpdated).pipe(
+    yield* bus.subscribe(Credential.Event.Switched).pipe(
       Stream.filter((event) => event.data.integrationID === Integration.ID.make("openai")),
       Stream.runForEach(refresh),
       Effect.forkScoped({ startImmediately: true }),

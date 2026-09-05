@@ -23,7 +23,7 @@ type Data = {
   defaultModel?: DefaultModel
 }
 
-export type Draft = {
+export type Editor = {
   provider: {
     list: () => readonly ProviderRecord[]
     get: (providerID: Provider.ID) => ProviderRecord | undefined
@@ -41,7 +41,7 @@ export type Draft = {
   }
 }
 
-export interface Interface extends State.Transformable<Draft> {
+export interface Interface extends State.Transformable<Editor> {
   readonly provider: {
     readonly get: (providerID: Provider.ID) => Effect.Effect<Provider.Info | undefined>
     readonly all: () => Effect.Effect<Provider.Info[]>
@@ -74,6 +74,7 @@ const layer = Layer.effect(
     const projectModel = (model: Model.Info, provider: Provider.Info) => {
       return {
         ...model,
+        ...(provider.canonical === undefined ? {} : { canonical: provider.canonical }),
         package: model.package ?? provider.package,
         settings: Provider.mergeOverlay(provider.settings, model.settings),
         headers: Provider.mergeHeaders(provider.headers, model.headers),
@@ -81,39 +82,40 @@ const layer = Layer.effect(
       } satisfies Model.Info
     }
 
-    const state = State.create<Data, Draft>({
+    const state = State.create<Data, Editor>({
       name: "catalog",
       initial: () => ({ providers: new Map() }),
-      draft: (draft) => {
-        const result: Draft = {
+      editor: (editor) => {
+        const result: Editor = {
           provider: {
-            list: () => Array.fromIterable(draft.providers.values()) as ProviderRecord[],
-            get: (providerID) => draft.providers.get(providerID),
+            list: () => Array.fromIterable(editor.providers.values()) as ProviderRecord[],
+            get: (providerID) => editor.providers.get(providerID),
             update: (providerID, fn) => {
-              let current = draft.providers.get(providerID)
+              let current = editor.providers.get(providerID)
               if (!current) {
                 current = {
                   provider: Provider.Info.empty(providerID) as Provider.MutableInfo,
                   models: new Map<Model.ID, Model.MutableInfo>(),
                 }
-                draft.providers.set(providerID, current)
+                editor.providers.set(providerID, current)
               }
               fn(current.provider)
+              current.provider.id = providerID
             },
             remove: (providerID) => {
-              draft.providers.delete(providerID)
+              editor.providers.delete(providerID)
             },
           },
           model: {
-            get: (providerID, modelID) => draft.providers.get(providerID)?.models.get(modelID),
+            get: (providerID, modelID) => editor.providers.get(providerID)?.models.get(modelID),
             update: (providerID, modelID, fn) => {
-              let record = draft.providers.get(providerID)
+              let record = editor.providers.get(providerID)
               if (!record) {
                 record = {
                   provider: Provider.Info.empty(providerID) as Provider.MutableInfo,
                   models: new Map<Model.ID, Model.MutableInfo>(),
                 }
-                draft.providers.set(providerID, record)
+                editor.providers.set(providerID, record)
               }
               const model = record.models.get(modelID) ?? (Model.Info.default(providerID, modelID) as Model.MutableInfo)
               if (!record.models.has(modelID)) record.models.set(modelID, model)
@@ -122,19 +124,19 @@ const layer = Layer.effect(
               model.providerID = providerID
             },
             remove: (providerID, modelID) => {
-              draft.providers.get(providerID)?.models.delete(modelID)
+              editor.providers.get(providerID)?.models.delete(modelID)
             },
             default: {
-              get: () => draft.defaultModel,
+              get: () => editor.defaultModel,
               set: (providerID, modelID) => {
-                draft.defaultModel = { providerID, modelID }
+                editor.defaultModel = { providerID, modelID }
               },
             },
           },
         }
         return result
       },
-      finalize: Effect.fn("Catalog.finalize")(function* (catalog) {
+      notify: Effect.fn("Catalog.notify")(function* () {
         yield* bus.publish(Catalog.Event.Updated, {})
       }),
     })
@@ -209,19 +211,7 @@ const layer = Layer.effect(
         small: Effect.fn("Catalog.model.small")(function* (providerID) {
           const record = state.get().providers.get(providerID)
           if (!record) return
-          const provider = record.provider
-
-          // TODO: Remove these provider-specific assumptions once model syncing reliably reports available deployments.
-          if (providerID === Provider.ID.azure) {
-            return
-          }
-
-          if (providerID === Provider.ID.opencode) {
-            const gpt5Nano = record.models.get(Model.ID.make("gpt-5-nano"))
-            if (gpt5Nano?.enabled && gpt5Nano.status === "active") return projectModel(gpt5Nano, provider)
-          }
-
-          const candidates = pipe(
+          const models = pipe(
             Array.fromIterable(record.models.values()),
             Array.filter(
               (model) =>
@@ -231,31 +221,12 @@ const layer = Layer.effect(
                 model.capabilities.input.some((item) => item.startsWith("text")) &&
                 model.capabilities.output.some((item) => item.startsWith("text")),
             ),
-            Array.map((model) => ({
-              model,
-              cost: model.cost[0] ? model.cost[0].input + model.cost[0].output : 999,
-              age: (Date.now() - model.time.released) / (1000 * 60 * 60 * 24 * 30),
-              small: SMALL_MODEL_RE.test(`${model.id} ${model.family ?? ""} ${model.name}`.toLowerCase()),
-            })),
-            Array.filter((item) => item.cost > 0 && item.age <= 18),
+            Array.sortWith((model) => model.time.released, Order.flip(Order.Number)),
           )
-
-          const pick = (items: typeof candidates) => {
-            if (!Array.isReadonlyArrayNonEmpty(items)) return
-            const maxCost = Math.max(...items.map((item) => item.cost), 0.01)
-            const maxAge = Math.max(...items.map((item) => item.age), 0.01)
-            const selected = Array.min(
-              items,
-              Order.mapInput(
-                Order.Number,
-                (item: (typeof candidates)[number]) => (item.cost / maxCost) * 0.8 + (item.age / maxAge) * 0.2,
-              ),
-            )
-            return projectModel(selected.model, provider)
+          for (const family of SMALL_MODEL_FAMILY_PRIORITY) {
+            const selected = models.find((model) => model.family === family)
+            if (selected) return projectModel(selected, record.provider)
           }
-
-          const small = candidates.filter((item) => item.small)
-          return pick(small.length > 0 ? small : candidates)
         }),
       },
     }
@@ -264,6 +235,6 @@ const layer = Layer.effect(
   }),
 )
 
-const SMALL_MODEL_RE = /\b(nano|flash|lite|mini|haiku|small|fast)\b/
+const SMALL_MODEL_FAMILY_PRIORITY = ["gpt-luna", "gemini-flash-lite", "gemini-flash", "claude-haiku"]
 
 export const node = makeLocationNode({ service: Service, layer, deps: [Bus.node, Integration.node] })

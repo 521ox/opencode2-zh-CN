@@ -28,7 +28,6 @@ test("matches the rounded panel corners to the dark new-session background", asy
   })
   await page.addInitScript(
     ({ directory, draftID, server }) => {
-      localStorage.setItem("settings.v3", JSON.stringify({ general: { newLayoutDesigns: true } }))
       localStorage.setItem("opencode-theme-id", "oc-2")
       localStorage.setItem("opencode-color-scheme", "dark")
       localStorage.setItem(
@@ -47,7 +46,7 @@ test("matches the rounded panel corners to the dark new-session background", asy
   )
 
   await page.goto(`/new-session?draftId=${draftID}`)
-  await expectAppVisible(page.locator('[data-component="prompt-input"]'))
+  await expectAppVisible(page.locator('[data-component="composer-editor"]'))
   await expect(page.locator("html")).toHaveAttribute("data-color-scheme", "dark")
   const panel = page.locator('main div[class*="rounded-[10px]"][class*="overflow-hidden"]')
   await expect(panel).toHaveCount(1)

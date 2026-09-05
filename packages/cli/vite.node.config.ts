@@ -4,6 +4,7 @@ import { createRequire } from "node:module"
 import { defineConfig, type Plugin, type UserConfig } from "vite"
 import solid from "vite-plugin-solid"
 import { nodeExecArgv, nodeTarget, type NodeTarget, photonWasmAsset, shellParserWasmAssets } from "./src/node/target"
+import { verifySimulationGraph } from "./script/verify-artifact"
 
 const dir = import.meta.dirname
 
@@ -44,6 +45,15 @@ function runtimeRequirePlugin(): Plugin {
       const transformed = code.replace("    var domino = require('@mixmark-io/domino');", "")
       if (transformed === code) this.error("Failed to rewrite Turndown's Domino require")
       return `import domino from "@mixmark-io/domino"\n${transformed}`
+    },
+  }
+}
+
+function simulationGraphPlugin(): Plugin {
+  return {
+    name: "opencode:simulation-graph",
+    generateBundle() {
+      verifySimulationGraph(this.getModuleIds())
     },
   }
 }
@@ -110,6 +120,7 @@ function nodePrelude(input: NodeBuildInput) {
     input.target.platform === "darwin"
       ? `${input.target.nodePtyPackage}/prebuilds/darwin-${input.target.arch}/spawn-helper`
       : undefined
+  const opencodePtyAsset = input.target.opencodePtyAsset
   const promiseModule = `const sdk = globalThis[Symbol.for("opencode.plugin.v2.promise")]
 if (!sdk) throw new Error("OpenCode Promise plugin SDK is unavailable")
 export const Agent = sdk.Agent
@@ -190,13 +201,17 @@ if (__ocIsSea()) {
 const __ocAssetRoot = __ocIsSea()
   ? __ocPath.join(__ocCacheRoot, ${JSON.stringify(`${input.assetHash}-${input.target.platform}-${input.target.arch}`)})
   : __ocFileURLToPath(new URL("./assets/", import.meta.url))
+const __ocPersistentPty = ${JSON.stringify(opencodePtyAsset)}
 if (__ocIsSea()) {
+  const __ocPtySpawnHelper = ${JSON.stringify(nodePtySpawnHelper)}
   for (const __ocKey of __ocAssetKeys()) {
     const __ocTarget = __ocPath.join(__ocAssetRoot, __ocKey)
     if (__ocExists(__ocTarget)) continue
     __ocMkdir(__ocPath.dirname(__ocTarget), { recursive: true })
     const __ocTemporary = \`${"${__ocTarget}"}.${"${process.pid}"}.${"${crypto.randomUUID()}"}.tmp\`
     __ocWrite(__ocTemporary, new Uint8Array(__ocRawAsset(__ocKey)))
+    if ((__ocKey === __ocPtySpawnHelper || __ocKey === __ocPersistentPty) && process.platform !== "win32")
+      __ocChmod(__ocTemporary, 0o755)
     try {
       __ocRename(__ocTemporary, __ocTarget)
     } catch (__ocError) {
@@ -204,8 +219,6 @@ if (__ocIsSea()) {
       if (!__ocExists(__ocTarget)) throw __ocError
     }
   }
-  const __ocPtySpawnHelper = ${JSON.stringify(nodePtySpawnHelper)}
-  if (__ocPtySpawnHelper) __ocChmod(__ocPath.join(__ocAssetRoot, __ocPtySpawnHelper), 0o755)
 }
 process.env.OPENCODE_NODE_ASSETS_DIR = __ocAssetRoot
 process.env.OTUI_ASSET_ROOT = __ocAssetRoot
@@ -217,6 +230,7 @@ process.env.OPENCODE_TREE_SITTER_BASH_WASM_PATH = __ocPath.join(__ocAssetRoot, $
 process.env.OPENCODE_TREE_SITTER_POWERSHELL_WASM_PATH = __ocPath.join(__ocAssetRoot, ${JSON.stringify(shellParserWasmAssets.powershell)})
 process.env.FFF_BINARY_PATH = __ocPath.join(__ocAssetRoot, ${JSON.stringify(input.target.fffAsset)})
 process.env.OPENCODE_FFF_FFI_PATH = __ocPath.join(__ocAssetRoot, ${JSON.stringify(input.target.fffFfiAsset)})
+if (__ocPersistentPty && !process.env.OPENCODE_PTY_BIN) process.env.OPENCODE_PTY_BIN = __ocPath.join(__ocAssetRoot, __ocPersistentPty)
 try {
   globalThis.__OPENCODE_FFF_FFI = require(process.env.OPENCODE_FFF_FFI_PATH)
 } catch {}
@@ -240,6 +254,7 @@ export function mainConfig(input: NodeBuildInput): UserConfig {
       rawTextPlugin(),
       runtimeRequirePlugin(),
       fffNodePlugin(),
+      simulationGraphPlugin(),
       solid({
         solid: {
           generate: "universal",
@@ -253,8 +268,10 @@ export function mainConfig(input: NodeBuildInput): UserConfig {
       OPENCODE_VERSION: JSON.stringify(input.version),
       OPENCODE_CLI_NAME: JSON.stringify("opencode2-node"),
       OPENCODE_CHANNEL: JSON.stringify(input.channel),
+      OPENCODE_ARTIFACT: JSON.stringify("cli-node"),
       OPENCODE_LIBC: input.target.platform === "linux" ? JSON.stringify("glibc") : "undefined",
       FFF_LIBC: input.target.platform === "linux" ? JSON.stringify("gnu") : "undefined",
+      "process.env.WS_NO_BUFFER_UTIL": JSON.stringify("1"),
     },
     ssr: { noExternal: true },
     build: {
@@ -264,7 +281,6 @@ export function mainConfig(input: NodeBuildInput): UserConfig {
       emptyOutDir: false,
       minify: true,
       rollupOptions: {
-        external: [/^@opencode-ai\/simulation(?:\/|$)/],
         output: output("opencode.mjs", nodePrelude(input)),
       },
     },

@@ -18,21 +18,24 @@ import { PluginSupervisor } from "@opencode-ai/core/plugin/supervisor"
 import { Model } from "@opencode-ai/core/model"
 import { Provider } from "@opencode-ai/core/provider"
 import { AbsolutePath } from "@opencode-ai/core/schema"
-import { Effect, Fiber, Logger, Stream } from "effect"
+import { Cause, Effect, Fiber, Logger, Stream } from "effect"
 import { Database } from "../../src/database/database"
 import { tmpdir } from "../fixture/tmpdir"
 import { tempGlobalLayer } from "../fixture/global"
+import { offlineModels } from "../fixture/models"
 import { testEffect } from "../lib/effect"
 
 const it = testEffect(
   AppNodeBuilder.build(LayerNode.group([Database.node, Bus.node, SdkPlugins.node, LocationServiceMap.node]), [
     [Global.node, tempGlobalLayer],
+    offlineModels,
   ]),
 )
 const staticIt = testEffect(
   AppNodeBuilder.build(LayerNode.group([Database.node, Bus.node, SdkPlugins.node, LocationServiceMap.node]), [
     [ConfigPluginSource.node, ConfigPluginSource.empty],
     [Global.node, tempGlobalLayer],
+    offlineModels,
   ]),
 )
 
@@ -44,8 +47,21 @@ describe("PluginSupervisor config", () => {
         const plugins = yield* Plugin.Service
         yield* ready()
         expect(
-          (yield* plugins.list()).map((plugin) => plugin.id).filter((id) => id.startsWith("opencode.provider.")),
+          (yield* plugins.list())
+            .flatMap((plugin) => (plugin.id ? [plugin.id] : []))
+            .filter((id) => id.startsWith("opencode.provider.")),
         ).toEqual([Plugin.ID.make("opencode.provider.openai")])
+      }),
+    ),
+  )
+
+  it.live("allows the built-in Plan agent to be disabled", () =>
+    withLocation(
+      { agents: { plan: { disabled: true } } },
+      Effect.gen(function* () {
+        yield* ready()
+        const agents = yield* Agent.Service
+        expect(yield* agents.get(Agent.ID.make("plan"))).toBeUndefined()
       }),
     ),
   )
@@ -64,9 +80,19 @@ describe("PluginSupervisor config", () => {
       Effect.gen(function* () {
         yield* ready()
         const agents = yield* Agent.Service
+        const plugins = yield* Plugin.Service
         expect(yield* agents.get(Agent.ID.make("configured"))).toMatchObject({
           description: "Loaded from config",
           mode: "subagent",
+        })
+        expect((yield* plugins.list()).find((plugin) => plugin.id === "config-promise-plugin")).toEqual({
+          id: Plugin.ID.make("config-promise-plugin"),
+          source: {
+            type: "local",
+            path: path.join(import.meta.dir, "../plugin/fixtures/config-promise-plugin.ts"),
+          },
+          status: "active",
+          tui: true,
         })
       }),
     ),
@@ -121,12 +147,15 @@ describe("PluginSupervisor config", () => {
   )
 
   it.live("logs invalid packages and continues loading", () => {
-    const output: string[] = []
+    const output: Array<{ target: string; ref: string; diagnostic: string }> = []
     const logger = Logger.map(Logger.formatStructured, (entry) => {
       if (!Array.isArray(entry.message) || entry.message[0] !== "failed to load plugin") return
       const details = entry.message[1]
-      if (typeof details !== "object" || details === null || !("target" in details)) return
-      if (typeof details.target === "string") output.push(details.target)
+      if (typeof details !== "object" || details === null) return
+      if (!("target" in details) || typeof details.target !== "string") return
+      if (!("ref" in details) || typeof details.ref !== "string") return
+      if (!("cause" in details) || !Cause.isCause(details.cause)) return
+      output.push({ target: details.target, ref: details.ref, diagnostic: Cause.pretty(details.cause) })
     })
     return withLocation(
       {
@@ -143,12 +172,20 @@ describe("PluginSupervisor config", () => {
       Effect.gen(function* () {
         yield* ready()
         const agents = yield* Agent.Service
+        const plugins = yield* Plugin.Service
         expect(yield* agents.get(Agent.ID.make("configured"))).toMatchObject({
           description: "Loaded after invalid plugins",
         })
-        expect(output).toEqual([
+        expect(output.map((entry) => entry.target)).toEqual([
           path.join(import.meta.dir, "../plugin/fixtures/missing-plugin.ts"),
           path.join(import.meta.dir, "../plugin/fixtures/invalid-plugin.ts"),
+        ])
+        expect(output.every((entry) => /^err_[0-9a-f]{8}$/.test(entry.ref) && entry.diagnostic.length > 0)).toBe(true)
+        expect(
+          (yield* plugins.list()).filter((plugin) => plugin.status === "failed").map((plugin) => plugin.source),
+        ).toEqual([
+          { type: "local", path: path.join(import.meta.dir, "../plugin/fixtures/missing-plugin.ts") },
+          { type: "local", path: path.join(import.meta.dir, "../plugin/fixtures/invalid-plugin.ts") },
         ])
       }),
     ).pipe(Effect.provide(Logger.layer([logger])))
@@ -246,10 +283,12 @@ describe("PluginSupervisor config", () => {
         Effect.gen(function* () {
           yield* ready()
           const plugins = yield* Plugin.Service
-          const ids = (yield* plugins.list()).map((plugin) => String(plugin.id))
+          const inventory = yield* plugins.list()
+          const ids = inventory.map((plugin) => String(plugin.id))
           expect(ids).toContain("opencode.agent")
           expect(ids).toContain("static-sdk")
           expect(ids).not.toContain("config-promise-plugin")
+          expect(inventory.find((plugin) => plugin.id === "static-sdk")?.source).toEqual({ type: "sdk" })
 
           const agents = yield* Agent.Service
           expect(yield* agents.get(Agent.ID.make("directory"))).toBeUndefined()
@@ -395,11 +434,25 @@ describe("PluginSupervisor config", () => {
       }),
     ),
   )
+
+  it.live("unblocks flush when plugin activation fails", () =>
+    Effect.gen(function* () {
+      const sdk = yield* SdkPlugins.Service
+      yield* sdk.register(EffectPlugin.define({ id: "duplicate-id", effect: () => Effect.void }))
+      yield* sdk.register(EffectPlugin.define({ id: "duplicate-id", effect: () => Effect.void }))
+      yield* withLocation(
+        undefined,
+        Effect.gen(function* () {
+          yield* ready().pipe(Effect.timeout("2 seconds"))
+        }),
+      )
+    }),
+  )
 })
 
 const ready = Effect.fnUntraced(function* () {
   const supervisor = yield* PluginSupervisor.Service
-  yield* supervisor.flush
+  yield* supervisor.awaitActivation
 })
 
 function withLocation<A, E, R>(

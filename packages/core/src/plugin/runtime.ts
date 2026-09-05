@@ -6,7 +6,9 @@ import { makeGlobalNode } from "@opencode-ai/util/effect/app-node"
 import { Job } from "../job.js"
 import { Location } from "../location.js"
 import { LocationServiceMap } from "../location-service-map.js"
+import { Mcp } from "../mcp/index.js"
 import { Session } from "../session.js"
+import { SessionContinuation } from "../session/continuation.js"
 
 export interface Interface {
   readonly session: Pick<
@@ -18,17 +20,31 @@ export interface Interface {
     | "generate"
     | "command"
     | "rename"
+    | "move"
     | "resume"
+    | "switchAgent"
+    | "switchModel"
     | "interrupt"
     | "synthetic"
     | "wait"
+    | "wake"
+    | "context"
   >
-  readonly job: Pick<Job.Interface, "get" | "start" | "wait" | "block" | "background" | "cancel">
+  readonly job: Pick<
+    Job.Interface,
+    "start" | "guardedStart" | "wait" | "block" | "background" | "cancel" | "completeBackground"
+  >
+  readonly continuation: Pick<SessionContinuation.Interface, "admit" | "get" | "matches" | "await" | "cancel">
   readonly location: {
     readonly agent: {
       readonly list: (
         ref: Location.Ref,
       ) => Effect.Effect<{ readonly location: Location.Info; readonly data: Agent.Info[] }>
+    }
+    readonly mcp: {
+      readonly list: (
+        ref: Location.Ref,
+      ) => Effect.Effect<{ readonly location: Location.Info; readonly data: Mcp.ServerInfo[] }, unknown>
     }
   }
 }
@@ -41,11 +57,10 @@ export interface Cell {
 
 export const makeCell = (): Cell => ({})
 
-const unavailable = <A, E, R>() => Effect.die(new Error("Plugin runtime is unavailable")) as Effect.Effect<A, E, R>
 const require = <A, E, R>(cell: Cell, f: (runtime: Interface) => Effect.Effect<A, E, R>) =>
   Effect.suspend(() => {
     const runtime = cell.runtime
-    if (runtime === undefined) return unavailable<A, E, R>()
+    if (runtime === undefined) return Effect.die(new Error("Plugin runtime is unavailable"))
     return f(runtime)
   })
 
@@ -63,22 +78,39 @@ export const layerWithCell = (cell: Cell) =>
         generate: (input) => require(cell, (runtime) => runtime.session.generate(input)),
         command: (input) => require(cell, (runtime) => runtime.session.command(input)),
         rename: (input) => require(cell, (runtime) => runtime.session.rename(input)),
+        move: (input) => require(cell, (runtime) => runtime.session.move(input)),
         resume: (sessionID) => require(cell, (runtime) => runtime.session.resume(sessionID)),
-        interrupt: (sessionID) => require(cell, (runtime) => runtime.session.interrupt(sessionID)),
+        switchAgent: (input) => require(cell, (runtime) => runtime.session.switchAgent(input)),
+        switchModel: (input) => require(cell, (runtime) => runtime.session.switchModel(input)),
+        interrupt: (sessionID, options) => require(cell, (runtime) => runtime.session.interrupt(sessionID, options)),
         synthetic: (input) => require(cell, (runtime) => runtime.session.synthetic(input)),
         wait: (sessionID) => require(cell, (runtime) => runtime.session.wait(sessionID)),
+        wake: (sessionID) => require(cell, (runtime) => runtime.session.wake(sessionID)),
+        context: (sessionID) => require(cell, (runtime) => runtime.session.context(sessionID)),
       },
       job: {
-        get: (id) => require(cell, (runtime) => runtime.job.get(id)),
         start: (input) => require(cell, (runtime) => runtime.job.start(input)),
+        guardedStart: (input) => require(cell, (runtime) => runtime.job.guardedStart(input)),
         wait: (input) => require(cell, (runtime) => runtime.job.wait(input)),
         block: (input) => require(cell, (runtime) => runtime.job.block(input)),
         background: (id) => require(cell, (runtime) => runtime.job.background(id)),
         cancel: (id) => require(cell, (runtime) => runtime.job.cancel(id)),
+        completeBackground: (notificationID) =>
+          require(cell, (runtime) => runtime.job.completeBackground(notificationID)),
+      },
+      continuation: {
+        admit: (request) => require(cell, (runtime) => runtime.continuation.admit(request)),
+        get: (id) => require(cell, (runtime) => runtime.continuation.get(id)),
+        matches: (request) => require(cell, (runtime) => runtime.continuation.matches(request)),
+        await: (id, options) => require(cell, (runtime) => runtime.continuation.await(id, options)),
+        cancel: (id) => require(cell, (runtime) => runtime.continuation.cancel(id)),
       },
       location: {
         agent: {
           list: (ref) => require(cell, (runtime) => runtime.location.agent.list(ref)),
+        },
+        mcp: {
+          list: (ref) => require(cell, (runtime) => runtime.location.mcp.list(ref)),
         },
       },
     }),
@@ -89,10 +121,12 @@ export const providerLayerWithCell = (cell: Cell) =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service
       const jobs = yield* Job.Service
+      const continuations = yield* SessionContinuation.Service
       const locations = yield* LocationServiceMap.Service
       const runtime: Interface = {
         session: sessions,
         job: jobs,
+        continuation: continuations,
         location: {
           agent: {
             list: (ref) =>
@@ -108,6 +142,21 @@ export const providerLayerWithCell = (cell: Cell) =>
                   data: yield* agents.list(),
                 }
               }).pipe(Effect.provide(locations.get(ref)), Effect.orDie),
+          },
+          mcp: {
+            list: (ref) =>
+              Effect.gen(function* () {
+                const location = yield* Location.Service
+                const mcp = yield* Mcp.Service
+                return {
+                  location: new Location.Info({
+                    directory: location.directory,
+                    workspaceID: location.workspaceID,
+                    project: location.project,
+                  }),
+                  data: yield* mcp.servers(),
+                }
+              }).pipe(Effect.provide(locations.get(ref))),
           },
         },
       }
@@ -130,7 +179,7 @@ export const providerNodeWithCell = (cell: Cell) =>
   makeGlobalNode({
     name: "plugin-runtime-provider",
     layer: providerLayerWithCell(cell),
-    deps: [node, Session.node, Job.node, LocationServiceMap.node],
+    deps: [node, Session.node, SessionContinuation.node, Job.node, LocationServiceMap.node],
   })
 
 export const providerNode = providerNodeWithCell(defaultCell)

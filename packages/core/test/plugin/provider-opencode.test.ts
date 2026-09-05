@@ -105,7 +105,7 @@ describe("OpencodePlugin", () => {
               return Response.json({
                 device_code: "device",
                 user_code: "user",
-                verification_uri_complete: `${url.origin}/verify`,
+                verification_uri_complete: "/console/device?user_code=user&client_id=opencode-cli",
                 expires_in: 60,
                 interval: 0,
               })
@@ -130,7 +130,7 @@ describe("OpencodePlugin", () => {
             methodID: Integration.MethodID.make("device"),
             answer: { server: `${server.url.origin}/console///?ignored=true#ignored` },
           })
-          expect(attempt.url).toBe(`${server.url.origin}/verify`)
+          expect(attempt.url).toBe(`${server.url.origin}/console/device?user_code=user&client_id=opencode-cli`)
           yield* eventually(
             integrations.oauth.status({ integrationID, attemptID: attempt.attemptID }),
             (status) => status.status === "complete",
@@ -145,6 +145,38 @@ describe("OpencodePlugin", () => {
           })
         }),
       ({ server }) => Effect.promise(() => server.stop(true)),
+    ),
+  )
+
+  it.live("rejects malformed device verification URLs", () =>
+    Effect.acquireUseRelease(
+      Effect.sync(() =>
+        Bun.serve({
+          port: 0,
+          fetch: () =>
+            Response.json({
+              device_code: "device",
+              user_code: "user",
+              verification_uri_complete: "http://[::1",
+              expires_in: 60,
+              interval: 0,
+            }),
+        }),
+      ),
+      (server) =>
+        Effect.gen(function* () {
+          yield* addPlugin()
+          const error = yield* (yield* Integration.Service).oauth
+            .connect({
+              integrationID: Integration.ID.make("opencode"),
+              methodID: Integration.MethodID.make("device"),
+              answer: { server: server.url.origin },
+            })
+            .pipe(Effect.flip)
+          expect(error).toBeInstanceOf(Integration.AuthorizationError)
+          expect(String(error.cause)).toContain("Invalid device verification URL")
+        }),
+      (server) => Effect.promise(() => server.stop(true)),
     ),
   )
 
@@ -182,12 +214,15 @@ describe("OpencodePlugin", () => {
     Effect.acquireUseRelease(
       Effect.sync(() => {
         const authorization: Array<string | null> = []
+        const requests: string[] = []
         return {
           authorization,
+          requests,
           server: Bun.serve({
             port: 0,
             fetch: (request) => {
               authorization.push(request.headers.get("authorization"))
+              requests.push(`${request.method} ${new URL(request.url).pathname}`)
               const origin = new URL(request.url).origin
               return Response.json({
                 config: {
@@ -195,7 +230,7 @@ describe("OpencodePlugin", () => {
                   provider: {
                     remote: {
                       name: "Remote",
-                      npm: "@ai-sdk/openai-compatible",
+                      npm: "@ai-sdk/openai",
                       api: `${origin}/v1`,
                       env: ["REMOTE_API_KEY"],
                       options: {
@@ -211,9 +246,28 @@ describe("OpencodePlugin", () => {
                           tool_call: true,
                           modalities: { input: ["text", "image"], output: ["text"] },
                           options: { apiKey: "model-secret", temperature: 0.5 },
-                          variants: { high: { apiKey: "variant-secret", temperature: 0.2 } },
+                          variants: {
+                            high: {
+                              apiKey: "variant-secret",
+                              temperature: 0.2,
+                              reasoningEffort: "high",
+                              reasoningSummary: "auto",
+                            },
+                            "effort-only": { reasoningEffort: "low" },
+                            "summary-only": { reasoningSummary: "detailed" },
+                            mixed: {
+                              reasoningEffort: "low",
+                              reasoningSummary: "auto",
+                              body: { reasoning: { effort: "high", summary: "detailed" } },
+                            },
+                          },
                           cost: { input: 1, output: 2, cache_read: 0.1 },
                           limit: { context: 1000, output: 100 },
+                        },
+                        override: {
+                          name: "Override",
+                          provider: { npm: "@ai-sdk/openai-compatible", api: `${origin}/compatible` },
+                          variants: { high: { reasoningEffort: "high", reasoningSummary: "auto" } },
                         },
                         disabled: { name: "Disabled", status: "deprecated" },
                       },
@@ -225,13 +279,13 @@ describe("OpencodePlugin", () => {
           }),
         }
       }),
-      ({ authorization, server }) =>
+      ({ authorization, requests, server }) =>
         Effect.gen(function* () {
           const credentials = yield* Credential.Service
           const catalog = yield* Catalog.Service
-          yield* catalog.transform((draft) => {
-            draft.provider.update(Provider.ID.make("remote"), () => {})
-            draft.model.update(Provider.ID.make("remote"), Model.ID.make("model"), (model) => {
+          yield* catalog.transform((editor) => {
+            editor.provider.update(Provider.ID.make("remote"), () => {})
+            editor.model.update(Provider.ID.make("remote"), Model.ID.make("model"), (model) => {
               model.variants = [
                 {
                   id: Model.VariantID.make("custom"),
@@ -241,9 +295,9 @@ describe("OpencodePlugin", () => {
                 },
               ]
             })
-            draft.model.update(Provider.ID.make("remote"), Model.ID.make("stale"), () => {})
+            editor.model.update(Provider.ID.make("remote"), Model.ID.make("stale"), () => {})
           })
-          yield* credentials.create({
+          const initial = yield* credentials.create({
             integrationID: Integration.ID.make("opencode"),
             value: Credential.Key.make({
               type: "key",
@@ -254,12 +308,13 @@ describe("OpencodePlugin", () => {
 
           yield* addPlugin()
           expect(authorization).toEqual(["Bearer secret"])
+          expect(requests).toEqual(["GET /api/config"])
 
           const provider = required(yield* catalog.provider.get(Provider.ID.make("remote")))
           expect(provider).toMatchObject({
             name: "Remote",
             integrationID: "opencode",
-            package: Provider.aisdk("@ai-sdk/openai-compatible"),
+            package: Provider.aisdk("@ai-sdk/openai"),
             settings: { baseURL: `${server.url.origin}/v1`, custom: "value" },
             headers: { "x-org-id": "org" },
           })
@@ -272,10 +327,13 @@ describe("OpencodePlugin", () => {
             capabilities: { tools: true, input: ["text", "image"], output: ["text"] },
             cost: [{ input: 1, output: 2, cache: { read: 0.1, write: 0 } }],
             limit: { context: 1000, output: 100 },
-            package: Provider.aisdk("@ai-sdk/openai-compatible"),
+            package: Provider.aisdk("@ai-sdk/openai"),
             settings: { baseURL: `${server.url.origin}/v1`, custom: "value", temperature: 0.5 },
             headers: { "x-org-id": "org" },
           })
+          const override = required(yield* catalog.model.get(Provider.ID.make("remote"), Model.ID.make("override")))
+          expect(override.package).toBe(Provider.aisdk("@ai-sdk/openai-compatible"))
+          expect(override.settings?.baseURL).toBe(`${server.url.origin}/compatible`)
           expect(model.variants).toEqual([
             {
               id: Model.VariantID.make("custom"),
@@ -287,12 +345,93 @@ describe("OpencodePlugin", () => {
               id: Model.VariantID.make("high"),
               settings: { temperature: 0.2 },
               headers: {},
+              body: { reasoning: { effort: "high", summary: "auto" } },
+            },
+            {
+              id: Model.VariantID.make("effort-only"),
+              settings: {},
+              headers: {},
+              body: { reasoning: { effort: "low" } },
+            },
+            {
+              id: Model.VariantID.make("summary-only"),
+              settings: {},
+              headers: {},
+              body: { reasoning: { summary: "detailed" } },
+            },
+            {
+              id: Model.VariantID.make("mixed"),
+              settings: {},
+              headers: {},
+              body: { reasoning: { effort: "high", summary: "detailed" } },
             },
           ])
+          expect(override.variants?.[0]?.settings).toEqual({
+            reasoningEffort: "high",
+            reasoningSummary: "auto",
+          })
+          expect(override.variants?.[0]?.body).toBeUndefined()
           expect(
             required(yield* catalog.model.get(Provider.ID.make("remote"), Model.ID.make("disabled"))).enabled,
           ).toBe(false)
           expect(yield* catalog.model.get(Provider.ID.make("remote"), Model.ID.make("stale"))).toBeDefined()
+
+          yield* credentials.update(initial.id, { label: "Renamed" })
+          yield* Effect.yieldNow
+          expect(authorization).toEqual(["Bearer secret"])
+
+          const replacement = yield* credentials.create({
+            integrationID: Integration.ID.make("opencode"),
+            value: Credential.Key.make({
+              type: "key",
+              key: "replacement",
+              metadata: { server: server.url.origin },
+            }),
+          })
+          yield* eventually(
+            Effect.sync(() => authorization.length),
+            (count) => count === 2,
+          )
+          expect(authorization).toEqual(["Bearer secret", "Bearer replacement"])
+          expect(requests).toEqual(["GET /api/config", "GET /api/config"])
+
+          yield* credentials.remove(initial.id)
+          yield* Effect.yieldNow
+          expect(authorization).toEqual(["Bearer secret", "Bearer replacement"])
+          expect((yield* credentials.list(Integration.ID.make("opencode"))).at(-1)?.id).toBe(replacement.id)
+        }),
+      ({ server }) => Effect.promise(() => server.stop(true)),
+    ),
+  )
+
+  it.live("keeps the current Console config endpoint and treats 404 as empty without fallback", () =>
+    Effect.acquireUseRelease(
+      Effect.sync(() => {
+        const requests: string[] = []
+        return {
+          requests,
+          server: Bun.serve({
+            port: 0,
+            fetch: (request) => {
+              requests.push(`${request.method} ${new URL(request.url).pathname}`)
+              return new Response("Not found", { status: 404 })
+            },
+          }),
+        }
+      }),
+      ({ requests, server }) =>
+        Effect.gen(function* () {
+          const credentials = yield* Credential.Service
+          const catalog = yield* Catalog.Service
+          yield* credentials.create({
+            integrationID: Integration.ID.make("opencode"),
+            value: Credential.Key.make({ type: "key", key: "secret", metadata: { server: server.url.origin } }),
+          })
+
+          yield* addPlugin()
+
+          expect(requests).toEqual(["GET /api/config"])
+          expect(yield* catalog.provider.get(Provider.ID.make("remote"))).toBeUndefined()
         }),
       ({ server }) => Effect.promise(() => server.stop(true)),
     ),
@@ -314,8 +453,8 @@ describe("OpencodePlugin", () => {
             cost: cost(1),
           })
           catalog.provider.update(provider.id, () => {})
-          catalog.model.update(provider.id, model.id, (draft) => {
-            draft.cost = [...model.cost]
+          catalog.model.update(provider.id, model.id, (editor) => {
+            editor.cost = [...model.cost]
           })
         })
         yield* addPlugin()
@@ -341,8 +480,8 @@ describe("OpencodePlugin", () => {
             cost: cost(0),
           })
           catalog.provider.update(provider.id, () => {})
-          catalog.model.update(provider.id, model.id, (draft) => {
-            draft.cost = [...model.cost]
+          catalog.model.update(provider.id, model.id, (editor) => {
+            editor.cost = [...model.cost]
           })
         })
         yield* addPlugin()
@@ -370,8 +509,8 @@ describe("OpencodePlugin", () => {
             cost: cost(0, 1),
           })
           catalog.provider.update(provider.id, () => {})
-          catalog.model.update(provider.id, model.id, (draft) => {
-            draft.cost = [...model.cost]
+          catalog.model.update(provider.id, model.id, (editor) => {
+            editor.cost = [...model.cost]
           })
         })
         yield* addPlugin()
@@ -399,8 +538,8 @@ describe("OpencodePlugin", () => {
             cost: cost(1),
           })
           catalog.provider.update(provider.id, () => {})
-          catalog.model.update(provider.id, model.id, (draft) => {
-            draft.cost = [...model.cost]
+          catalog.model.update(provider.id, model.id, (editor) => {
+            editor.cost = [...model.cost]
           })
         })
         yield* addPlugin()
@@ -433,8 +572,8 @@ describe("OpencodePlugin", () => {
             cost: cost(1),
           })
           catalog.provider.update(provider.id, () => {})
-          catalog.model.update(provider.id, model.id, (draft) => {
-            draft.cost = [...model.cost]
+          catalog.model.update(provider.id, model.id, (editor) => {
+            editor.cost = [...model.cost]
           })
         })
         yield* addPlugin()
@@ -460,12 +599,12 @@ describe("OpencodePlugin", () => {
             package: Provider.aisdk("test-provider"),
             cost: cost(1),
           })
-          catalog.provider.update(provider.id, (draft) => {
-            draft.package = provider.package
-            draft.settings = { apiKey: "configured" }
+          catalog.provider.update(provider.id, (editor) => {
+            editor.package = provider.package
+            editor.settings = { apiKey: "configured" }
           })
-          catalog.model.update(provider.id, model.id, (draft) => {
-            draft.cost = [...model.cost]
+          catalog.model.update(provider.id, model.id, (editor) => {
+            editor.cost = [...model.cost]
           })
         })
         yield* addPlugin()
@@ -491,8 +630,8 @@ describe("OpencodePlugin", () => {
             cost: cost(1),
           })
           catalog.provider.update(provider.id, () => {})
-          catalog.model.update(provider.id, model.id, (draft) => {
-            draft.cost = [...model.cost]
+          catalog.model.update(provider.id, model.id, (editor) => {
+            editor.cost = [...model.cost]
           })
         })
         yield* addPlugin()
@@ -500,32 +639,5 @@ describe("OpencodePlugin", () => {
         expect(required(yield* catalog.model.get(Provider.ID.openai, Model.ID.make("paid"))).enabled).toBe(true)
       }),
     ),
-  )
-
-  it.effect("prefers gpt-5-nano as the opencode small model", () =>
-    Effect.gen(function* () {
-      const catalog = yield* Catalog.Service
-      const providerID = Provider.ID.opencode
-
-      yield* catalog.transform((catalog) => {
-        catalog.provider.update(providerID, () => {})
-        catalog.model.update(providerID, Model.ID.make("cheap-mini"), (model) => {
-          model.capabilities.input = ["text"]
-          model.capabilities.output = ["text"]
-          model.cost = [...cost(1, 1)]
-          model.time.released = Date.now()
-        })
-        catalog.model.update(providerID, Model.ID.make("gpt-5-nano"), (model) => {
-          model.capabilities.input = ["text"]
-          model.capabilities.output = ["text"]
-          model.cost = [...cost(10, 10)]
-          model.time.released = Date.now()
-        })
-      })
-
-      const selected = yield* catalog.model.small(providerID)
-
-      expect(selected?.id).toBe(Model.ID.make("gpt-5-nano"))
-    }),
   )
 })

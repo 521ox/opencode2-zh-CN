@@ -13,7 +13,7 @@ import { LayerNode } from "@opencode-ai/util/effect/layer-node"
 import { Credential } from "@opencode-ai/core/credential"
 import { ConfigMigrateV1 } from "@opencode-ai/core/v1/config/migrate"
 import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
-import { FSUtil } from "@opencode-ai/util/fs-util"
+import { ConfigNormalize } from "@opencode-ai/core/config/normalize"
 import { Watcher } from "@opencode-ai/core/filesystem/watcher"
 import { Bus } from "@opencode-ai/core/bus"
 import { Global } from "@opencode-ai/util/global"
@@ -30,6 +30,11 @@ import { testEffect } from "../lib/effect"
 
 const it = testEffect(Layer.empty)
 const selection = Schema.decodeUnknownSync(ConfigModel.Selection)
+
+function inFixture(root: string, target: string) {
+  const relative = path.relative(root, target)
+  return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+}
 
 function testLayer(
   directory: string,
@@ -92,6 +97,20 @@ describe("Config", () => {
           Effect.andThen(
             Effect.gen(function* () {
               const config = yield* Config.Service
+              const content = yield* Effect.promise(() => fs.readFile(globalFile, "utf8"))
+              const cause = new Error("Rejected config update")
+              const error = yield* config
+                .update((draft) => {
+                  draft.shell = "discarded"
+                  throw cause
+                })
+                .pipe(Effect.flip)
+
+              expect(error).toBeInstanceOf(Config.UpdateError)
+              expect(error.message).toBe("Config update failed")
+              expect(error.cause).toBe(cause)
+              expect(yield* Effect.promise(() => fs.readFile(globalFile, "utf8"))).toBe(content)
+
               const updated = yield* config.update((draft) => {
                 draft.shell = "updated"
               })
@@ -103,6 +122,124 @@ describe("Config", () => {
                 shell: "project",
               })
             }).pipe(Effect.provide(testLayer(project, global))),
+          ),
+        )
+      }),
+    ),
+  )
+
+  it.live("excludes home-level claude and agents directories when global is disabled", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) => {
+        const global = path.join(tmp.path, "global")
+        const home = path.join(global, "home")
+        const project = path.join(home, "project")
+        const ambient = (entries: readonly { type: string }[]) =>
+          entries.filter((entry) => entry.type === "claude" || entry.type === "agents")
+        return Effect.promise(() =>
+          Promise.all([
+            fs.mkdir(project, { recursive: true }),
+            fs.mkdir(path.join(home, ".claude"), { recursive: true }),
+            fs.mkdir(path.join(home, ".agents"), { recursive: true }),
+          ]),
+        ).pipe(
+          Effect.andThen(
+            Effect.gen(function* () {
+              // The fixture is real: with global enabled the walk finds both.
+              const config = yield* Config.Service
+              expect(ambient(yield* config.entries()).length).toBe(2)
+            }).pipe(Effect.provide(testLayer(project, global))),
+          ),
+          Effect.andThen(
+            // Home-level directories are global config however the walk
+            // reaches them, so global: false excludes them even with the
+            // project walk enabled.
+            Effect.gen(function* () {
+              const config = yield* Config.Service
+              expect(ambient(yield* config.entries())).toEqual([])
+              const watcher = yield* Watcher.Test
+              expect(
+                (yield* watcher.subscriptions()).filter((watch) => watch.type === "entries" && watch.path === home),
+              ).toEqual([])
+            }).pipe(
+              Effect.provide(
+                testLayer(project, global, project, undefined, undefined, undefined, undefined, { global: false }),
+              ),
+            ),
+          ),
+        )
+      }),
+    ),
+  )
+
+  it.live("discovers the global config directory once when the project walk reaches it", () =>
+    Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
+      Effect.flatMap((tmp) => {
+        const real = path.join(tmp.path, "real")
+        const link = path.join(tmp.path, "link")
+        const global = AbsolutePath.make(path.join(real, ".opencode"))
+        const once = Effect.gen(function* () {
+          const config = yield* Config.Service
+          const watcher = yield* Watcher.Test
+          const entries = yield* config.entries()
+          expect(entries.flatMap((entry) => (entry.type === "directory" ? [entry.path] : []))).toEqual([global])
+          expect(entries.flatMap((entry) => (entry.type === "document" ? [entry.info.shell] : []))).toEqual(["global"])
+          expect(
+            (yield* watcher.subscriptions())
+              .filter((subscription) => subscription.type === "directory")
+              .map((subscription) => subscription.path),
+          ).toEqual([global])
+          expect(
+            (yield* watcher.subscriptions()).filter((subscription) =>
+              subscription.path.includes(`${path.sep}.opencode${path.sep}`),
+            ),
+          ).toEqual([])
+        })
+        return Effect.promise(async () => {
+          await fs.mkdir(global, { recursive: true })
+          await fs.writeFile(path.join(global, "opencode.json"), JSON.stringify({ shell: "global" }))
+          await fs.symlink(real, link, process.platform === "win32" ? "junction" : undefined)
+        }).pipe(
+          Effect.andThen(once.pipe(Effect.provide(testLayer(link, global, real)))),
+          Effect.andThen(once.pipe(Effect.provide(testLayer(real, global, real)))),
+        )
+      }),
+    ),
+  )
+
+  it.live("excludes global config reached through the project walk when global is disabled", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) => {
+        // The location sits BENEATH the global config dir, so the upward walk
+        // reaches the global opencode.json as a direct file.
+        const global = path.join(tmp.path, "global")
+        const project = path.join(global, "plugins", "demo")
+        return Effect.promise(async () => {
+          await fs.mkdir(project, { recursive: true })
+          await fs.writeFile(path.join(global, "opencode.json"), JSON.stringify({ shell: "global-sentinel" }))
+        }).pipe(
+          Effect.andThen(
+            // Fixture control: with global enabled the file loads.
+            Effect.gen(function* () {
+              const config = yield* Config.Service
+              expect(Config.latest(yield* config.entries(), "shell")).toBe("global-sentinel")
+            }).pipe(Effect.provide(testLayer(project, global))),
+          ),
+          Effect.andThen(
+            Effect.gen(function* () {
+              const config = yield* Config.Service
+              expect(Config.latest(yield* config.entries(), "shell")).toBeUndefined()
+            }).pipe(
+              Effect.provide(
+                testLayer(project, global, project, undefined, undefined, undefined, undefined, { global: false }),
+              ),
+            ),
           ),
         )
       }),
@@ -188,7 +325,7 @@ describe("Config", () => {
     ),
   )
 
-  it.live("reloads external config and publishes directory updates", () =>
+  it.live("reloads file substitutions when their source changes", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
@@ -198,10 +335,12 @@ describe("Config", () => {
           const global = path.join(tmp.path, "global")
           const project = path.join(tmp.path, "project")
           const file = path.join(global, "opencode.json")
+          const source = path.join(global, "shell.txt")
           yield* Effect.promise(async () => {
             await fs.mkdir(global, { recursive: true })
             await fs.mkdir(project, { recursive: true })
-            await fs.writeFile(file, JSON.stringify({ shell: "first" }))
+            await fs.writeFile(source, "first")
+            await fs.writeFile(file, JSON.stringify({ shell: "{file:shell.txt}" }))
           })
           return yield* Effect.gen(function* () {
             const config = yield* Config.Service
@@ -212,9 +351,8 @@ describe("Config", () => {
               .pipe(Stream.take(1), Stream.runCollect, Effect.forkScoped)
             yield* Effect.sleep("10 millis")
 
-            yield* watcher.emit({ type: "update", path: path.join(global, "commands", "review.md") })
-            yield* Effect.promise(() => fs.writeFile(file, JSON.stringify({ shell: "second" })))
-            yield* watcher.emit({ type: "update", path: file })
+            yield* Effect.promise(() => fs.writeFile(source, "second"))
+            yield* watcher.emit({ type: "update", path: source })
 
             expect(yield* Fiber.join(changed)).toHaveLength(1)
             expect(Config.latest(yield* config.entries(), "shell")).toBe("second")
@@ -333,6 +471,38 @@ describe("Config", () => {
     }).pipe(Effect.provide(Config.testLayer())),
   )
 
+  it.effect("keeps test config unchanged after an update callback fails", () =>
+    Effect.gen(function* () {
+      const config = yield* Config.Service
+      const test = yield* Config.Test
+      const entry = new Document({
+        type: "document",
+        path: AbsolutePath.make(path.join(import.meta.dir, "opencode.json")),
+        info: new Info({ shell: "initial" }),
+      })
+      yield* test.setEntries([entry])
+      const cause = new Error("Rejected config update")
+      const error = yield* config
+        .update((draft) => {
+          draft.shell = "discarded"
+          throw cause
+        })
+        .pipe(Effect.flip)
+
+      expect(error).toBeInstanceOf(Config.UpdateError)
+      expect(error.message).toBe("Config update failed")
+      expect(error.cause).toBe(cause)
+      expect(yield* config.entries()).toEqual([entry])
+      expect(entry.info.shell).toBe("initial")
+
+      const updated = yield* config.update((draft) => {
+        draft.shell = "recovered"
+      })
+      expect(updated.shell).toBe("recovered")
+      expect(Config.latest(yield* test.entries(), "shell")).toBe("recovered")
+    }).pipe(Effect.provide(Config.testLayer())),
+  )
+
   it.effect("returns the latest defined scalar from priority-ordered documents", () =>
     Effect.sync(() => {
       const entries = [
@@ -388,6 +558,7 @@ describe("Config", () => {
                   ]),
                 get: () => Effect.die("unused Credential.get"),
                 create: () => Effect.die("unused Credential.create"),
+                activate: () => Effect.die("unused Credential.activate"),
                 update: () => Effect.die("unused Credential.update"),
                 remove: () => Effect.die("unused Credential.remove"),
               }),
@@ -432,7 +603,11 @@ describe("Config", () => {
             yield* Effect.yieldNow
             available = true
             key = "next"
-            yield* bus.publish(Integration.Event.ConnectionUpdated, { integrationID })
+            yield* bus.publish(
+              Credential.Event.Switched,
+              { credentialID: Credential.ID.create(), integrationID },
+              { global: true },
+            )
             expect(yield* Fiber.join(updated)).toHaveLength(1)
             const refreshed = yield* config.entries()
             expect(Config.latest(refreshed, "shell")).toBe("project")
@@ -491,6 +666,7 @@ describe("Config", () => {
                   ]),
                 get: () => Effect.die("unused Credential.get"),
                 create: () => Effect.die("unused Credential.create"),
+                activate: () => Effect.die("unused Credential.activate"),
                 update: () => Effect.die("unused Credential.update"),
                 remove: () => Effect.die("unused Credential.remove"),
               }),
@@ -541,10 +717,10 @@ describe("Config", () => {
   it.effect("migrates arbitrary v1 configuration into valid v2 configuration", () =>
     Effect.sync(() => {
       FastCheck.assert(
-        FastCheck.property(Schema.toArbitrary(ConfigV1.Info), (info) => {
+        FastCheck.property(Schema.toArbitrary(ConfigV1.Info)(FastCheck), (info) => {
           const parsed = Schema.decodeUnknownSync(ConfigV1.Info)(
-            Schema.decodeUnknownSync(Schema.UnknownFromJsonString)(
-              Schema.encodeUnknownSync(Schema.UnknownFromJsonString)(info),
+            Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown))(
+              Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown))(info),
             ),
           )
           Schema.decodeUnknownSync(Info)(ConfigMigrateV1.migrate(parsed), { errors: "all" })
@@ -574,6 +750,25 @@ describe("Config", () => {
     }),
   )
 
+  it.effect("migrates the v1 update policy", () =>
+    Effect.sync(() => {
+      expect(ConfigMigrateV1.migrate({ autoupdate: false }).update).toBe("disable")
+      expect(ConfigMigrateV1.migrate({ autoupdate: "notify" }).update).toBe("notify")
+      expect(ConfigMigrateV1.migrate({ autoupdate: true }).update).toBe("notify")
+      expect(ConfigMigrateV1.migrate({}).update).toBeUndefined()
+    }),
+  )
+
+  it.effect("normalizes the previous native auto update policy", () =>
+    Effect.sync(() => {
+      expect(ConfigNormalize.normalize({ update: "auto" })).toEqual({
+        type: "normalized",
+        encoded: { update: "notify" },
+        diagnostics: [],
+      })
+    }),
+  )
+
   it.effect("migrates v1 provider lists to policies", () =>
     Effect.sync(() => {
       expect(
@@ -599,6 +794,7 @@ describe("Config", () => {
         provider: {
           bedrock: {
             npm: "@ai-sdk/amazon-bedrock",
+            models: { claude: { provider: { npm: "@ai-sdk/anthropic" } } },
             options: {
               headers: { "x-test": "1" },
               body: { trace: true },
@@ -611,59 +807,10 @@ describe("Config", () => {
 
       expect(migrated.providers?.bedrock).toMatchObject({
         package: Provider.aisdk("@ai-sdk/amazon-bedrock"),
+        models: { claude: { package: Provider.aisdk("@ai-sdk/anthropic") } },
         settings: { region: "us-east-1", profile: "dev" },
         headers: { "x-test": "1" },
         body: { trace: true },
-      })
-    }),
-  )
-
-  it.effect("migrates the explicit V1 native OpenAI selector without requiring npm metadata", () =>
-    Effect.sync(() => {
-      const migrated = ConfigMigrateV1.migrate({
-        provider: {
-          mycodex: {
-            sdk: "opencode-openai",
-            npm: "@ai-sdk/openai",
-            options: {
-              apiKey: "secret",
-              baseURL: "https://example.test/v1",
-            },
-            models: {
-              inherited: {},
-              legacyMetadata: { provider: { npm: "@ai-sdk/openai" } },
-              compatibleOverride: { provider: { npm: "@ai-sdk/openai-compatible" } },
-            },
-          },
-          nativeWithoutNpm: {
-            sdk: "opencode-openai",
-            api: "https://native.example.test/v1",
-          },
-          explicitAISDK: {
-            sdk: "ai-sdk",
-            npm: "@ai-sdk/openai",
-          },
-        },
-      })
-
-      expect(migrated.providers?.mycodex).toMatchObject({
-        package: "@opencode-ai/ai/providers/openai",
-        settings: {
-          apiKey: "secret",
-          baseURL: "https://example.test/v1",
-        },
-        models: {
-          inherited: {},
-          legacyMetadata: {},
-          compatibleOverride: { package: Provider.aisdk("@ai-sdk/openai-compatible") },
-        },
-      })
-      expect(migrated.providers?.nativeWithoutNpm).toMatchObject({
-        package: "@opencode-ai/ai/providers/openai",
-        settings: { baseURL: "https://native.example.test/v1" },
-      })
-      expect(migrated.providers?.explicitAISDK).toMatchObject({
-        package: Provider.aisdk("@ai-sdk/openai"),
       })
     }),
   )
@@ -795,32 +942,34 @@ describe("Config", () => {
     }),
   )
 
-  it.effect("migrates v1 command configuration", () =>
-    Effect.sync(() => {
-      expect(
-        ConfigMigrateV1.migrate({
-          command: {
-            review: {
-              template: "Review changes",
-              description: "Review code",
-              agent: "reviewer",
-              model: "anthropic/claude",
-              variant: "high",
-              subtask: true,
+  for (const subtask of [true, false]) {
+    it.effect(`migrates v1 command configuration with subtask: ${subtask}`, () =>
+      Effect.sync(() => {
+        expect(
+          ConfigMigrateV1.migrate({
+            command: {
+              review: {
+                template: "Review changes",
+                description: "Review code",
+                agent: "reviewer",
+                model: "anthropic/claude",
+                variant: "high",
+                subtask,
+              },
             },
+          }).commands,
+        ).toEqual({
+          review: {
+            template: "Review changes",
+            description: "Review code",
+            agent: "reviewer",
+            model: { providerID: "anthropic", model: "claude", variant: "high" },
+            subagent: subtask,
           },
-        }).commands,
-      ).toEqual({
-        review: {
-          template: "Review changes",
-          description: "Review code",
-          agent: "reviewer",
-          model: { providerID: "anthropic", model: "claude", variant: "high" },
-          subtask: true,
-        },
-      })
-    }),
-  )
+        })
+      }),
+    )
+  }
 
   it.effect("normalizes renamed permission actions when migrating v1 permissions", () =>
     Effect.sync(() => {
@@ -851,7 +1000,7 @@ describe("Config", () => {
       Effect.flatMap((tmp) =>
         Effect.gen(function* () {
           const config = yield* Config.Service
-          const entries = yield* config.entries()
+          const entries = (yield* config.entries()).filter((entry) => !entry.path || inFixture(tmp.path, entry.path))
 
           expect(entries).toEqual([
             new Directory({ type: "directory", path: AbsolutePath.make(path.join(tmp.path, "global")) }),
@@ -893,7 +1042,7 @@ describe("Config", () => {
     ),
   )
 
-  it.live("does not watch ecosystem config roots", () =>
+  it.live("does not recursively watch ecosystem config roots", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
@@ -911,11 +1060,16 @@ describe("Config", () => {
             const watcher = yield* Watcher.Test
             yield* config.entries()
 
-            expect(yield* watcher.subscriptions()).toEqual([
+            expect((yield* watcher.subscriptions()).filter((item) => inFixture(tmp.path, item.path))).toEqual([
               {
                 type: "directory",
                 path: AbsolutePath.make(path.join(tmp.path, "global")),
                 ignore: ["**/{node_modules,.git}/**", ".git", "node_modules"],
+              },
+              {
+                type: "entries",
+                path: tmp.path,
+                names: [".agents", ".claude", ".opencode", "opencode.json", "opencode.jsonc"],
               },
             ])
           }).pipe(Effect.provide(testLayer(tmp.path, undefined, undefined, undefined, Watcher.testLayer)))
@@ -1101,7 +1255,7 @@ describe("Config", () => {
                 shell: "/bin/bash",
                 model: "anthropic/claude",
                 default_agent: "reviewer",
-                autoupdate: "notify",
+                update: "notify",
                 share: "disabled",
                 enterprise: { url: "https://share.example.com" },
                 username: "test-user",
@@ -1188,7 +1342,7 @@ describe("Config", () => {
             expect(documents[0]?.info.shell).toBe("/bin/bash")
             expect(documents[0]?.info.model).toEqual(selection("anthropic/claude"))
             expect(documents[0]?.info.default_agent).toBe("reviewer")
-            expect(documents[0]?.info.autoupdate).toBe("notify")
+            expect(documents[0]?.info.update).toBe("notify")
             expect(documents[0]?.info.share).toBe("disabled")
             expect(documents[0]?.info.enterprise).toEqual({ url: "https://share.example.com" })
             expect(documents[0]?.info.username).toBe("test-user")
@@ -1326,6 +1480,7 @@ describe("Config", () => {
               JSON.stringify({
                 shell: "/bin/zsh",
                 default_agent: "reviewer",
+                autoupdate: false,
                 snapshot: false,
                 autoshare: true,
                 permission: {
@@ -1406,6 +1561,7 @@ describe("Config", () => {
             expect(documents[0]?.info).toBeInstanceOf(Info)
             expect(documents[0]?.info.shell).toBe("/bin/zsh")
             expect(documents[0]?.info.default_agent).toBe("reviewer")
+            expect(documents[0]?.info.update).toBe("disable")
             expect(documents[0]?.info.snapshots).toBe(false)
             expect(documents[0]?.info.share).toBe("auto")
             expect(documents[0]?.info.permissions).toEqual([
@@ -1508,8 +1664,9 @@ describe("Config", () => {
 
             expect(documents.map((document) => document.info.$schema)).toEqual(["base"])
             expect(yield* watcher.subscriptions()).toContainEqual({
-              path: path.join(tmp.path, "opencode.jsonc"),
-              type: "file",
+              path: tmp.path,
+              type: "entries",
+              names: [".agents", ".claude", ".opencode", "opencode.json", "opencode.jsonc"],
             })
           }).pipe(Effect.provide(testLayer(tmp.path)))
         }),
@@ -1557,7 +1714,7 @@ describe("Config", () => {
 
           return yield* Effect.gen(function* () {
             const config = yield* Config.Service
-            const entries = yield* config.entries()
+            const entries = (yield* config.entries()).filter((entry) => !entry.path || inFixture(tmp.path, entry.path))
             const documents = entries.filter((entry) => entry.type === "document")
 
             expect(entries.filter((entry) => entry.type === "directory").map((entry) => entry.path)).toEqual([

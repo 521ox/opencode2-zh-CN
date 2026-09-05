@@ -25,14 +25,8 @@ import type { FileSystemEntry } from "@opencode-ai/client"
 import { Skill } from "@opencode-ai/schema/skill"
 import { stringWidth } from "../../util/string-width"
 import { parseFileLineRange, stripFileLineRange } from "../../prompt/parse"
-import { moveSelection, revealSelectionOffset } from "../../ui/select-controller"
-import {
-  directoryAutocompleteExactValue,
-  directoryAutocompleteMatches,
-  directoryAutocompleteResultValue,
-  directoryAutocompleteSearch,
-  slashArgumentAutocomplete,
-} from "../../prompt/directory-completion"
+import { moveSelection, reconcileSelectionWindow, revealSelectionOffset } from "../../ui/select-controller"
+import { directoryAutocomplete, slashArgumentAutocomplete } from "../../prompt/directory-completion"
 
 export type AutocompleteRef = {
   onInput: (value: string) => void
@@ -77,8 +71,8 @@ export function Autocomplete(props: {
   hasSkill: (id: string) => boolean
   promptPartTypeId: () => number
 }) {
-  const editor = useEditorContext()
   const { t } = useI18n()
+  const editor = useEditorContext()
   const client = useClient()
   const data = useData()
   const keymap = Keymap.use()
@@ -178,7 +172,7 @@ export function Autocomplete(props: {
 
     const charAfterCursor = displayCharAt(props.value, currentCursorOffset)
     const needsSpace = charAfterCursor !== " "
-    const prefix = part.type === "skill" ? "/" : "@"
+    const prefix = "@"
     const append = prefix + text + (needsSpace ? " " : "")
 
     input.cursorOffset = store.index
@@ -343,20 +337,38 @@ export function Autocomplete(props: {
       if (referenceMatch())
         return { options: [], failed: false, mode: input.visible, query: input.query, resolved: true }
       const { lineRange, base } = parseFileLineRange(input.query ?? "")
-      const directorySearch =
-        input.visible === "directory"
-          ? directoryAutocompleteSearch(base, input.location?.directory ?? paths.cwd, paths.home)
-          : undefined
-
       const requestLocation = {
-        directory: directorySearch?.directory ?? input.location?.directory,
+        directory: input.location?.directory,
         workspace: input.location?.workspaceID ?? data.location.default().workspaceID,
       }
-      const result = await (
-        input.visible === "directory"
-          ? client.api.file.list({ location: requestLocation })
-          : client.api.file.find({ query: base, limit: 20, location: requestLocation })
-      ).then(
+      const width = props.anchor().width - 4
+      if (input.visible === "directory") {
+        const result = await directoryAutocomplete(
+          client.api.file,
+          { ...requestLocation, directory: requestLocation.directory ?? paths.cwd },
+          base,
+          paths.home,
+        ).catch(() => undefined)
+        if (!result)
+          return info.value?.mode === input.visible
+            ? { ...info.value, failed: true }
+            : { options: [], failed: true, mode: input.visible, query: input.query, resolved: false }
+        return {
+          options: result.map((item) => ({
+            display: Locale.truncateMiddle(item.value, width),
+            value: item.value,
+            isDirectory: true,
+            path: item.value,
+            absolute: item.absolute,
+            onSelect: () => insertDirectory(item.value),
+          })),
+          failed: false,
+          mode: input.visible,
+          query: input.query,
+          resolved: true,
+        }
+      }
+      const result = await client.api.file.find({ query: base, limit: 20, location: requestLocation }).then(
         (result) => result,
         () => undefined,
       )
@@ -368,38 +380,8 @@ export function Autocomplete(props: {
 
       const options: AutocompleteOption[] = []
 
-      const width = props.anchor().width - 4
-      const exact = directorySearch ? directoryAutocompleteExactValue(base, directorySearch) : undefined
-      if (exact) {
-        options.push({
-          display: Locale.truncateMiddle(exact, width),
-          value: exact,
-          isDirectory: true,
-          path: exact,
-          absolute: result.location.directory,
-          onSelect: () => insertDirectory(exact),
-        })
-      }
-      const entries =
-        input.visible === "directory"
-          ? result.data.filter(
-              (item) =>
-                item.type === "directory" && directoryAutocompleteMatches(item.path, directorySearch?.query ?? ""),
-            )
-          : result.data
       options.push(
-        ...entries.map((item): AutocompleteOption => {
-          if (input.visible === "directory") {
-            const directory = directorySearch ? directoryAutocompleteResultValue(item.path, directorySearch) : item.path
-            return {
-              display: Locale.truncateMiddle(directory, width),
-              value: directory,
-              isDirectory: true,
-              path: directory,
-              absolute: path.resolve(result.location.directory, item.path),
-              onSelect: () => insertDirectory(directory),
-            }
-          }
+        ...result.data.map((item): AutocompleteOption => {
           const { filename, part } = createFilePart(item, path.join(result.location.directory, item.path), lineRange)
           return {
             display: Locale.truncateMiddle(filename, width),
@@ -480,6 +462,22 @@ export function Autocomplete(props: {
       )
   })
 
+  const skillOptions = createMemo(() =>
+    (data.location.skill.list(location.current) ?? []).map(
+      (skill): AutocompleteOption => ({
+        display: "@" + skill.id,
+        description: skill.description,
+        kind: "skill",
+        onSelect: () => {
+          insertPart(skill.id, {
+            type: "skill",
+            value: { id: Skill.ID.make(skill.id), mention: { start: 0, end: 0, text: "" } },
+          })
+        },
+      }),
+    ),
+  )
+
   const referenceAliases = createMemo(() =>
     references()
       .filter((reference) => !reference.hidden)
@@ -539,11 +537,7 @@ export function Autocomplete(props: {
         display: "/" + skill.id,
         description: skill.description,
         kind: "skill",
-        onSelect: () =>
-          insertPart(skill.id, {
-            type: "skill",
-            value: { id: Skill.ID.make(skill.id), mention: { start: 0, end: 0, text: "" } },
-          }),
+        onSelect: () => insertSlash(skill.id),
       })
     }
 
@@ -594,10 +588,10 @@ export function Autocomplete(props: {
     const fileOptions: AutocompleteOption[] = store.visible === "reference" ? fileSearch.options : []
     const nonFileOptions: AutocompleteOption[] =
       store.visible === "reference"
-        ? [...referenceAliasesValue, ...agentsValue, ...mcpResources()]
+        ? [...skillOptions(), ...referenceAliasesValue, ...agentsValue, ...mcpResources()]
         : store.index === 0
           ? [...commandsValue]
-          : commandsValue.filter((item) => item.kind === "skill")
+          : []
 
     if (!searchValue) {
       return [...nonFileOptions, ...fileOptions]
@@ -652,6 +646,18 @@ export function Autocomplete(props: {
     })
     if (offset === scroll.scrollTop) return
     scroll.scrollBy(offset - scroll.scrollTop)
+  }
+
+  function syncSelectionWindow() {
+    if (!scroll) return
+    const selected = reconcileSelectionWindow(store.selected, {
+      count: options().length,
+      limit: Math.min(height(), options().length),
+      offset: scroll.scrollTop,
+    })
+    if (selected === store.selected) return
+    setConfirming(undefined)
+    setStore("selected", selected)
   }
 
   function select() {
@@ -735,6 +741,14 @@ export function Autocomplete(props: {
         group: t("ui.autocomplete.group"),
         run() {
           hide()
+        },
+      },
+      {
+        id: "prompt.clear",
+        title: t("ui.autocomplete.hide"),
+        group: t("ui.autocomplete.group"),
+        run() {
+          hide(true)
         },
       },
       {
@@ -856,7 +870,8 @@ export function Autocomplete(props: {
     return Math.min(10, count, Math.max(1, props.anchor().y))
   })
 
-  let scroll: ScrollBoxRenderable
+  let scroll: ScrollBoxRenderable | undefined
+  onCleanup(() => scroll?.verticalScrollBar.off("change", syncSelectionWindow))
   const scrollAcceleration = createMemo(() => getScrollAcceleration(config))
   const emptyMessage = createMemo(() => {
     const fileSearch = visibleFiles()
@@ -884,7 +899,11 @@ export function Autocomplete(props: {
       borderColor={theme.border.default}
     >
       <scrollbox
-        ref={(r: ScrollBoxRenderable) => (scroll = r)}
+        ref={(r: ScrollBoxRenderable) => {
+          scroll?.verticalScrollBar.off("change", syncSelectionWindow)
+          scroll = r
+          scroll.verticalScrollBar.on("change", syncSelectionWindow)
+        }}
         backgroundColor={theme.background.default}
         height={height()}
         scrollbarOptions={{ visible: false }}
@@ -946,7 +965,7 @@ export function Autocomplete(props: {
                     fg={index === store.selected ? theme.text.action.primary.focused : theme.text.subdued}
                     wrapMode="none"
                   >
-                    {" " + option().description?.trimStart()}
+                    {" " + option().description?.replace(/\s+/g, " ").trim()}
                   </text>
                 </Show>
               </box>

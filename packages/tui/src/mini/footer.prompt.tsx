@@ -43,6 +43,7 @@ import type {
   RunPrompt,
   RunPromptPart,
   RunReference,
+  RunTuiConfig,
 } from "./types"
 
 const AUTOCOMPLETE_ROWS = FOOTER_MENU_ROWS
@@ -178,6 +179,7 @@ export function selectedCommand(text: string, command: RunPrompt["command"]) {
 export function RunPromptBody(props: {
   theme: () => RunFooterTheme
   background: () => ColorInput
+  cursorStyle: RunTuiConfig["cursor"]
   placeholder: () => StyledText | string
   onSubmit: () => void
   onKeyDown: (event: KeyEvent) => void
@@ -241,6 +243,7 @@ export function RunPromptBody(props: {
           backgroundColor={props.background()}
           focusedBackgroundColor={props.background()}
           cursorColor={props.theme().text}
+          cursorStyle={props.cursorStyle}
           onSubmit={props.onSubmit}
           onKeyDown={props.onKeyDown}
           onPaste={() => {
@@ -1062,6 +1065,7 @@ export function createPromptState(input: PromptInput): PromptState {
         id: "prompt.queue",
         title: input.t("mini.prompt.keymap.queue"),
         group: input.t("mini.footer.group.prompt"),
+        palette: true,
         run() {
           syncDraft()
           submitPrompt(promptCopy(draft), "queue")

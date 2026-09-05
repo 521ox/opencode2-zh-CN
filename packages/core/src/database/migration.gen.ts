@@ -45,6 +45,10 @@ import m42 from "./migration/20260812181746_session_inbox.js"
 import m43 from "./migration/20260812213948_worktree.js"
 import m44 from "./migration/20260815081049_session_start_directory.js"
 import m45 from "./migration/20260816053649_session_execution_lease.js"
+import m46 from "./migration/20260819222447_session_viewed_state.js"
+import m47 from "./migration/20260823191254_nullable_workspace_binding.js"
+import m48 from "./migration/20260828113155_session_subagent_continuation.js"
+import m49 from "./migration/20260829110336_session_assistant_sidecar.js"
 
 export const migrations = [
   m00,
@@ -93,4 +97,8 @@ export const migrations = [
   m43,
   m44,
   m45,
+  m46,
+  m47,
+  m48,
+  m49,
 ] satisfies DatabaseMigration.Migration[]

@@ -28,13 +28,15 @@ type Data = {
   sources: Map<string, Types.DeepMutable<Source>>
 }
 
-type Draft = {
+type Editor = {
   add(name: string, source: Source): void
   remove(name: string): void
   list(): readonly [string, Source][]
+  get(name: string): Source | undefined
 }
 
-export interface Interface extends State.Transformable<Draft> {
+export interface Interface extends State.Transformable<Editor> {
+  readonly get: (name: string) => Effect.Effect<Info | undefined>
   readonly list: () => Effect.Effect<Info[]>
 }
 
@@ -48,18 +50,19 @@ const layer = Layer.effect(
     const cache = yield* RepositoryCache.Service
     const scope = yield* Scope.Scope
     const materialized = new Map<string, Info>()
-    const state = State.create<Data, Draft>({
+    const state = State.create<Data, Editor>({
       name: "reference",
       initial: () => ({ sources: new Map() }),
-      draft: (draft) => ({
-        add: (name, source) => draft.sources.set(name, source as Types.DeepMutable<Source>),
-        remove: (name) => draft.sources.delete(name),
-        list: () => Array.from(draft.sources.entries()) as [string, Source][],
+      editor: (editor) => ({
+        add: (name, source) => editor.sources.set(name, source as Types.DeepMutable<Source>),
+        remove: (name) => editor.sources.delete(name),
+        list: () => Array.from(editor.sources.entries()) as [string, Source][],
+        get: (name) => editor.sources.get(name),
       }),
-      finalize: (draft) =>
+      notify: (value) =>
         Effect.gen(function* () {
           materialized.clear()
-          for (const [name, source] of draft.list()) {
+          for (const [name, source] of value.sources) {
             if (source.type === "local") {
               materialized.set(
                 name,
@@ -110,6 +113,9 @@ const layer = Layer.effect(
     return Service.of({
       transform: state.transform,
       reload: state.reload,
+      get: Effect.fn("Reference.get")(function* (name) {
+        return materialized.get(name)
+      }),
       list: Effect.fn("Reference.list")(function* () {
         return Array.from(materialized.values())
       }),

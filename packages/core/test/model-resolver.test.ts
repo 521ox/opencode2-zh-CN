@@ -1,8 +1,8 @@
 import { describe, expect } from "bun:test"
-import { LLM, LanguageModel } from "@opencode-ai/ai"
-import { OpenAIChat } from "@opencode-ai/ai/protocols"
+import { LLM, LanguageModel, Message } from "@opencode-ai/ai"
+import { OpenAIChat, OpenAICompatibleResponses, OpenAIResponses } from "@opencode-ai/ai/protocols"
 import { compileRequest } from "@opencode-ai/ai/route/client"
-import { Effect, Layer } from "effect"
+import { ConfigProvider, Effect, Layer } from "effect"
 import { Headers } from "effect/unstable/http"
 import { Credential } from "@opencode-ai/core/credential"
 import { Integration } from "@opencode-ai/core/integration"
@@ -16,6 +16,7 @@ import { it } from "./lib/effect"
 
 interface ModelOptions {
   readonly providerID?: Provider.ID
+  readonly canonical?: Provider.ID
   readonly modelID?: string
   readonly compatibility?: Compatibility
   readonly settings?: Info["settings"]
@@ -26,24 +27,27 @@ interface ModelOptions {
 }
 
 const model = (packageName: string | undefined, options: ModelOptions = {}) =>
-  Info.make({
-    id: ID.make("test-model"),
-    modelID: ID.make(options.modelID ?? "api-test-model"),
-    providerID: options.providerID ?? Provider.ID.make("test-provider"),
-    name: "Test model",
-    compatibility: options.compatibility,
-    package: packageName,
-    settings: options.settings ?? {},
-    headers: options.headers ?? { "x-test": "header" },
-    body: options.body ?? { custom_extension: { enabled: true } },
-    capabilities: { tools: true, input: ["text"], output: ["text"] },
-    variants: options.variants ?? [],
-    time: { released: 0 },
-    cost: [],
-    status: "active",
-    enabled: true,
-    limit: options.limit ?? { context: 100, output: 20 },
-  })
+  Object.assign(
+    Info.make({
+      id: ID.make("test-model"),
+      modelID: ID.make(options.modelID ?? "api-test-model"),
+      providerID: options.providerID ?? Provider.ID.make("test-provider"),
+      name: "Test model",
+      compatibility: options.compatibility,
+      package: packageName,
+      settings: options.settings ?? {},
+      headers: options.headers ?? { "x-test": "header" },
+      body: options.body ?? { custom_extension: { enabled: true } },
+      capabilities: { tools: true, input: ["text"], output: ["text"] },
+      variants: options.variants ?? [],
+      time: { released: 0 },
+      cost: [],
+      status: "active",
+      enabled: true,
+      limit: options.limit ?? { context: 100, output: 20 },
+    }),
+    options.canonical === undefined ? {} : { canonical: options.canonical },
+  )
 
 function withEnv<A, E, R>(variables: Record<string, string | undefined>, effect: () => Effect.Effect<A, E, R>) {
   return Effect.acquireUseRelease(
@@ -64,6 +68,10 @@ function withEnv<A, E, R>(variables: Record<string, string | undefined>, effect:
         })
       }),
   )
+}
+
+function withConfigEnv<A, E, R>(env: Record<string, string>, effect: () => Effect.Effect<A, E, R>) {
+  return effect().pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))))
 }
 
 describe("ModelResolver", () => {
@@ -213,26 +221,29 @@ describe("ModelResolver", () => {
     ),
   )
 
-  it.effect("uses the API modelID instead of the catalog ID for compatible OpenAI Responses routes", () =>
+  it.effect("uses the API modelID for AI SDK OpenAI compatibility routes", () =>
     Effect.gen(function* () {
       const catalog = model(Provider.aisdk("@ai-sdk/openai"), {
         settings: { baseURL: "https://openai.example/v1" },
         limit: { context: 100, input: 80, output: 20 },
       })
-      const resolved = yield* ModelResolver.fromCatalogModel(catalog)
+      const resolved = yield* ModelResolver.fromCatalogModel(
+        catalog,
+        Credential.Key.make({ type: "key", key: "secret" }),
+      )
 
       expect(catalog.id).toBe(ID.make("test-model"))
       expect(resolved).toMatchObject({ id: "api-test-model", provider: "test-provider" })
       expect(resolved.route).toMatchObject({
         id: "openai-compatible-responses",
-        providerMetadataKey: "openresponses",
+        providerMetadataKey: "test-provider",
         endpoint: { baseURL: "https://openai.example/v1" },
         defaults: {
           headers: { "x-test": "header" },
-          limits: { context: 100, input: 80, output: 20 },
           http: { body: { custom_extension: { enabled: true } } },
         },
       })
+      expect(OpenAIResponses.supportsCompaction(resolved)).toBe(false)
       const prepared = yield* compileRequest(LLM.request({ model: resolved, prompt: "Hello" }))
       expect(prepared.body.max_output_tokens).toBeUndefined()
       expect(JSON.stringify(prepared.body)).not.toContain("max_output_tokens")
@@ -254,22 +265,24 @@ describe("ModelResolver", () => {
   )
 
   it.effect("treats an empty configured API key as omitted", () =>
-    Effect.gen(function* () {
-      const resolved = yield* ModelResolver.fromCatalogModel(
-        model(Provider.aisdk("@ai-sdk/openai"), {
-          settings: { apiKey: "", baseURL: "https://openai.example/v1" },
-        }),
-      )
-      const headers = yield* resolved.route.auth.apply({
-        request: LLM.request({ model: resolved, prompt: "Hello" }),
-        method: "POST",
-        url: "https://openai.example/v1/responses",
-        body: "{}",
-        headers: Headers.empty,
-      })
+    withConfigEnv({ OPENAI_API_KEY: "environment-key" }, () =>
+      Effect.gen(function* () {
+        const resolved = yield* ModelResolver.fromCatalogModel(
+          model(Provider.aisdk("@ai-sdk/openai"), {
+            settings: { apiKey: "", baseURL: "https://openai.example/v1" },
+          }),
+        )
+        const headers = yield* resolved.route.auth.apply({
+          request: LLM.request({ model: resolved, prompt: "Hello" }),
+          method: "POST",
+          url: "https://openai.example/v1/responses",
+          body: "{}",
+          headers: Headers.empty,
+        })
 
-      expect(headers.authorization).toBeUndefined()
-    }),
+        expect(headers.authorization).toBe("Bearer environment-key")
+      }),
+    ),
   )
 
   it.effect("uses no native API-key auth for an explicitly enabled provider without credentials", () => {
@@ -301,9 +314,10 @@ describe("ModelResolver", () => {
     })
     const integrations = Layer.mock(Integration.Service, {
       connection: {
-        active: () => Effect.succeed(undefined),
+        active: () => Effect.undefined,
         resolve: () => Effect.die("unused"),
         key: () => Effect.die("unused"),
+        activate: () => Effect.die("unused"),
         update: () => Effect.die("unused"),
         remove: () => Effect.die("unused"),
       },
@@ -332,11 +346,12 @@ describe("ModelResolver", () => {
     })
     const layer = ModelResolver.layer.pipe(Layer.provide(Layer.mergeAll(catalog, integrations, npm, aisdk)))
 
-    return withEnv({ GOOGLE_GENERATIVE_AI_API_KEY: undefined }, () =>
+    return withConfigEnv({}, () =>
       Effect.gen(function* () {
         const resolver = yield* ModelResolver.Service
         const resolved = yield* resolver.resolveModel(selected)
 
+        expect(resolved.limit).toEqual(selected.limit)
         const headers = yield* resolved.model.route.auth.apply({
           request: LLM.request({ model: resolved.model, prompt: "Hello" }),
           method: "POST",
@@ -353,7 +368,7 @@ describe("ModelResolver", () => {
   })
 
   it.effect("keeps native provider environment auth strict when no API key is configured", () =>
-    withEnv({ GOOGLE_GENERATIVE_AI_API_KEY: undefined }, () =>
+    withConfigEnv({}, () =>
       Effect.gen(function* () {
         const resolved = yield* ModelResolver.fromCatalogModel(
           model(Provider.aisdk("@ai-sdk/google"), {
@@ -381,8 +396,10 @@ describe("ModelResolver", () => {
         model(Provider.aisdk("@ai-sdk/openai-compatible"), {
           compatibility: {
             reasoningField: "vendor_reasoning",
+            requireReasoning: true,
             maxTokensField: "max_completion_tokens",
             requireFinishReason: false,
+            requireAssistantAfterTool: true,
           },
           settings: {
             apiKey: "settings-secret",
@@ -406,8 +423,10 @@ describe("ModelResolver", () => {
       expect(headers.authorization).toBe("Bearer settings-secret")
       expect(resolved.route.id).toBe("openai-compatible-chat")
       expect(resolved.compatibility?.reasoningField).toBe("vendor_reasoning")
+      expect(resolved.compatibility?.requireReasoning).toBe(true)
       expect(resolved.compatibility?.maxTokensField).toBe("max_completion_tokens")
       expect(resolved.compatibility?.requireFinishReason).toBe(false)
+      expect(resolved.compatibility?.requireAssistantAfterTool).toBe(true)
       expect(prepared.body).toMatchObject({ max_completion_tokens: 10 })
       expect(prepared.body).not.toHaveProperty("max_tokens")
       expect(resolved.route.endpoint.baseURL).toBe("https://compatible.example/v1")
@@ -457,8 +476,12 @@ describe("ModelResolver", () => {
         settings: { baseURL: "https://openai.example/v1" },
         variants: [
           {
-            id: VariantID.make("high"),
-            settings: { reasoningEffort: "high" },
+            id: VariantID.make("xhigh"),
+            settings: {
+              reasoningEffort: "xhigh",
+              reasoningSummary: "auto",
+              include: ["reasoning.encrypted_content"],
+            },
             headers: { "x-variant": "high" },
             body: {
               store: false,
@@ -468,7 +491,11 @@ describe("ModelResolver", () => {
           },
         ],
       })
-      const resolved = yield* ModelResolver.resolveModel(catalog, VariantID.make("high"))
+      const resolved = yield* ModelResolver.resolveModel(
+        catalog,
+        VariantID.make("xhigh"),
+        Credential.Key.make({ type: "key", key: "secret" }),
+      )
 
       expect(resolved.route.defaults.headers).toMatchObject({ "x-test": "header", "x-variant": "high" })
       expect(resolved.route.defaults.http?.body).toEqual({
@@ -478,36 +505,66 @@ describe("ModelResolver", () => {
         temperature: 0.2,
       })
       expect(resolved.route.defaults.providerOptions).toEqual({
-        openresponses: { reasoningEffort: "high" },
+        store: false,
+        reasoningEffort: "xhigh",
+        reasoningSummary: "auto",
+        include: ["reasoning.encrypted_content"],
+      })
+      const prepared = yield* compileRequest(LLM.request({ model: resolved, prompt: "Hello" }))
+      expect(prepared.body).toMatchObject({
+        include: ["reasoning.encrypted_content"],
+        reasoning: { effort: "xhigh", summary: "auto" },
       })
     }),
   )
 
-  it.effect("lowers a selected native OpenAI variant into the Responses request", () =>
+  it.effect("compiles native OpenAI variant settings without mutating the catalog", () =>
     Effect.gen(function* () {
       const catalog = model("@opencode-ai/ai/providers/openai", {
+        providerID: Provider.ID.make("mycodex"),
         modelID: "gpt-5.6-sol",
-        settings: { apiKey: "fixture", baseURL: "https://openai.example/v1" },
+        settings: { baseURL: "https://codex.example/v1" },
         variants: [
           {
             id: VariantID.make("max"),
             settings: {
               reasoningEffort: "max",
-              reasoningSummary: "auto",
+              reasoningSummary: "detailed",
+              include: ["file_search_call.results"],
               textVerbosity: "high",
+              serviceTier: "priority",
+              store: true,
+              compactThreshold: 120_000,
             },
             headers: {},
             body: {},
           },
         ],
       })
-      const resolved = yield* ModelResolver.resolveModel(catalog, VariantID.make("max"))
-      const prepared = yield* compileRequest(LLM.request({ model: resolved, prompt: "Hello" }))
+      const credential = Credential.Key.make({ type: "key", key: "test" })
+      const selected = yield* ModelResolver.resolveModel(catalog, VariantID.make("max"), credential)
+      const defaultModel = yield* ModelResolver.fromCatalogModel(catalog, credential)
+      const prepared = yield* compileRequest(LLM.request({ model: selected, prompt: "Hello" }))
+      const defaultPrepared = yield* compileRequest(LLM.request({ model: defaultModel, prompt: "Hello" }))
 
       expect(prepared.body).toMatchObject({
-        store: false,
-        reasoning: { effort: "max", summary: "auto" },
+        reasoning: { effort: "max", summary: "detailed" },
+        include: ["file_search_call.results"],
         text: { verbosity: "high" },
+        service_tier: "priority",
+        store: true,
+        context_management: [{ type: "compaction", compact_threshold: 120_000 }],
+      })
+      expect(defaultPrepared.body.reasoning).toMatchObject({ effort: "medium" })
+      expect(catalog.settings).toEqual({ baseURL: "https://codex.example/v1" })
+      expect(catalog.variants?.[0]?.settings).toEqual({
+        reasoningEffort: "max",
+        reasoningSummary: "detailed",
+        include: ["file_search_call.results"],
+        textVerbosity: "high",
+        serviceTier: "priority",
+        store: true,
+        compactThreshold: 120_000,
       })
     }),
   )
@@ -571,7 +628,7 @@ describe("ModelResolver", () => {
         custom_extension: { enabled: true },
       })
       expect(resolved.route.defaults.providerOptions).toEqual({
-        anthropic: { thinking: { type: "enabled", budgetTokens: 12000 } },
+        thinking: { type: "enabled", budgetTokens: 12000 },
       })
     }),
   )
@@ -678,7 +735,15 @@ describe("ModelResolver", () => {
           metadata: { accountID: "acct_123" },
         }),
       )
-      const request = LLM.request({ model: resolved, prompt: "Hello" })
+      const request = LLM.request({
+        model: resolved,
+        system: [
+          { type: "text", text: "Base instructions." },
+          { type: "text", text: "Project instructions." },
+        ],
+        messages: [Message.user("Hello"), Message.system("Updated instructions.")],
+      })
+      const prepared = yield* compileRequest(request)
       const headers = yield* resolved.route.auth.apply({
         request,
         method: "POST",
@@ -693,6 +758,153 @@ describe("ModelResolver", () => {
       })
       expect(resolved.route.defaults.headers).toMatchObject({ "chatgpt-account-id": "acct_123" })
       expect(headers.authorization).toBe("Bearer chatgpt-token")
+      expect(prepared.body).toMatchObject({
+        instructions: "Base instructions.\nProject instructions.",
+        input: [
+          { role: "user", content: [{ type: "input_text", text: "Hello" }] },
+          { role: "developer", content: "Updated instructions." },
+        ],
+      })
+    }),
+  )
+
+  it.effect("keeps AI SDK OpenAI request settings compatible without native compaction", () =>
+    Effect.gen(function* () {
+      const catalog = model(Provider.aisdk("@ai-sdk/openai"), {
+        modelID: "api-openai-model",
+        settings: {
+          baseURL: "https://openai.example/v1",
+          organization: "org_123",
+          project: "proj_123",
+          reasoningEffort: "high",
+          serviceTier: "priority",
+          compactThreshold: 120_000,
+        },
+        headers: { "x-test": "header" },
+        body: { custom_extension: { enabled: true } },
+        limit: { context: 100, input: 80, output: 20 },
+      })
+      const resolved = yield* ModelResolver.fromCatalogModel(
+        catalog,
+        Credential.Key.make({ type: "key", key: "secret" }),
+      )
+      const request = LLM.request({ model: resolved, prompt: "Hello" })
+      const headers = yield* resolved.route.auth.apply({
+        request,
+        method: "POST",
+        url: "https://openai.example/v1/responses",
+        body: "{}",
+        headers: Headers.empty,
+      })
+      const prepared = yield* compileRequest(request)
+
+      expect(resolved).toMatchObject({ id: "api-openai-model", provider: "test-provider" })
+      expect(resolved.route).toMatchObject({
+        id: OpenAICompatibleResponses.route.id,
+        endpoint: { baseURL: "https://openai.example/v1" },
+        defaults: {
+          headers: {
+            "x-test": "header",
+            "OpenAI-Organization": "org_123",
+            "OpenAI-Project": "proj_123",
+          },
+          http: { body: { custom_extension: { enabled: true } } },
+        },
+      })
+      expect(headers.authorization).toBe("Bearer secret")
+      expect(prepared.body.reasoning).toEqual({ effort: "high" })
+      expect(prepared.body.service_tier).toBe("priority")
+      expect(prepared.body.context_management).toBeUndefined()
+      expect(OpenAIResponses.supportsCompaction(resolved)).toBe(false)
+      expect(catalog.limit).toEqual({ context: 100, input: 80, output: 20 })
+    }),
+  )
+
+  it.effect("uses explicit native package provenance for mycodex without an AI SDK dependency", () =>
+    Effect.gen(function* () {
+      const native = yield* ModelResolver.fromCatalogModel(
+        model("@opencode-ai/ai/providers/openai", {
+          providerID: Provider.ID.make("mycodex"),
+          settings: { baseURL: "https://codex.example/v1" },
+        }),
+        undefined,
+        { loadAISDK: () => Effect.die("Native mycodex package must not load @ai-sdk/openai") },
+      )
+      const compatible = yield* ModelResolver.fromCatalogModel(
+        model(Provider.aisdk("@ai-sdk/openai-compatible"), {
+          providerID: Provider.ID.make("mycodex"),
+          settings: { baseURL: "https://compatible.example/v1" },
+        }),
+        undefined,
+        { loadAISDK: () => Effect.die("Mapped compatibility package must not load an AI SDK") },
+      )
+
+      expect(native.route).toMatchObject({
+        id: OpenAIResponses.route.id,
+        endpoint: { baseURL: "https://codex.example/v1" },
+      })
+      expect(compatible.route.id).toBe("openai-compatible-chat")
+      expect(OpenAIResponses.supportsCompaction(native)).toBe(true)
+      expect(OpenAIResponses.supportsCompaction(compatible)).toBe(false)
+    }),
+  )
+
+  it.effect("normalizes canonical model identity without changing configured route identity or body", () =>
+    Effect.gen(function* () {
+      const configured = Provider.ID.make("mycodex")
+      const body = { custom_extension: { enabled: true } }
+      const resolved = yield* ModelResolver.fromCatalogModel(
+        model(Provider.aisdk("@ai-sdk/openai"), {
+          providerID: configured,
+          canonical: Provider.ID.openai,
+          settings: { baseURL: "https://compatible.example/v1" },
+          body,
+        }),
+      )
+
+      expect(String(resolved.provider)).toBe("mycodex")
+      expect(String(resolved.route.provider)).toBe("mycodex")
+      expect(String(resolved.id)).toBe("api-test-model")
+      expect(resolved.route.defaults.http?.body).toEqual(body)
+      expect(resolved.route.id).toBe(OpenAICompatibleResponses.route.id)
+      expect(OpenAIResponses.supportsCompaction(resolved)).toBe(false)
+    }),
+  )
+
+  it.effect("keeps canonical Responses packages and compatibility aliases on their owning routes", () =>
+    Effect.gen(function* () {
+      const native = yield* ModelResolver.fromCatalogModel(model("@opencode-ai/ai/providers/openai"))
+      const nativeAlias = yield* ModelResolver.fromCatalogModel(model("@opencode-ai/ai/providers/openai/responses"))
+      const compatible = yield* ModelResolver.fromCatalogModel(
+        model("@opencode-ai/ai/providers/openai-compatible/responses", {
+          settings: { baseURL: "https://compatible.example/v1", providerOptions: { store: true } },
+        }),
+      )
+      const chat = yield* ModelResolver.fromCatalogModel(
+        model("@opencode-ai/ai/providers/openai-compatible", {
+          settings: { baseURL: "https://chat.example/v1" },
+        }),
+      )
+
+      expect(native.route.body).toBe(nativeAlias.route.body)
+      expect(native.route.transport).toBe(OpenAIResponses.transport)
+      expect(nativeAlias.route.transport).toBe(OpenAIResponses.transport)
+      expect(compatible.route).toMatchObject({
+        id: OpenAICompatibleResponses.route.id,
+        protocol: "open-responses",
+        endpoint: { path: "/responses" },
+      })
+      expect(compatible.route.body).toBe(OpenAICompatibleResponses.route.body)
+      expect(compatible.route.transport).toBe(OpenAICompatibleResponses.transport)
+      expect(chat.route).toMatchObject({
+        id: "openai-compatible-chat",
+        protocol: "openai-chat",
+        endpoint: { path: "/chat/completions" },
+      })
+      expect(OpenAIResponses.supportsCompaction(native)).toBe(true)
+      expect(OpenAIResponses.supportsCompaction(nativeAlias)).toBe(true)
+      expect(OpenAIResponses.supportsCompaction(compatible)).toBe(false)
+      expect(OpenAIResponses.supportsCompaction(chat)).toBe(false)
     }),
   )
 
@@ -788,7 +1000,6 @@ describe("ModelResolver", () => {
                   region: "test",
                   headers: { "x-package": "header" },
                   body: { custom: true },
-                  limits: { context: 100, output: 20 },
                 })
                 return LanguageModel.make({ id: modelID, provider: "package-provider", route: native.route })
               },
@@ -845,23 +1056,60 @@ describe("ModelResolver", () => {
       const native = yield* ModelResolver.fromCatalogModel(model(Provider.aisdk("@ai-sdk/openai")))
       const packages = [
         [
+          "@ai-sdk/anthropic",
+          "@opencode-ai/ai/providers/anthropic",
+          { thinking: { type: "adaptive", display: "summarized" }, effort: "high" },
+          { thinking: { type: "adaptive", display: "summarized" }, effort: "high" },
+        ],
+        [
+          "@ai-sdk/cerebras",
+          "@opencode-ai/ai/providers/cerebras",
+          { reasoningEffort: "high" },
+          { reasoningEffort: "high" },
+        ],
+        [
+          "@ai-sdk/deepinfra",
+          "@opencode-ai/ai/providers/deepinfra",
+          { reasoningEffort: "none" },
+          { reasoningEffort: "none" },
+        ],
+        [
+          "@ai-sdk/openai-compatible",
+          "@opencode-ai/ai/providers/openai-compatible",
+          { reasoningEffort: "high" },
+          { reasoningEffort: "high" },
+        ],
+        [
           "@ai-sdk/google",
           "@opencode-ai/ai/providers/google",
           { thinkingConfig: { thinkingLevel: "high" } },
-          { gemini: { thinkingConfig: { thinkingLevel: "high" } } },
+          { thinkingConfig: { thinkingLevel: "high" } },
+        ],
+        [
+          "@ai-sdk/google-vertex",
+          "@opencode-ai/ai/providers/google-vertex",
+          { thinkingConfig: { thinkingLevel: "high" } },
+          { thinkingConfig: { thinkingLevel: "high" } },
         ],
         [
           "@openrouter/ai-sdk-provider",
           "@opencode-ai/ai/providers/openrouter",
           { reasoning: { effort: "high" } },
-          { openrouter: { reasoning: { effort: "high" } } },
+          { reasoning: { effort: "high" } },
         ],
         [
-          "@ai-sdk/xai",
-          "@opencode-ai/ai/providers/xai",
-          { reasoningEffort: "high" },
-          { xai: { reasoningEffort: "high" } },
+          "@ai-sdk/groq",
+          "@opencode-ai/ai/providers/groq",
+          { reasoningEffort: "high", parallelToolCalls: false },
+          { reasoningEffort: "high", parallelToolCalls: false },
         ],
+        [
+          "@ai-sdk/togetherai",
+          "@opencode-ai/ai/providers/togetherai",
+          { reasoningEffort: "high" },
+          { reasoningEffort: "high" },
+        ],
+        ["@ai-sdk/xai", "@opencode-ai/ai/providers/xai", { reasoningEffort: "high" }, { reasoningEffort: "high" }],
       ] as const
 
       yield* Effect.forEach(packages, ([catalogPackage, nativePackage, sourceOptions, providerOptions]) =>
@@ -884,7 +1132,6 @@ describe("ModelResolver", () => {
                     baseURL: "https://provider.example/v1",
                     headers: { "x-provider": "header" },
                     body: { custom: true },
-                    limits: { context: 100, output: 20 },
                     providerOptions,
                   })
                   return LanguageModel.make({ id: modelID, provider: "native-provider", route: native.route })
@@ -892,6 +1139,50 @@ describe("ModelResolver", () => {
               })
             },
             loadAISDK: () => Effect.die("AI SDK loader should not be called"),
+          },
+        ),
+      )
+    }),
+  )
+
+  it.effect("never loads the AI SDK for packages with native implementations", () =>
+    Effect.gen(function* () {
+      const packages = [
+        ["@ai-sdk/anthropic", "@opencode-ai/ai/providers/anthropic", "api-model"],
+        ["@ai-sdk/amazon-bedrock", "@opencode-ai/ai/providers/amazon-bedrock", "api-model"],
+        [
+          "@ai-sdk/amazon-bedrock/mantle",
+          "@opencode-ai/ai/providers/amazon-bedrock/mantle/responses",
+          "openai.gpt-oss-120b",
+        ],
+        ["@ai-sdk/azure", "@opencode-ai/ai/providers/azure/responses", "api-model"],
+        ["@ai-sdk/cerebras", "@opencode-ai/ai/providers/cerebras", "api-model"],
+        ["@ai-sdk/deepinfra", "@opencode-ai/ai/providers/deepinfra", "api-model"],
+        ["@ai-sdk/google", "@opencode-ai/ai/providers/google", "api-model"],
+        ["@ai-sdk/google-vertex", "@opencode-ai/ai/providers/google-vertex", "api-model"],
+        ["@ai-sdk/google-vertex/anthropic", "@opencode-ai/ai/providers/google-vertex/messages", "claude-sonnet-4-6"],
+        ["@ai-sdk/groq", "@opencode-ai/ai/providers/groq", "api-model"],
+        ["@ai-sdk/openai-compatible", "@opencode-ai/ai/providers/openai-compatible", "api-model"],
+        ["@openrouter/ai-sdk-provider", "@opencode-ai/ai/providers/openrouter", "api-model"],
+        ["@ai-sdk/togetherai", "@opencode-ai/ai/providers/togetherai", "api-model"],
+        ["@ai-sdk/xai", "@opencode-ai/ai/providers/xai", "api-model"],
+      ] as const
+
+      yield* Effect.forEach(packages, ([catalogPackage, nativePackage, modelID]) =>
+        ModelResolver.fromCatalogModel(
+          model(Provider.aisdk(catalogPackage), {
+            modelID,
+            settings: { baseURL: "https://provider.example/v1", region: "us-east-1" },
+          }),
+          undefined,
+          {
+            loadPackage: (specifier) => {
+              expect(specifier).toBe(nativePackage)
+              return Effect.succeed({
+                model: (id) => LanguageModel.make({ id, provider: "native-provider", route: OpenAIChat.route }),
+              })
+            },
+            loadAISDK: () => Effect.die(`AI SDK loader called for ${catalogPackage}`),
           },
         ),
       )
@@ -931,10 +1222,8 @@ describe("ModelResolver", () => {
                   location: "eu",
                   project: "vertex-project",
                   providerOptions: {
-                    anthropic: {
-                      thinking: { type: "adaptive", display: "summarized" },
-                      effort: "high",
-                    },
+                    thinking: { type: "adaptive", display: "summarized" },
+                    effort: "high",
                   },
                 })
                 return LanguageModel.make({ id: modelID, provider: "native-provider", route: native.route })
@@ -990,6 +1279,22 @@ describe("ModelResolver", () => {
           settings: { reasoning: { effort: "high" } },
         }),
       )
+      const cerebras = yield* ModelResolver.fromCatalogModel(
+        model(Provider.aisdk("@ai-sdk/cerebras"), { settings: { reasoningEffort: "high" } }),
+      )
+      const deepinfra = yield* ModelResolver.fromCatalogModel(
+        model(Provider.aisdk("@ai-sdk/deepinfra"), {
+          settings: { baseURL: "https://deepinfra.example/provider-root", reasoningEffort: "none" },
+        }),
+      )
+      const togetherai = yield* ModelResolver.fromCatalogModel(
+        model(Provider.aisdk("@ai-sdk/togetherai"), { settings: { reasoningEffort: "high" } }),
+      )
+      const groq = yield* ModelResolver.fromCatalogModel(
+        model(Provider.aisdk("@ai-sdk/groq"), {
+          settings: { reasoningEffort: "high", parallelToolCalls: false },
+        }),
+      )
       const xai = yield* ModelResolver.fromCatalogModel(
         model(Provider.aisdk("@ai-sdk/xai"), { settings: { reasoningEffort: "high" } }),
       )
@@ -1002,24 +1307,39 @@ describe("ModelResolver", () => {
       const mantle = yield* ModelResolver.fromCatalogModel(
         model(Provider.aisdk("@ai-sdk/amazon-bedrock/mantle"), {
           modelID: "openai.gpt-oss-120b",
-          settings: { region: "us-east-1" },
+          settings: { region: "us-east-1", topP: 0.6 },
         }),
       )
 
       expect(google.route.id).toBe("gemini")
-      expect(google.route.defaults.providerOptions).toEqual({
-        gemini: { thinkingConfig: { thinkingBudget: 1_024 } },
-      })
+      expect(google.route.defaults.providerOptions).toEqual({ thinkingConfig: { thinkingBudget: 1_024 } })
       expect(openrouter.route.id).toBe("openrouter")
-      expect(openrouter.route.defaults.providerOptions).toEqual({ openrouter: { reasoning: { effort: "high" } } })
+      expect(openrouter.route.defaults.providerOptions).toEqual({ reasoning: { effort: "high" } })
+      expect(cerebras.route.id).toBe("cerebras-chat")
+      expect(cerebras.route.defaults.providerOptions).toEqual({ reasoningEffort: "high" })
+      expect(String(cerebras.provider)).toBe("test-provider")
+      expect(deepinfra.route.id).toBe("deepinfra-chat")
+      expect(deepinfra.route.endpoint.baseURL).toBe("https://deepinfra.example/provider-root/openai")
+      expect(deepinfra.route.defaults.providerOptions).toEqual({ reasoningEffort: "none" })
+      expect(String(deepinfra.provider)).toBe("test-provider")
+      expect(togetherai.route.id).toBe("togetherai-chat")
+      expect(togetherai.route.defaults.providerOptions).toEqual({ reasoningEffort: "high" })
+      expect(String(togetherai.provider)).toBe("test-provider")
+      expect(groq.route.id).toBe("groq-chat")
+      expect(groq.route.protocol).toBe("groq-chat")
+      expect(groq.route.defaults.providerOptions).toEqual({ reasoningEffort: "high", parallelToolCalls: false })
+      expect(String(groq.provider)).toBe("test-provider")
       expect(xai.route.id).toBe("openai-responses")
       expect(xai.route.defaults.providerOptions).toEqual({
-        xai: { reasoningEffort: "high", store: false },
+        reasoningEffort: "high",
+        store: false,
+        include: ["reasoning.encrypted_content"],
       })
       expect(bedrock.route.id).toBe("bedrock-converse")
       expect(bedrock.route.defaults.generation).toEqual({ topP: 0.8 })
       expect(bedrock.route.defaults.http?.body).toEqual({ serviceTier: { type: "priority" } })
       expect(mantle.route.id).toBe("bedrock-mantle-responses")
+      expect(mantle.route.defaults.generation).toEqual({ topP: 0.6 })
     }),
   )
 
@@ -1167,9 +1487,9 @@ describe("ModelResolver", () => {
 
   it.effect("reports whether a catalog model declares a provider package", () =>
     Effect.sync(() => {
-      expect(ModelResolver.supported(model(Provider.aisdk("@ai-sdk/openai")))).toBe(true)
-      expect(ModelResolver.supported(model("@opencode-ai/ai/providers/custom"))).toBe(true)
-      expect(ModelResolver.supported(model(undefined))).toBe(false)
+      expect(ModelResolver.hasPackage(model(Provider.aisdk("@ai-sdk/openai")))).toBe(true)
+      expect(ModelResolver.hasPackage(model("@opencode-ai/ai/providers/custom"))).toBe(true)
+      expect(ModelResolver.hasPackage(model(undefined))).toBe(false)
     }),
   )
 })

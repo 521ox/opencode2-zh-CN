@@ -1,6 +1,7 @@
 import { createMemo, For, Show, createEffect, onMount, onCleanup } from "solid-js"
 import { createStore } from "solid-js/store"
 import { TextAttributes, ScrollBoxRenderable } from "@opentui/core"
+import type { SessionInfo } from "@opencode-ai/client"
 import { useRoute, useRouteData } from "../../../context/route"
 import { useData } from "../../../context/data"
 import { useClient } from "../../../context/client"
@@ -9,6 +10,7 @@ import { Locale } from "../../../util/locale"
 import { Keymap } from "../../../context/keymap"
 import { useComposerTab } from "./index"
 import { withTimestampedFallback } from "@opencode-ai/util/session-title-fallback"
+import { sessionFamily } from "../../../util/session"
 import { useI18n } from "../../../context/i18n"
 
 interface SubagentEntry {
@@ -17,6 +19,7 @@ interface SubagentEntry {
   title: string
   status: string
   current: boolean
+  prefix: string
 }
 
 export function SubagentsTab(props: { sessionID: string }) {
@@ -36,47 +39,24 @@ export function SubagentsTab(props: { sessionID: string }) {
     const current = session()
     if (!current) return []
 
-    const result: SubagentEntry[] = []
-
-    if (current.parentID) {
-      const siblings = data.session.list().filter((s) => s.parentID === current.parentID)
-      for (const sibling of siblings) {
-        const title = withTimestampedFallback(sibling)
+    const result = sessionFamily<SessionInfo>(data.session.list(), current.id).map(
+      ({ session, prefix }): SubagentEntry => {
+        const title = withTimestampedFallback(session)
         const agentMatch = title.match(/@(\w+) subagent/)
-        const agent = sibling.agent
-          ? Locale.titlecase(sibling.agent)
-          : agentMatch
-            ? Locale.titlecase(agentMatch[1])
-            : i18n.t("session.composer.subagent")
-        const name = agentMatch ? title.replace(agentMatch[0], "").trim() || title : title
-        result.push({
-          sessionID: sibling.id,
-          agent,
-          title: name,
-          status: data.session.status(sibling.id),
-          current: sibling.id === route.sessionID,
-        })
-      }
-    } else {
-      const children = data.session.list().filter((s) => s.parentID === props.sessionID)
-      for (const child of children) {
-        const title = withTimestampedFallback(child)
-        const agentMatch = title.match(/@(\w+) subagent/)
-        const agent = child.agent
-          ? Locale.titlecase(child.agent)
-          : agentMatch
-            ? Locale.titlecase(agentMatch[1])
-            : i18n.t("session.composer.subagent")
-        const name = agentMatch ? title.replace(agentMatch[0], "").trim() || title : title
-        result.push({
-          sessionID: child.id,
-          agent,
-          title: name,
-          status: data.session.status(child.id),
-          current: child.id === route.sessionID,
-        })
-      }
-    }
+        return {
+          sessionID: session.id,
+          agent: session.agent
+            ? Locale.titlecase(session.agent)
+            : agentMatch
+              ? Locale.titlecase(agentMatch[1])
+              : i18n.t("session.composer.subagent"),
+          title: agentMatch ? title.replace(agentMatch[0], "").trim() || title : title,
+          status: data.session.status(session.id),
+          current: session.id === route.sessionID,
+          prefix,
+        }
+      },
+    )
 
     return result.filter((entry) => (store.active ? entry.status === "running" : entry.status !== "running"))
   })
@@ -85,10 +65,7 @@ export function SubagentsTab(props: { sessionID: string }) {
   let wasActive = false
   let scroll: ScrollBoxRenderable | undefined
 
-  const selected = createMemo(() => {
-    return store.selected
-  })
-  const selectedEntry = createMemo(() => entries()[selected()])
+  const selectedEntry = createMemo(() => entries()[store.selected])
 
   createEffect(() => {
     const active = composer.active("subagents")
@@ -117,11 +94,7 @@ export function SubagentsTab(props: { sessionID: string }) {
 
   function moveTo(next: number, center = false) {
     setStore("selected", next)
-    scrollToSelection(center)
-  }
-
-  function scrollToSelection(center: boolean) {
-    scrollToIndex(selected(), center)
+    scrollToIndex(next, center)
   }
 
   function scrollToIndex(index: number, center: boolean) {
@@ -147,7 +120,12 @@ export function SubagentsTab(props: { sessionID: string }) {
         const entry = selectedEntry()
         return [
           ...(entry?.status === "running"
-            ? [{ label: i18n.t("session.composer.interrupt"), shortcut: shortcuts.get("composer.subagent.interrupt") ?? "" }]
+            ? [
+                {
+                  label: i18n.t("session.composer.interrupt"),
+                  shortcut: shortcuts.get("composer.subagent.interrupt") ?? "",
+                },
+              ]
             : []),
           {
             label: i18n.t("session.composer.show", {
@@ -156,10 +134,6 @@ export function SubagentsTab(props: { sessionID: string }) {
             shortcut: shortcuts.get("composer.subagent.toggle-activity") ?? "",
           },
         ]
-      },
-      onClose: () => {
-        const parentID = session()?.parentID
-        if (parentID) navigate({ type: "session", sessionID: parentID })
       },
     })
     onCleanup(cleanup)
@@ -240,7 +214,7 @@ export function SubagentsTab(props: { sessionID: string }) {
         >
           <For each={entries()}>
             {(entry, index) => {
-              const active = createMemo(() => index() === selected())
+              const active = createMemo(() => index() === store.selected)
               const status = createMemo(() => {
                 if (entry.status === "running") return i18n.t("session.composer.running")
                 return ""
@@ -275,7 +249,8 @@ export function SubagentsTab(props: { sessionID: string }) {
                       attributes={active() ? TextAttributes.BOLD : undefined}
                       wrapMode="none"
                     >
-                      {entry.agent}: {entry.title}
+                      {entry.prefix}
+                      {entry.agent}: {entry.title} · {entry.sessionID}
                     </text>
                   </box>
                   <Show when={status()}>

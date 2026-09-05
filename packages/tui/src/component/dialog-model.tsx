@@ -12,11 +12,11 @@ import { useLocation } from "../context/location"
 import { useI18n } from "../context/i18n"
 
 export function DialogModel(props: { providerID?: string }) {
+  const { t } = useI18n()
   const local = useLocal()
   const data = useData()
   const dialog = useDialog()
   const location = useLocation()
-  const { t } = useI18n()
   const [query, setQuery] = createSignal("")
   const favoritePriority = new Set(local.model.favorite().map(modelPreferenceKey))
 

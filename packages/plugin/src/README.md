@@ -46,7 +46,7 @@ await registration.dispose()
 
 ## Transform Hooks
 
-Transform hooks contribute to stateful domains. The draft editor is synchronous; the callback may be `async` when it needs to await other work:
+Transform hooks contribute to stateful domains. The editor is synchronous; the callback may be `async` when it needs to await other work:
 
 ```ts
 await ctx.agent.transform((agent) => {

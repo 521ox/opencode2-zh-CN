@@ -145,6 +145,8 @@ type State = {
   closed: boolean
   initial: boolean
   rootActive: boolean
+  /** Bumped on every root execution lifecycle event; guards paints against stale acks. */
+  executionEpoch: number
   buffered?: ReplayBuffer
   errors: Set<string>
   pending: Map<string, FooterQueuedPrompt>
@@ -185,12 +187,19 @@ function errorMessage(error: { message?: string; _tag?: string }, t: Translator)
   return error.message || error._tag || t("mini.transport.error.sessionExecutionFailed")
 }
 
+function isCompactionCancellation(error: { type: string }) {
+  return error.type === "aborted" || error.type === "compaction.interrupted"
+}
+
 function pendingPrompt(item: SessionInboxInfo): FooterQueuedPrompt | undefined {
   if (item.type !== "user") return undefined
   return {
     messageID: item.id,
     prompt: { messageID: item.id, text: item.payload.text, parts: [] },
     delivery: item.delivery,
+    ...(item.payload.skills?.length
+      ? { skills: item.payload.skills.map((skill) => ({ id: skill.id, name: skill.name })) }
+      : {}),
   }
 }
 
@@ -367,6 +376,7 @@ function messageIDFromEvent(id: string) {
 const catalogEvents = new Set([
   "catalog.updated",
   "integration.updated",
+  "credential.switched",
   "agent.updated",
   "command.updated",
   "skill.updated",
@@ -387,6 +397,12 @@ function skillCommit(messageID: string, name: string, t: Translator, skillID = m
     text: `→ ${t("mini.tool.skill", { name })}`,
     phase: "start",
   }
+}
+
+function skillCommits(messageID: string, t: Translator, skills: FooterQueuedPrompt["skills"] = []) {
+  return Array.from(new Map(skills.map((skill) => [skill.id, skill])).values(), (skill) =>
+    skillCommit(messageID, skill.name, t, skill.id),
+  )
 }
 
 async function resolveSelectedModel(
@@ -449,6 +465,7 @@ export async function createSessionTransport(rawInput: StreamInput): Promise<Ses
     closed: false,
     initial: true,
     rootActive: false,
+    executionEpoch: 0,
     errors: new Set(),
     pending: new Map(),
     admitted: new Set(),
@@ -488,6 +505,13 @@ export async function createSessionTransport(rawInput: StreamInput): Promise<Ses
   })
   controller.signal.addEventListener("abort", () => subagents.close(), { once: true })
 
+  // The one "go idle" transition, shared by settlement, terminal events, and the
+  // interrupt ack so the flag and the paint cannot drift apart.
+  const paintIdle = (status: string) => {
+    state.rootActive = false
+    write([], { phase: "idle", status })
+  }
+
   const write = (
     commits: StreamCommit[],
     patch?: { phase?: "idle" | "running"; status?: string; usage?: string; notice?: string },
@@ -502,7 +526,7 @@ export async function createSessionTransport(rawInput: StreamInput): Promise<Ses
         const text = state.fragments.value({ messageID: commit.messageID, partID: commit.partID })
         input.onCommit?.({
           ...commit,
-          text: commit.kind === "reasoning" && text ? `${input.t("mini.scrollback.thinking")}: ${text}` : (text ?? commit.text),
+          text: commit.kind === "reasoning" && text ? `Thinking: ${text}` : (text ?? commit.text),
         })
       })
     writeSessionOutput(
@@ -620,7 +644,15 @@ export async function createSessionTransport(rawInput: StreamInput): Promise<Ses
     if (part.state.status === "error" && delta)
       write([toolCommit(part, messageID, "progress", input.t, delta, input.location?.directory, version)])
     write([
-      toolCommit(part, messageID, phase, input.t, phase === "progress" ? delta : undefined, input.location?.directory, version),
+      toolCommit(
+        part,
+        messageID,
+        phase,
+        input.t,
+        phase === "progress" ? delta : undefined,
+        input.location?.directory,
+        version,
+      ),
     ])
   }
 
@@ -636,7 +668,7 @@ export async function createSessionTransport(rawInput: StreamInput): Promise<Ses
       if (!render) return
       if (reuseVisibleWait && waiting) return
       write([
-        ...(message.skills ?? []).map((skill) => skillCommit(message.id, skill.name, input.t, skill.id)),
+        ...skillCommits(message.id, input.t, message.skills),
         { kind: "user", source: "system", text: message.text, phase: "start", messageID: message.id },
       ])
       return
@@ -721,10 +753,7 @@ export async function createSessionTransport(rawInput: StreamInput): Promise<Ses
             {
               kind: "reasoning",
               source: "reasoning",
-              text:
-                update.previous.length === 0
-                  ? `${input.t("mini.scrollback.thinking")}: ${item.text}`
-                  : item.text.slice(update.previous.length),
+              text: update.previous.length === 0 ? `Thinking: ${item.text}` : item.text.slice(update.previous.length),
               phase: "progress",
               messageID: message.id,
               partID: fragment.partID,
@@ -761,8 +790,7 @@ export async function createSessionTransport(rawInput: StreamInput): Promise<Ses
   const settleSession = async (client: OpenCodeClient) => {
     await client.session.wait({ sessionID: input.sessionID }, { signal: controller.signal })
     for (const message of await projectedMessages(client, controller.signal)) renderMessage(message, true, true)
-    state.rootActive = false
-    write([], { phase: "idle", status: blockerStatus(state.view, input.t) })
+    paintIdle(blockerStatus(state.view, input.t))
     await input.footer.idle()
   }
 
@@ -853,7 +881,9 @@ export async function createSessionTransport(rawInput: StreamInput): Promise<Ses
     if (!current(attempt)) return
     write([], {
       phase: state.rootActive ? "running" : "idle",
-      status: state.rootActive ? input.t("mini.transport.status.assistantResponding") : blockerStatus(state.view, input.t),
+      status: state.rootActive
+        ? input.t("mini.transport.status.assistantResponding")
+        : blockerStatus(state.view, input.t),
     })
     if (!state.rootActive) await input.footer.idle()
     if (!current(attempt)) return
@@ -917,18 +947,16 @@ export async function createSessionTransport(rawInput: StreamInput): Promise<Ses
       syncPending()
       const visible = state.messageIDs.has(event.data.inboxID)
       if (waiting || pending) state.messageIDs.add(event.data.inboxID)
-      if (!waiting && pending && !visible) {
-        write([
-          {
-            kind: "user",
-            source: "system",
-            text: pending.prompt.text,
-            phase: "start",
-            messageID: event.data.inboxID,
-          },
-        ])
-      }
-      write([], { phase: "running", status: input.t("mini.transport.status.waitingAssistant") })
+      const commits = pending && !visible ? skillCommits(event.data.inboxID, input.t, pending.skills) : []
+      if (!waiting && pending && !visible)
+        commits.push({
+          kind: "user",
+          source: "system",
+          text: pending.prompt.text,
+          phase: "start",
+          messageID: event.data.inboxID,
+        })
+      write(commits, { phase: "running", status: input.t("mini.transport.status.waitingAssistant") })
       return
     }
     if (event.type === "session.inbox.delivery.changed") {
@@ -940,6 +968,7 @@ export async function createSessionTransport(rawInput: StreamInput): Promise<Ses
       if (state.messageIDs.has(event.data.inboxID)) return
       state.messageIDs.add(event.data.inboxID)
       write([
+        ...skillCommits(event.data.inboxID, input.t, pending.skills),
         {
           kind: "user",
           source: "system",
@@ -972,7 +1001,6 @@ export async function createSessionTransport(rawInput: StreamInput): Promise<Ses
       const messageID = event.data.inputID ?? messageIDFromEvent(event.id)
       state.activeCompaction = messageID
       state.compactionNotice = undefined
-      state.messageIDs.add(messageID)
       write([], {
         phase: "running",
         status: input.t("mini.transport.status.compactingSession"),
@@ -983,19 +1011,16 @@ export async function createSessionTransport(rawInput: StreamInput): Promise<Ses
       return
     }
     if (event.type === "session.compaction.ended") {
-      if (!state.activeCompaction) return
       state.activeCompaction = undefined
       state.compactionNotice = input.t("mini.compaction.completed")
       write([], { notice: state.compactionNotice })
       return
     }
     if (event.type === "session.compaction.failed") {
-      if (!state.activeCompaction) return
       state.activeCompaction = undefined
-      state.compactionNotice =
-        event.data.error.type === "aborted"
-          ? input.t("mini.compaction.cancelled")
-          : input.t("mini.compaction.failed", { message: event.data.error.message })
+      state.compactionNotice = isCompactionCancellation(event.data.error)
+        ? input.t("mini.compaction.cancelled")
+        : input.t("mini.compaction.failed", { message: event.data.error.message })
       write([], { notice: state.compactionNotice })
       return
     }
@@ -1094,7 +1119,7 @@ export async function createSessionTransport(rawInput: StreamInput): Promise<Ses
           {
             kind: "reasoning",
             source: "reasoning",
-            text: update.previous ? event.data.delta : `${input.t("mini.scrollback.thinking")}: ${event.data.delta}`,
+            text: update.previous ? event.data.delta : `Thinking: ${event.data.delta}`,
             phase: "progress",
             messageID: event.data.assistantMessageID,
             partID: update.partID,
@@ -1112,9 +1137,7 @@ export async function createSessionTransport(rawInput: StreamInput): Promise<Ses
           {
             kind: "reasoning",
             source: "reasoning",
-            text: update.previous
-              ? event.data.text.slice(update.previous.length)
-              : `${input.t("mini.scrollback.thinking")}: ${event.data.text}`,
+            text: update.previous ? event.data.text.slice(update.previous.length) : `Thinking: ${event.data.text}`,
             phase: "progress",
             messageID: event.data.assistantMessageID,
             partID: update.partID,
@@ -1266,6 +1289,7 @@ export async function createSessionTransport(rawInput: StreamInput): Promise<Ses
       return
     }
     if (event.type === "session.execution.started") {
+      state.executionEpoch++
       state.rootActive = true
       write([], { phase: "running" })
       return
@@ -1275,6 +1299,7 @@ export async function createSessionTransport(rawInput: StreamInput): Promise<Ses
       event.type === "session.execution.failed" ||
       event.type === "session.execution.interrupted"
     ) {
+      state.executionEpoch++
       state.rootActive = false
       const compactionNotice = state.compactionNotice
       state.compactionNotice = undefined
@@ -1290,7 +1315,9 @@ export async function createSessionTransport(rawInput: StreamInput): Promise<Ses
         return
       }
       if (event.type === "session.execution.interrupted") {
-        current.terminalError = new Error(input.t("mini.transport.error.sessionInterrupted", { reason: event.data.reason }))
+        current.terminalError = new Error(
+          input.t("mini.transport.error.sessionInterrupted", { reason: event.data.reason }),
+        )
       }
     }
   }
@@ -1562,7 +1589,7 @@ export async function createSessionTransport(rawInput: StreamInput): Promise<Ses
             row.commit.partID &&
             (row.commit.kind === "assistant" || row.commit.kind === "reasoning")
           ) {
-            const prefix = row.commit.kind === "reasoning" ? `${input.t("mini.scrollback.thinking")}: ` : ""
+            const prefix = row.commit.kind === "reasoning" ? "Thinking: " : ""
             const text = row.commit.text.startsWith(prefix) ? row.commit.text.slice(prefix.length) : row.commit.text
             const restored = state.fragments.restore(
               { messageID: row.commit.messageID, partID: row.commit.partID },
@@ -1620,17 +1647,12 @@ export async function createSessionTransport(rawInput: StreamInput): Promise<Ses
       )
     }
 
-    const selected = await resolveSelectedModel(input, client, next)
-    if (next.variant && !selected) throw new Error("Cannot select a variant before selecting a model")
     input.trace?.write("send.command", { sessionID: input.sessionID, messageID, command: command.name, delivery })
     return client.session.command(
       {
         sessionID: input.sessionID,
-        id: messageID,
         command: command.name,
-        arguments: command.arguments,
-        agent: next.agent,
-        model: selected,
+        text: command.arguments,
         files: attachments.files.length ? attachments.files : undefined,
         agents: agents.length ? agents : undefined,
         skills: skills.length ? skills : undefined,
@@ -1671,7 +1693,7 @@ export async function createSessionTransport(rawInput: StreamInput): Promise<Ses
         throw new Error("This prompt cannot be queued")
       if (!state.connected) throw new Error("Event stream is reconnecting")
       const client = sdk
-      if (next.agent)
+      if (!next.prompt.command && next.agent)
         await client.session.switchAgent({ sessionID: input.sessionID, agent: next.agent }, { signal: next.signal })
       if (!next.prompt.command) {
         const selected = await resolveSelectedModel(input, client, next)
@@ -1679,7 +1701,8 @@ export async function createSessionTransport(rawInput: StreamInput): Promise<Ses
         if (selected)
           await client.session.switchModel({ sessionID: input.sessionID, model: selected }, { signal: next.signal })
       }
-      mergePending(await admitPrompt(next, client, delivery))
+      const admitted = await admitPrompt(next, client, delivery)
+      if (admitted) mergePending(admitted)
       settlementClient = client
     },
     async waitForIdle() {
@@ -1717,13 +1740,8 @@ export async function createSessionTransport(rawInput: StreamInput): Promise<Ses
         return
       }
       if (command) {
-        await runTurnWait(
-          next,
-          messageID,
-          client,
-          () => admitPrompt(next, client, next.prompt.delivery ?? "steer"),
-          admitted,
-        )
+        await admitPrompt(next, client, next.prompt.delivery ?? "steer")
+        admitted?.()
         return
       }
 
@@ -1753,7 +1771,17 @@ export async function createSessionTransport(rawInput: StreamInput): Promise<Ses
         return
       }
       if (state.wait) state.wait.interrupted = true
-      await sdk.session.interrupt({ sessionID: input.sessionID, continue: true }).catch(() => {})
+      // Paint idle at the ack, not at settlement: the server accepts interruption immediately
+      // while cleanup finishes asynchronously, and the terminal execution event re-confirms.
+      // A failed request paints nothing, so the two-press gesture stays available for retry,
+      // and a lifecycle event racing the ack wins via the epoch guard.
+      const epoch = state.executionEpoch
+      await sdk.session.interrupt({ sessionID: input.sessionID, continue: true }).then(
+        () => {
+          if (state.executionEpoch === epoch) paintIdle(blockerStatus(state.view, input.t))
+        },
+        () => {},
+      )
     },
     selectSubagent(sessionID) {
       subagents.select(sdk, sessionID)

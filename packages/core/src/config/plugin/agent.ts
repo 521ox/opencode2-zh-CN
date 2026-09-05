@@ -4,7 +4,7 @@ import { define } from "@opencode-ai/plugin/effect/plugin"
 import { Document, Info, type Entry } from "@opencode-ai/schema/config"
 import { ConfigAgent } from "@opencode-ai/schema/config/agent"
 import path from "path"
-import { Effect, Option, Schema, Stream } from "effect"
+import { Effect, Option, PubSub, Schema, Stream } from "effect"
 import { Agent } from "../../agent.js"
 import { Config } from "../../config.js"
 import { ConfigMarkdown } from "../markdown.js"
@@ -52,64 +52,66 @@ export const Plugin = define({
     const config = yield* Config.Service
     const fs = yield* FSUtil.Service
     const global = yield* Global.Service
+    const loadEntry = Effect.fnUntraced(function* (entry: Entry) {
+      if (entry.type === "document") return [entry]
+      if (entry.type !== "directory") return []
+      const files = yield* discover(fs, entry.path)
+      return yield* Effect.forEach(files, (file) =>
+        fs.readFileStringSafe(file.filepath).pipe(
+          Effect.map((content) => (content ? decode(file, content) : undefined)),
+          Effect.orElseSucceed(() => undefined),
+        ),
+      ).pipe(Effect.map((documents) => documents.filter((document): document is Document => document !== undefined)))
+    })
     const load = Effect.fn("ConfigAgentPlugin.load")(function* () {
-      return yield* Effect.forEach(yield* config.entries(), (entry) => {
-        if (entry.type === "document") return Effect.succeed([entry])
-        if (entry.type !== "directory") return Effect.succeed([])
-        return Effect.gen(function* () {
-          const files = yield* discover(fs, entry.path)
-          return yield* Effect.forEach(files, (file) =>
-            fs.readFileStringSafe(file.filepath).pipe(
-              Effect.map((content) => (content ? decode(file, content) : undefined)),
-              Effect.catch(() => Effect.succeed(undefined)),
-            ),
-          ).pipe(
-            Effect.map((documents) => documents.filter((document): document is Document => document !== undefined)),
-          )
-        })
-      }).pipe(Effect.map((documents) => documents.flat()))
+      return yield* Effect.forEach(yield* config.entries(), loadEntry).pipe(Effect.map((documents) => documents.flat()))
     })
     const loaded = { documents: [] as Document[] }
     const reload = load().pipe(
       Effect.tap((documents) => Effect.sync(() => (loaded.documents = documents))),
       Effect.andThen(ctx.agent.reload()),
     )
-    // One merged trigger stream serializes reloads and shares one debounce
-    // window; subscribing before the initial scan means updates racing the
-    // scan still trigger a rebuild.
-    const sourceChanges = config
-      .changes()
-      .pipe(
-        Stream.filterEffect((update) => Effect.map(config.entries(), (entries) => isAgentSource(entries, update.path))),
-      )
-    const configUpdates = ctx.event.subscribe().pipe(Stream.filter((event) => event.type === "config.updated"))
-    yield* Stream.merge(sourceChanges, configUpdates).pipe(
+    // Subscribe to each source eagerly before the initial scan, then debounce the shared feed.
+    const changes = yield* PubSub.sliding<void>(1)
+    const notify = () => PubSub.publish(changes, undefined)
+    yield* config.changes().pipe(
+      Stream.filterEffect((update) => Effect.map(config.entries(), (entries) => isAgentSource(entries, update.path))),
+      Stream.runForEach(notify),
+      Effect.forkScoped({ startImmediately: true }),
+    )
+    yield* ctx.event.subscribe().pipe(
+      Stream.filter((event) => event.type === "config.updated"),
+      Stream.runForEach(notify),
+      Effect.forkScoped({ startImmediately: true }),
+    )
+    const updates = yield* PubSub.subscribe(changes)
+    yield* Stream.fromSubscription(updates).pipe(
       Stream.debounce("100 millis"),
       Stream.runForEach(() => reload),
       Effect.forkScoped({ startImmediately: true }),
     )
     loaded.documents = yield* load()
-    yield* ctx.agent.transform((draft) => {
+    yield* ctx.agent.transform((editor) => {
       const permissions = expandPermissions(
         loaded.documents.flatMap((document) => document.info.permissions ?? []),
         global.home,
       )
       const configuredDefault = Config.latest(loaded.documents, "default_agent")
-      if (configuredDefault !== undefined) draft.default(Agent.ID.make(configuredDefault))
-      for (const current of draft.list()) {
-        draft.update(current.id, (agent) => agent.permissions.push(...permissions))
+      if (configuredDefault !== undefined) editor.default(Agent.ID.make(configuredDefault))
+      for (const current of editor.list()) {
+        editor.update(current.id, (agent) => agent.permissions.push(...permissions))
       }
 
       for (const document of loaded.documents) {
         for (const [id, item] of Object.entries(document.info.agents ?? {})) {
           const agentID = Agent.ID.make(id)
           if (item.disabled) {
-            draft.remove(agentID)
+            editor.remove(agentID)
             continue
           }
 
-          const exists = draft.get(agentID) !== undefined
-          draft.update(agentID, (agent) => {
+          const exists = editor.get(agentID) !== undefined
+          editor.update(agentID, (agent) => {
             if (!exists) agent.permissions.push(...permissions)
             if (item.model !== undefined)
               agent.model = {
@@ -160,8 +162,7 @@ function isPathAction(action: string): action is PathAction {
 }
 
 function expandHome(resource: string, home: string) {
-  if (resource === "~") return home
-  if (resource === "$HOME") return home
+  if (resource === "~" || resource === "$HOME") return home
   const relative = resource.startsWith("~/")
     ? resource.slice(2)
     : resource.startsWith("$HOME/") || resource.startsWith("$HOME\\")
@@ -180,7 +181,7 @@ function discover(fs: FSUtil.Interface, directory: string) {
       ),
   ).pipe(
     Effect.map((files) => files.flat()),
-    Effect.catch(() => Effect.succeed([])),
+    Effect.orElseSucceed(() => []),
   )
 }
 

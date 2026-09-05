@@ -7,20 +7,14 @@ import {
   HttpClientRequest,
   HttpClientResponse,
 } from "effect/unstable/http"
-import {
-  HttpContext,
-  HttpRateLimitDetails,
-  HttpRequestDetails,
-  HttpResponseDetails,
-  AIError,
-  TransportReason,
-} from "../schema/index.js"
+import { HttpContext, HttpRateLimitDetails, AIError, TransportError } from "../schema/index.js"
 import { classifyProviderFailure } from "../provider-error.js"
 
 export interface Interface {
   readonly execute: (
     request: HttpClientRequest.HttpClientRequest,
     middleware?: HttpMiddleware,
+    dispatch?: HttpDispatch,
   ) => Effect.Effect<HttpClientResponse.HttpClientResponse, AIError>
 }
 
@@ -31,61 +25,17 @@ export type HttpMiddleware = (
   request: HttpClientRequest.HttpClientRequest,
   handler: HttpHandler,
 ) => Effect.Effect<HttpClientResponse.HttpClientResponse, Error>
+export type HttpDispatch = (
+  request: HttpClientRequest.HttpClientRequest,
+) => Effect.Effect<HttpClientRequest.HttpClientRequest, AIError>
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/AI/RequestExecutor") {}
 
-const BODY_LIMIT = 16_384
-const REDACTED = "<redacted>"
-
-// One source of truth for what counts as a sensitive name across headers,
-// URL query keys, and field names embedded inside request/response bodies.
-//
-// `SENSITIVE_NAME` is used as both a substring matcher (for free-form header
-// names like `Authorization` / `X-API-Key`) and as the body-field alternation
-// list. `SHORT_QUERY_NAME` covers anchored short keys like `?key=…` / `?sig=…`
-// that are too generic to redact substring-style without false positives.
-const SENSITIVE_NAME_SOURCE =
-  "authorization|api[-_]?key|access[-_]?token|refresh[-_]?token|id[-_]?token|token|secret|credential|signature|x-amz-signature"
-const SENSITIVE_NAME = new RegExp(SENSITIVE_NAME_SOURCE, "i")
-const SHORT_QUERY_NAME = /^(key|sig)$/i
-const SENSITIVE_BODY_FIELD = new RegExp(`(?:${SENSITIVE_NAME_SOURCE}|key)`, "i")
-const REDACT_JSON_FIELD = new RegExp(`("(?:${SENSITIVE_BODY_FIELD.source})"\\s*:\\s*)"[^"]*"`, "gi")
-const REDACT_QUERY_FIELD = new RegExp(`((?:${SENSITIVE_BODY_FIELD.source})=)[^&\\s"]+`, "gi")
-
-const isSensitiveHeaderName = (name: string) => SENSITIVE_NAME.test(name)
-
-const isSensitiveQueryName = (name: string) => isSensitiveHeaderName(name) || SHORT_QUERY_NAME.test(name)
-
-const redactHeaders = (headers: Headers.Headers, redactedNames: ReadonlyArray<string | RegExp>) =>
-  Object.fromEntries(
-    Object.entries(Headers.redact(headers, [...redactedNames, SENSITIVE_NAME])).map(([name, value]) => [
-      name,
-      String(value),
-    ]),
-  )
-
-const redactUrl = (value: string) => {
-  if (!URL.canParse(value)) return REDACTED
-  const url = new URL(value)
-  url.searchParams.forEach((_, key) => {
-    if (isSensitiveQueryName(key)) url.searchParams.set(key, REDACTED)
-  })
-  return url.toString()
-}
+const headerDetails = (headers: Headers.Headers) =>
+  Object.fromEntries(Object.entries(headers).map(([name, value]) => [name, String(value)]))
 
 const normalizedHeaders = (headers: Headers.Headers) =>
   Object.fromEntries(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]))
-
-const requestId = (headers: Record<string, string>) => {
-  return (
-    headers["x-request-id"] ??
-    headers["request-id"] ??
-    headers["x-amzn-requestid"] ??
-    headers["x-amz-request-id"] ??
-    headers["x-goog-request-id"] ??
-    headers["cf-ray"]
-  )
-}
 
 const retryAfterMs = (headers: Record<string, string>) => {
   const millis = Number(headers["retry-after-ms"])
@@ -144,59 +94,12 @@ const rateLimitDetails = (headers: Record<string, string>, retryAfter: number | 
   })
 }
 
-const requestDetails = (request: HttpClientRequest.HttpClientRequest, redactedNames: ReadonlyArray<string | RegExp>) =>
-  new HttpRequestDetails({
-    method: request.method,
-    url: redactUrl(request.url),
-    headers: redactHeaders(request.headers, redactedNames),
-  })
-
-const responseDetails = (
-  response: HttpClientResponse.HttpClientResponse,
-  redactedNames: ReadonlyArray<string | RegExp>,
-) =>
-  new HttpResponseDetails({
+export const responseHttp = (response: HttpClientResponse.HttpClientResponse) =>
+  new HttpContext({
+    url: response.request.url,
     status: response.status,
-    headers: redactHeaders(response.headers, redactedNames),
+    headers: headerDetails(response.headers),
   })
-
-const secretValues = (request: HttpClientRequest.HttpClientRequest) => {
-  const values = new Set<string>()
-  const add = (value: string) => {
-    if (value.length < 4) return
-    values.add(value)
-    values.add(encodeURIComponent(value))
-  }
-
-  Object.entries(request.headers).forEach(([name, value]) => {
-    if (!isSensitiveHeaderName(name)) return
-    add(value)
-    const bearer = /^Bearer\s+(.+)$/i.exec(value)?.[1]
-    if (bearer) add(bearer)
-  })
-
-  if (!URL.canParse(request.url)) return values
-  new URL(request.url).searchParams.forEach((value, key) => {
-    if (isSensitiveQueryName(key)) add(value)
-  })
-  return values
-}
-
-// Two passes: structural (redact `"name": "value"` and `name=value` patterns
-// for any field name that looks sensitive) plus literal (replace any actual
-// secret values we sent in the request, in case the response echoes one back).
-const redactBody = (body: string, secrets: ReadonlySet<string>) =>
-  Array.from(secrets).reduce(
-    (text, secret) => text.split(secret).join(REDACTED),
-    body.replace(REDACT_JSON_FIELD, `$1"${REDACTED}"`).replace(REDACT_QUERY_FIELD, `$1${REDACTED}`),
-  )
-
-const responseBody = (body: string | void, secrets: ReadonlySet<string>) => {
-  if (body === undefined) return {}
-  const redacted = redactBody(body, secrets)
-  if (redacted.length <= BODY_LIMIT) return { body: redacted }
-  return { body: redacted.slice(0, BODY_LIMIT), bodyTruncated: true }
-}
 
 const decodeProviderBody = Schema.decodeUnknownOption(
   Schema.fromJsonString(
@@ -207,92 +110,54 @@ const decodeProviderBody = Schema.decodeUnknownOption(
   ),
 )
 
-const providerMessage = (status: number, body: { readonly body?: string }) => {
-  if (body.body && body.body.length <= 500) {
-    const decoded = Option.getOrUndefined(decodeProviderBody(body.body))
-    return `Provider request failed with HTTP ${status}: ${decoded?.error?.message ?? decoded?.message ?? body.body}`
-  }
-  return `Provider request failed with HTTP ${status}`
+const providerMessage = (status: number, body: string | void) => {
+  const decoded = body === undefined ? undefined : Option.getOrUndefined(decodeProviderBody(body))
+  return (
+    [decoded?.error?.message, decoded?.message].find((message) => message?.trim()) ??
+    `Provider request failed with HTTP ${status}`
+  )
 }
 
-const responseHttp = (input: {
-  readonly request: HttpClientRequest.HttpClientRequest
-  readonly response: HttpClientResponse.HttpClientResponse
-  readonly redactedNames: ReadonlyArray<string | RegExp>
-  readonly body: ReturnType<typeof responseBody>
-  readonly requestId?: string | undefined
-  readonly rateLimit?: HttpRateLimitDetails | undefined
-}) =>
-  new HttpContext({
-    request: requestDetails(input.request, input.redactedNames),
-    response: responseDetails(input.response, input.redactedNames),
-    ...input.body,
-    requestId: input.requestId,
-    rateLimit: input.rateLimit,
+const statusError = (response: HttpClientResponse.HttpClientResponse) =>
+  Effect.gen(function* () {
+    if (response.status < 400) return response
+    const result = yield* response.text.pipe(Effect.result)
+    return yield* httpFailure({
+      message: providerMessage(response.status, result._tag === "Success" ? result.success : undefined),
+      url: response.request.url,
+      status: response.status,
+      responseHeaders: headerDetails(response.headers),
+      responseBody: result._tag === "Success" ? result.success : undefined,
+      cause: result._tag === "Failure" ? (result.failure.cause ?? result.failure) : undefined,
+    })
   })
 
-const statusError =
-  (request: HttpClientRequest.HttpClientRequest, redactedNames: ReadonlyArray<string | RegExp>) =>
-  (response: HttpClientResponse.HttpClientResponse) =>
-    Effect.gen(function* () {
-      if (response.status < 400) return response
-      const body = yield* response.text.pipe(Effect.catch(() => Effect.void))
-      const headers = normalizedHeaders(response.headers)
-      const retryAfter = retryAfterMs(headers)
-      const rateLimit = rateLimitDetails(headers, retryAfter)
-      const details = responseBody(body, secretValues(request))
-      return yield* new AIError({
-        module: "RequestExecutor",
-        method: "execute",
-        reason: classifyProviderFailure({
-          status: response.status,
-          message: providerMessage(response.status, details),
-          retryAfterMs: retryAfter,
-          rateLimit,
-          http: responseHttp({
-            request,
-            response,
-            redactedNames,
-            body: details,
-            requestId: requestId(headers),
-            rateLimit,
-          }),
-        }),
-      })
-    })
-
-// Classifies an HTTP failure captured outside the executor (for example by the
-// AI SDK's own fetch) onto the same reason types and redacted HttpContext that
-// executor-driven requests produce. The originating request is not available on
-// that path, so the method is assumed (language model calls are always POST),
-// request headers are empty, and only structural body redaction applies.
-export const classifyHttpFailure = (input: {
+/** Preserve HTTP diagnostics for executor and externally captured failures alike. */
+export const httpFailure = (input: {
   readonly message: string
-  readonly url: string
+  readonly url?: string | undefined
   readonly status?: number | undefined
-  readonly code?: string | undefined
+  readonly data?: unknown
   readonly responseHeaders?: Record<string, string> | undefined
   readonly responseBody?: string | undefined
+  readonly cause?: unknown
 }) => {
   const headers = normalizedHeaders(Headers.fromInput(input.responseHeaders))
   const retryAfter = retryAfterMs(headers)
   const rateLimit = rateLimitDetails(headers, retryAfter)
-  const details = responseBody(input.responseBody ?? undefined, new Set<string>())
-  return classifyProviderFailure({
-    message: input.message,
-    status: input.status,
-    code: input.code,
-    retryAfterMs: retryAfter,
-    rateLimit,
-    http: new HttpContext({
-      request: new HttpRequestDetails({ method: "POST", url: redactUrl(input.url), headers: {} }),
-      response:
-        input.status === undefined
-          ? undefined
-          : new HttpResponseDetails({ status: input.status, headers: redactHeaders(Headers.fromInput(headers), []) }),
-      ...details,
-      requestId: requestId(headers),
+  return new AIError({
+    reason: classifyProviderFailure({
+      message: input.message,
+      status: input.status,
+      data: input.data,
+      rawBody: input.responseBody,
+      retryAfterMs: retryAfter,
       rateLimit,
+      cause: input.cause,
+      http:
+        input.status === undefined || input.url === undefined
+          ? undefined
+          : new HttpContext({ url: input.url, status: input.status, headers }),
     }),
   })
 }
@@ -319,31 +184,30 @@ const httpError = (input: {
   readonly error: unknown
   readonly request: HttpClientRequest.HttpClientRequest
   readonly operation: HttpOperation
-  readonly redactedNames: ReadonlyArray<string | RegExp>
+  readonly http?: HttpContext
 }) => {
   const request = HttpClientError.isHttpClientError(input.error) ? input.error.request : input.request
   const transportError = (failure: { readonly message: string; readonly code?: string | undefined }) =>
     new AIError({
-      module: "RequestExecutor",
-      method: input.operation,
-      reason: new TransportReason({
+      reason: new TransportError({
         message: failure.message,
+        cause: source,
+        http: input.http,
         transport: "http",
         operation: input.operation,
         code: failure.code,
-        url: redactUrl(request.url),
-        http: new HttpContext({ request: requestDetails(request, input.redactedNames) }),
+        url: request.url,
       }),
     })
 
   const source =
     HttpClientError.isHttpClientError(input.error) && "cause" in input.error.reason
-      ? input.error.reason.cause
+      ? (input.error.reason.cause ?? input.error)
       : input.error
   const native = nativeTransportFailure(source)
   const code = native?.code
   const raw = native?.message ?? (input.error instanceof Error ? input.error.message : undefined)
-  const detail = raw ? redactBody(raw, secretValues(request)) : undefined
+  const detail = raw
   const message = code && detail && !detail.includes(code) ? `${code}: ${detail}` : detail
 
   if (Cause.isTimeoutError(input.error) || Cause.isTimeoutError(source))
@@ -362,6 +226,13 @@ const httpError = (input: {
   })
 }
 
+export const responseStream = (response: HttpClientResponse.HttpClientResponse): Stream.Stream<Uint8Array, AIError> =>
+  response.stream.pipe(
+    Stream.mapError((error) =>
+      httpError({ error, request: response.request, operation: "read", http: responseHttp(response) }),
+    ),
+  )
+
 export const stream = (
   executor: Interface,
   request: HttpClientRequest.HttpClientRequest,
@@ -369,11 +240,8 @@ export const stream = (
 ): Stream.Stream<Uint8Array, AIError> =>
   Stream.unwrap(
     Effect.gen(function* () {
-      const redactedNames = yield* Headers.CurrentRedactedNames
       const response = yield* executor.execute(request, middleware)
-      return response.stream.pipe(
-        Stream.mapError((error) => httpError({ error, request: response.request, operation: "read", redactedNames })),
-      )
+      return responseStream(response)
     }),
   )
 
@@ -381,25 +249,34 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient> = Layer.e
   Service,
   Effect.gen(function* () {
     const http = yield* HttpClient.HttpClient
-    const executeOnce = (request: HttpClientRequest.HttpClientRequest, middleware?: HttpMiddleware) =>
+    const executeOnce = (
+      request: HttpClientRequest.HttpClientRequest,
+      middleware?: HttpMiddleware,
+      dispatch?: HttpDispatch,
+    ) =>
       Effect.gen(function* () {
-        const redactedNames = yield* Headers.CurrentRedactedNames
         if (!middleware)
           return yield* http.execute(request).pipe(
-            Effect.mapError((error) => httpError({ error, request, operation: "request", redactedNames })),
-            Effect.flatMap(statusError(request, redactedNames)),
+            Effect.mapError((error) => httpError({ error, request, operation: "request" })),
+            Effect.flatMap(statusError),
           )
 
-        const response = yield* middleware(request, (input) =>
-          http
-            .execute(input)
-            .pipe(Effect.mapError((cause) => (cause instanceof Error ? cause : new Error(String(cause))))),
-        ).pipe(
+        const handler: HttpHandler = dispatch
+          ? (input) =>
+              dispatch(input).pipe(
+                Effect.flatMap(http.execute),
+                Effect.mapError((cause) => (cause instanceof Error ? cause : new Error(String(cause)))),
+              )
+          : (input) =>
+              http
+                .execute(input)
+                .pipe(Effect.mapError((cause) => (cause instanceof Error ? cause : new Error(String(cause)))))
+        const response = yield* middleware(request, handler).pipe(
           Effect.mapError((error) =>
-            error instanceof AIError ? error : httpError({ error, request, operation: "request", redactedNames }),
+            dispatch && error instanceof AIError ? error : httpError({ error, request, operation: "request" }),
           ),
         )
-        return yield* statusError(response.request, redactedNames)(response)
+        return yield* statusError(response)
       })
     return Service.of({
       execute: executeOnce,

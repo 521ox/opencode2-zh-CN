@@ -76,7 +76,10 @@ export function permissionLabel(option: PermissionOption, t: Translator): string
   return t(`mini.permission.option.${option}`)
 }
 
-export function permissionAlwaysLines(input: { action: string; save?: ReadonlyArray<string> }, t: Translator): string[] {
+export function permissionAlwaysLines(
+  input: { action: string; save?: ReadonlyArray<string> },
+  t: Translator,
+): string[] {
   const save = input.save ?? []
   if (save.length === 1 && save[0] === "*") {
     return [t("mini.permission.alwaysAll", { action: input.action })]

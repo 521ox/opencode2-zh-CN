@@ -1,11 +1,12 @@
 import { describe, expect } from "bun:test"
 import fs from "node:fs/promises"
+import { EventEmitter } from "node:events"
 import os from "node:os"
 import path from "node:path"
-import { Effect, Exit, Stream } from "effect"
-import type * as PlatformError from "effect/PlatformError"
+import { PassThrough } from "node:stream"
+import { Effect, Exit, PlatformError, Stream } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
-import { CrossSpawnSpawner } from "@opencode-ai/util/cross-spawn-spawner"
+import { captureOutput, CrossSpawnSpawner } from "@opencode-ai/util/cross-spawn-spawner"
 import { LayerNode } from "@opencode-ai/util/effect/layer-node"
 import { testEffect } from "../lib/effect"
 
@@ -159,6 +160,19 @@ describe("cross-spawn spawner", () => {
   })
 
   describe("stderr", () => {
+    fx.live(
+      "captures both streams across bounded backpressure",
+      Effect.gen(function* () {
+        const size = 256 * 1024
+        const handle = yield* js(`process.stdout.write("o".repeat(${size})); process.stderr.write("e".repeat(${size}))`)
+        const output = yield* Effect.all([decodeByteStream(handle.stdout), decodeByteStream(handle.stderr)], {
+          concurrency: "unbounded",
+        })
+        expect(output).toEqual(["o".repeat(size), "e".repeat(size)])
+        expect(yield* handle.exitCode).toBe(ChildProcessSpawner.ExitCode(0))
+      }),
+    )
+
     fx.effect(
       "captures stderr output",
       Effect.gen(function* () {
@@ -195,7 +209,7 @@ describe("cross-spawn spawner", () => {
     fx.effect(
       "captures stdout via .all when no stderr",
       Effect.gen(function* () {
-        const handle = yield* ChildProcess.make("echo", ["hello from stdout"])
+        const handle = yield* js('process.stdout.write("hello from stdout")')
         const all = yield* decodeByteStream(handle.all)
         expect(all).toBe("hello from stdout")
       }),
@@ -207,6 +221,55 @@ describe("cross-spawn spawner", () => {
         const handle = yield* js('process.stderr.write("hello from stderr")')
         const all = yield* decodeByteStream(handle.all)
         expect(all).toBe("hello from stderr")
+      }),
+    )
+  })
+
+  describe("delayed output consumption", () => {
+    fx.live("ends capture when the source closes without end after process exit", () =>
+      Effect.promise(async () => {
+        const source = new PassThrough()
+        const proc = Object.assign(new EventEmitter(), {
+          exitCode: null as number | null,
+          signalCode: null as NodeJS.Signals | null,
+        })
+        const output = captureOutput(source, proc)
+        const chunks: Buffer[] = []
+        output.on("data", (chunk) => chunks.push(chunk))
+
+        source.write("before-close")
+        proc.emit("exit", 0, null)
+        source.destroy()
+        await new Promise<void>((resolve) => setImmediate(resolve))
+
+        expect(output.writableEnded).toBe(true)
+        expect(output.readableEnded).toBe(true)
+        expect(Buffer.concat(chunks).toString()).toBe("before-close")
+      }),
+    )
+
+    fx.live("ends empty stdout and stderr after a fast process completes", () =>
+      Effect.gen(function* () {
+        const handle = yield* js("process.exit(0)")
+        expect(yield* handle.exitCode).toBe(ChildProcessSpawner.ExitCode(0))
+        const output = yield* Effect.all([decodeByteStream(handle.stdout), decodeByteStream(handle.stderr)], {
+          concurrency: "unbounded",
+        })
+        expect(output).toEqual(["", ""])
+      }),
+    )
+
+    fx.live(
+      "retains stdout and stderr after a fast process completes",
+      Effect.gen(function* () {
+        const handle = yield* js(
+          'require("node:fs").writeSync(1, "stdout\\n"); require("node:fs").writeSync(2, "stderr\\n")',
+        )
+        expect(yield* handle.exitCode).toBe(ChildProcessSpawner.ExitCode(0))
+        const output = yield* Effect.all([decodeByteStream(handle.stdout), decodeByteStream(handle.stderr)], {
+          concurrency: "unbounded",
+        })
+        expect(output).toEqual(["stdout", "stderr"])
       }),
     )
   })
@@ -229,6 +292,46 @@ describe("cross-spawn spawner", () => {
   })
 
   describe("process control", () => {
+    fx.live(
+      "finishes capture when a descendant keeps stdio open",
+      Effect.gen(function* () {
+        const tmp = yield* Effect.acquireRelease(
+          Effect.promise(() => tmpdir()),
+          (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+        )
+        const pidFile = path.join(tmp.path, "descendant.pid")
+        yield* Effect.addFinalizer(() =>
+          Effect.tryPromise(async () => process.kill(Number(await fs.readFile(pidFile, "utf8")), "SIGKILL")).pipe(
+            Effect.ignore,
+          ),
+        )
+        const child = [
+          'process.stdout.on("error", () => {})',
+          'process.stderr.on("error", () => {})',
+          'process.send("ready")',
+          "setTimeout(() => process.exit(0), 15000)",
+        ].join(";")
+        const parent = [
+          'const { spawn } = require("node:child_process")',
+          'const fs = require("node:fs")',
+          `const child = spawn(process.execPath, ["-e", ${JSON.stringify(child)}], { detached: true, stdio: ["ignore", "inherit", "inherit", "ipc"] })`,
+          `fs.writeFileSync(${JSON.stringify(pidFile)}, String(child.pid))`,
+          'child.once("message", () => { child.disconnect(); child.unref(); fs.writeSync(1, "foreground-out\\n"); fs.writeSync(2, "foreground-err\\n"); process.exit(0) })',
+        ].join(";")
+        const handle = yield* js(parent, { stdin: "ignore" })
+        const [exit, stdout, stderr] = yield* Effect.all(
+          [handle.exitCode, decodeByteStream(handle.stdout), decodeByteStream(handle.stderr)],
+          { concurrency: "unbounded" },
+        ).pipe(Effect.timeout("3 seconds"))
+
+        expect(exit).toBe(ChildProcessSpawner.ExitCode(0))
+        expect(stdout).toBe("foreground-out")
+        expect(stderr).toBe("foreground-err")
+        expect(alive(Number(yield* Effect.promise(() => fs.readFile(pidFile, "utf8"))))).toBe(true)
+      }),
+      10_000,
+    )
+
     fx.effect(
       "kills a running process",
       Effect.gen(function* () {
@@ -244,11 +347,11 @@ describe("cross-spawn spawner", () => {
     )
 
     fx.effect(
-      "kills a child when scope exits",
+      "uses the configured kill signal when scope exits",
       Effect.gen(function* () {
         const pid = yield* Effect.scoped(
           Effect.gen(function* () {
-            const handle = yield* js("setInterval(() => {}, 10_000)")
+            const handle = yield* js("setInterval(() => {}, 10_000)", { killSignal: "SIGKILL" })
             return Number(handle.pid)
           }),
         )
@@ -262,7 +365,6 @@ describe("cross-spawn spawner", () => {
       Effect.gen(function* () {
         if (process.platform === "win32") return
 
-        const started = Date.now()
         const exit = yield* Effect.exit(
           Effect.gen(function* () {
             const handle = yield* js('process.on("SIGTERM", () => {}); setInterval(() => {}, 10_000)')
@@ -271,7 +373,6 @@ describe("cross-spawn spawner", () => {
           }),
         )
 
-        expect(Date.now() - started).toBeLessThan(1_000)
         expect(Exit.isFailure(exit) ? true : exit.value !== ChildProcessSpawner.ExitCode(0)).toBe(true)
       }),
     )

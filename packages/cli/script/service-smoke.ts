@@ -1,8 +1,9 @@
 #!/usr/bin/env bun
 
+import { NodeFileSystem } from "@effect/platform-node"
 import { Service } from "@opencode-ai/client/effect/service"
 import { ServiceStatus } from "@opencode-ai/protocol/groups/health"
-import { Schema } from "effect"
+import { Effect, Schema } from "effect"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -34,9 +35,6 @@ const errors: Array<Promise<string>> = []
 let failure: unknown
 try {
   await fs.mkdir(path.join(root, ".opencode"))
-  const config = path.join(root, "config", "opencode")
-  await fs.mkdir(config, { recursive: true })
-  await fs.writeFile(path.join(config, "service.json"), JSON.stringify({ port: await availablePort() }))
   spawnService()
   spawnService()
   const registration = await waitForRegistration()
@@ -70,28 +68,22 @@ try {
   })
   if (unauthorizedOpenApi.status !== 401)
     throw new Error("Compiled service exposed application routes without authentication")
-  const unauthorizedStop = await fetch(new URL("/api/service/stop", info.url), {
+  const stopRoute = await fetch(new URL("/api/service/stop", info.url), {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { ...headers, "content-type": "application/json" },
     body: JSON.stringify({ instanceID: info.id }),
     signal: AbortSignal.timeout(5_000),
   })
-  if (unauthorizedStop.status !== 401) throw new Error("Compiled service accepted unauthenticated stop")
+  if (stopRoute.status !== 404) throw new Error("Compiled service exposed the removed HTTP stop route")
 
   const winner = processes.find((process) => process.pid === info.pid)
   const loser = processes.find((process) => process.pid !== info.pid)
   if (!winner || !loser) throw new Error("Compiled contenders did not elect one registered owner")
   if (!(await exitsWithin(loser, 10_000))) throw new Error("Losing compiled contender did not exit")
 
-  const stopped = await Schema.decodeUnknownPromise(ServiceStatus.StopResponse)(
-    await fetch(new URL("/api/service/stop", info.url), {
-      method: "POST",
-      headers: { ...headers, "content-type": "application/json" },
-      body: JSON.stringify({ instanceID: info.id }),
-      signal: AbortSignal.timeout(5_000),
-    }).then((response) => response.json()),
+  await Effect.runPromise(
+    Service.stop({ file: registration }).pipe(Effect.provide(NodeFileSystem.layer)),
   )
-  if (!stopped.accepted) throw new Error("Compiled service rejected exact-instance stop")
   if (!(await exitsWithin(winner, 10_000))) throw new Error("Compiled service did not stop")
   for (let attempt = 0; attempt < 200 && (await Bun.file(registration).exists()); attempt++) await Bun.sleep(25)
   if (await Bun.file(registration).exists()) throw new Error("Compiled service registration was not removed")
@@ -105,7 +97,11 @@ try {
 }
 
 const output = await Promise.all(errors)
-await fs.rm(root, { recursive: true, force: true })
+// Windows can retain directory handles briefly after the service processes exit.
+await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }).catch((cause: unknown) => {
+  console.error("Failed to remove service smoke-test directory", cause)
+  failure ??= cause
+})
 if (failure)
   throw new Error(output.filter(Boolean).join("\n") || "Compiled service lifecycle smoke test failed", {
     cause: failure,
@@ -129,14 +125,6 @@ async function waitForRegistration() {
     await Bun.sleep(25)
   }
   throw new Error("Compiled service did not publish registration")
-}
-
-async function availablePort() {
-  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() })
-  const port = server.port
-  await server.stop(true)
-  if (port === undefined) throw new Error("Smoke port reservation did not bind")
-  return port
 }
 
 async function waitForReady(url: string, headers: HeadersInit) {

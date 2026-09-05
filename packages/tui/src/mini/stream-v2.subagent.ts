@@ -35,6 +35,7 @@ import type {
 } from "./types"
 import { canonicalToolName, normalizeTool, toolOutputText, toolView } from "./tool"
 import { toolDisplayContent } from "../util/tool-display"
+import { isRecord } from "../util/record"
 
 const CHILD_MESSAGE_LIMIT = 80
 const CHILD_FRAME_LIMIT = 80
@@ -60,7 +61,8 @@ export function toolCommit(
   const partial = status === "error" && phase === "progress" && value !== undefined
   const text =
     status === "running" || partial
-      ? (value ?? (part.name === "subagent" ? t("mini.tool.runningSubagent") : t("mini.tool.running", { tool: part.name })))
+      ? (value ??
+        (part.name === "subagent" ? t("mini.tool.runningSubagent") : t("mini.tool.running", { tool: part.name })))
       : status === "completed"
         ? (value ?? output)
         : status === "error"
@@ -155,8 +157,7 @@ type DiscoveryJob = {
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
-  if (typeof value === "object" && value !== null && !Array.isArray(value)) return value as Record<string, unknown>
-  return undefined
+  return isRecord(value) ? value : undefined
 }
 
 function text(value: unknown): string | undefined {
@@ -665,7 +666,8 @@ export function createSubagentTracker(input: SubagentTrackerInput): SubagentTrac
     }
     if (event.type === "session.step.started") {
       touch(child, event.created)
-      if (child.label === input.t("mini.subagent.fallback") && event.data.agent) child.label = Locale.titlecase(event.data.agent)
+      if (child.label === input.t("mini.subagent.fallback") && event.data.agent)
+        child.label = Locale.titlecase(event.data.agent)
       if (child.status !== "running") child.status = "running"
       input.emit()
       return
@@ -1047,7 +1049,8 @@ export function createSubagentTracker(input: SubagentTrackerInput): SubagentTrac
           visited.add(session.id)
           const child = admitChild(session.id)
           if (!child) break
-          if (session.agent && child.label === input.t("mini.subagent.fallback")) child.label = Locale.titlecase(session.agent)
+          if (session.agent && child.label === input.t("mini.subagent.fallback"))
+            child.label = Locale.titlecase(session.agent)
           if (!child.title) child.title = session.title
           touch(child, session.time.updated)
           queue.push(session.id)

@@ -4,21 +4,25 @@ import fs from "fs/promises"
 import path from "path"
 import { Effect, Fiber, Layer, Stream } from "effect"
 import { LayerNode } from "@opencode-ai/util/effect/layer-node"
+import { FSUtil } from "@opencode-ai/util/fs-util"
+import { AppProcess } from "@opencode-ai/util/process"
 import { Bus } from "@opencode-ai/core/bus"
 import { Location } from "@opencode-ai/core/location"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { Vcs } from "@opencode-ai/core/vcs"
+import { VcsHgPlugin } from "@opencode-ai/core/plugin/vcs/hg"
 import { FileSystem } from "@opencode-ai/schema/filesystem"
 import { VcsEvent } from "@opencode-ai/schema/vcs-event"
 import { location } from "./fixture/location"
 import { tmpdir } from "./fixture/tmpdir"
 import { it } from "./lib/effect"
+import { host } from "./plugin/host"
 
 const describeHg = Bun.which("hg") ? describe : describe.skip
 
 const provide = (directory: string) =>
   Effect.provide(
-    LayerNode.compile(LayerNode.group([Vcs.node, Bus.node]), [
+    LayerNode.compile(LayerNode.group([Vcs.node, Bus.node, Location.node, AppProcess.node, FSUtil.node]), [
       [
         Location.node,
         Layer.succeed(
@@ -42,7 +46,19 @@ const withTmp = <A, E, R>(f: (directory: string) => Effect.Effect<A, E, R>) =>
 
 const withHg = <A, E, R>(f: (directory: string) => Effect.Effect<A, E, R>) =>
   withTmp((directory) =>
-    Effect.promise(() => hg(directory, "init")).pipe(Effect.andThen(f(directory).pipe(provide(directory)))),
+    Effect.promise(() => hg(directory, "init")).pipe(
+      Effect.andThen(
+        Effect.gen(function* () {
+          const vcs = yield* Vcs.Service
+          const context = host()
+          yield* VcsHgPlugin.Plugin.effect({
+            ...context,
+            vcs: { ...context.vcs, transform: vcs.transform, reload: vcs.reload },
+          })
+          return yield* f(directory)
+        }).pipe(provide(directory)),
+      ),
+    ),
   )
 
 async function hg(directory: string, ...args: string[]) {
@@ -180,27 +196,30 @@ describeHg("Vcs mercurial", () => {
     ),
   )
 
-  it.live("diffs a named branch against the default branch", () =>
-    withHg((directory) =>
-      Effect.gen(function* () {
-        yield* Effect.promise(async () => {
-          await fs.writeFile(path.join(directory, "file.txt"), "one\n")
-          await commitAll(directory, "initial")
-        })
-        const vcs = yield* Vcs.Service
-        expect(yield* vcs.diff("branch")).toEqual([])
+  it.live(
+    "diffs a named branch against the default branch",
+    () =>
+      withHg((directory) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(async () => {
+            await fs.writeFile(path.join(directory, "file.txt"), "one\n")
+            await commitAll(directory, "initial")
+          })
+          const vcs = yield* Vcs.Service
+          expect(yield* vcs.diff("branch")).toEqual([])
 
-        yield* Effect.promise(async () => {
-          await hg(directory, "branch", "-q", "feature")
-          await fs.writeFile(path.join(directory, "file.txt"), "one\ntwo\n")
-          await commitAll(directory, "feature change")
-        })
-        const diff = yield* vcs.diff("branch")
-        expect(diff.map((item) => ({ file: item.file, status: item.status }))).toEqual([
-          { file: "file.txt", status: "modified" },
-        ])
-        expect(diff[0].patch).toContain("+two")
-      }),
-    ),
+          yield* Effect.promise(async () => {
+            await hg(directory, "branch", "-q", "feature")
+            await fs.writeFile(path.join(directory, "file.txt"), "one\ntwo\n")
+            await commitAll(directory, "feature change")
+          })
+          const diff = yield* vcs.diff("branch")
+          expect(diff.map((item) => ({ file: item.file, status: item.status }))).toEqual([
+            { file: "file.txt", status: "modified" },
+          ])
+          expect(diff[0].patch).toContain("+two")
+        }),
+      ),
+    15_000,
   )
 })

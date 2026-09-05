@@ -13,15 +13,23 @@ import type { AIError } from "../schema/index.js"
  * - AWS event stream — length-prefixed binary frames with CRC checksums.
  *   Each emitted frame is one parsed binary event record.
  *
- * The frame type is opaque to this layer; the protocol's `decode` step turns
- * a frame into a typed chunk.
+ * The frame type is opaque to this layer; the protocol's event schema decodes
+ * each frame before its state machine handles it.
  */
 export interface Definition<Frame> {
   readonly id: string
   readonly frame: (bytes: Stream.Stream<Uint8Array, AIError>) => Stream.Stream<Frame, AIError>
+  /** Original wire representation when framing transforms the provider payload. */
+  readonly body?: (frame: Frame) => string | undefined
 }
 
 /** Server-Sent Events framing. Used by every JSON-streaming HTTP provider. */
 export const sse: Definition<string> = { id: "sse", frame: ProviderShared.sseFraming }
+
+/** SSE framing restricted to protocol-recognized event names. */
+export const sseEvents = (events: ReadonlySet<string>): Definition<string> => ({
+  id: "sse",
+  frame: (bytes) => ProviderShared.sseFraming(bytes, events),
+})
 
 export * as Framing from "./framing.js"

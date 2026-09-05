@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { DateTime, Effect, Fiber, Layer, LayerMap, Schema, Stream } from "effect"
+import { DateTime, Effect, Exit, Fiber, Layer, LayerMap, Schema, Stream } from "effect"
 import { mkdtemp, rm } from "fs/promises"
 import { tmpdir } from "os"
 import path from "path"
@@ -21,12 +21,21 @@ import { Session } from "@opencode-ai/core/session"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
+import { SessionContinuation } from "@opencode-ai/core/session/continuation"
 import { SessionInbox } from "@opencode-ai/core/session/inbox"
-import { SessionInboxTable, SessionMessageTable, SessionTable } from "@opencode-ai/core/session/sql"
+import {
+  SessionInboxTable,
+  SessionMessageTable,
+  SessionSubagentContinuationTable,
+  SessionTable,
+} from "@opencode-ai/core/session/sql"
 import { SessionStore } from "@opencode-ai/core/session/store"
 import { LocationServiceMap } from "@opencode-ai/core/location-service-map"
 import type { LocationServices } from "@opencode-ai/core/location-services"
 import { Image } from "@opencode-ai/core/image"
+import { PluginSupervisor } from "@opencode-ai/core/plugin/supervisor"
+import { PluginHooks } from "@opencode-ai/core/plugin/hooks"
+import { Snapshot } from "@opencode-ai/core/snapshot"
 import { testEffect } from "./lib/effect"
 
 const executionCalls: Session.ID[] = []
@@ -37,14 +46,8 @@ const activeSessions = new Set<Session.ID>()
 const execution = Layer.succeed(
   SessionExecution.Service,
   SessionExecution.Service.of({
-    owner: { id: "test-owner", pid: 0, hostname: "test", leaseMs: 30_000 },
     active: Effect.sync(() => new Set(activeSessions)),
-    claim: () => Effect.succeed(true),
     resume: (sessionID) =>
-      Effect.sync(() => {
-        executionCalls.push(sessionID)
-      }),
-    resumeClaimed: (sessionID) =>
       Effect.sync(() => {
         executionCalls.push(sessionID)
       }),
@@ -52,12 +55,13 @@ const execution = Layer.succeed(
       Effect.sync(() => {
         interruptCalls.push(sessionID)
         interruptContinuations.push(options?.continue)
+        return activeSessions.delete(sessionID)
       }),
     wake: (sessionID) =>
       Effect.sync(() => {
         wakeCalls.push(sessionID)
+        return { type: "owned" as const }
       }),
-    wakeActive: () => Effect.void,
     awaitIdle: () => Effect.void,
   }),
 )
@@ -65,17 +69,43 @@ const locations = Layer.effect(
   LocationServiceMap.Service,
   LayerMap.make(
     () =>
-      // Attachment admission only needs the location-scoped Image service.
+      // These operations resolve Location services lazily and must wait for plugin-projected state.
       // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
-      Layer.mock(Image.Service, {
-        normalize: (_resource, content) =>
-          Effect.succeed(content.content.length > 5 * 1024 * 1024 ? { ...content, content: "AA==" } : content),
-      }) as unknown as Layer.Layer<LocationServices>,
+      Layer.unwrap(
+        Effect.sync(() => {
+          let ready = false
+          return Layer.mergeAll(
+            LayerNode.compile(PluginHooks.node),
+            Layer.mock(Image.Service, {
+              normalize: (_resource, content) =>
+                ready
+                  ? Effect.succeed(content.content.length > 5 * 1024 * 1024 ? { ...content, content: "AA==" } : content)
+                  : Effect.die(new Error("Image service used before plugins were ready")),
+            }),
+            Layer.mock(Snapshot.Service, {
+              capture: () =>
+                ready ? Effect.undefined : Effect.die(new Error("Snapshot used before plugins were ready")),
+              restore: () => (ready ? Effect.void : Effect.die(new Error("Snapshot used before plugins were ready"))),
+            }),
+            Layer.succeed(
+              PluginSupervisor.Service,
+              PluginSupervisor.Service.of({ awaitActivation: Effect.sync(() => (ready = true)) }),
+            ),
+          )
+        }),
+      ) as unknown as Layer.Layer<LocationServices>,
   ),
 )
 const it = testEffect(
   AppNodeBuilder.build(
-    LayerNode.group([Database.node, Bus.node, SessionProjector.node, SessionStore.node, Session.node]),
+    LayerNode.group([
+      Database.node,
+      Bus.node,
+      SessionProjector.node,
+      SessionStore.node,
+      SessionContinuation.node,
+      Session.node,
+    ]),
     [
       [Bus.node, Bus.configured({ persist: true })],
       [SessionExecution.node, execution],
@@ -179,7 +209,7 @@ describe("Session.prompt", () => {
       interruptCalls.length = 0
       wakeCalls.length = 0
 
-      yield* session.interrupt(sessionID)
+      expect(yield* session.interrupt(sessionID)).toBeFalse()
       expect(interruptCalls).toEqual([sessionID])
       expect(wakeCalls).toEqual([])
       expect(yield* session.messages({ sessionID })).toEqual([])
@@ -581,6 +611,134 @@ describe("Session.prompt", () => {
     }),
   )
 
+  it.effect("validates private continuation identity on replay and on same-type admission races", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* Session.Service
+      const continuations = yield* SessionContinuation.Service
+      const { db } = yield* Database.Service
+      wakeCalls.length = 0
+      const parentMessageID = SessionMessage.ID.create()
+      const makeRequest = (toolCallID: string, prompt: string): SessionContinuation.Request => ({
+        ...SessionContinuation.identity({
+          parentSessionID: sessionID,
+          parentMessageID,
+          parentToolCallID: toolCallID,
+          prompt,
+        }),
+        parentSessionID: sessionID,
+        parentMessageID,
+        parentToolCallID: toolCallID,
+        childSessionID: sessionID,
+        agent: "reviewer",
+        description: "review",
+      })
+      const privatePrompt = (request: SessionContinuation.Request, text: string) => ({
+        id: request.inboxID,
+        sessionID,
+        text,
+        resume: false as const,
+        commit: () => continuations.admit(request).pipe(Effect.orDie),
+      })
+      const first = makeRequest("call-continuation-replay", "first private prompt")
+      const admitted = yield* session.prompt(privatePrompt(first, "first private prompt"))
+      const replayed = yield* session.prompt(privatePrompt(first, "first private prompt"))
+
+      expect(replayed).toEqual(admitted)
+      expect(first.waiterID).toBe(SessionContinuation.waiterID(first.id))
+      expect(
+        yield* db
+          .select()
+          .from(SessionSubagentContinuationTable)
+          .where(eq(SessionSubagentContinuationTable.id, first.id))
+          .all()
+          .pipe(Effect.orDie),
+      ).toHaveLength(1)
+      expect(
+        yield* db
+          .select()
+          .from(SessionInboxTable)
+          .where(eq(SessionInboxTable.id, first.inboxID))
+          .all()
+          .pipe(Effect.orDie),
+      ).toHaveLength(1)
+      expect(wakeCalls).toEqual([])
+
+      const changedPrompt = SessionContinuation.identity({
+        parentSessionID: sessionID,
+        parentMessageID,
+        parentToolCallID: first.parentToolCallID,
+        prompt: "changed private prompt",
+      })
+      const conflicts: ReadonlyArray<SessionContinuation.Request> = [
+        { ...first, promptDigest: changedPrompt.promptDigest },
+        { ...first, agent: "fallback" },
+        { ...first, description: "different description" },
+        { ...first, childSessionID: Session.ID.make("ses_prompt_conflicting_child") },
+        { ...first, parentToolCallID: "call-conflicting-parent-tool" },
+      ]
+      for (const conflicting of conflicts) {
+        const exit = yield* session.prompt(privatePrompt(conflicting, "first private prompt")).pipe(Effect.exit)
+        expect(Exit.isFailure(exit)).toBe(true)
+        expect(String(exit)).toContain("Continuation identity was reused with different input")
+      }
+
+      // This models both callers observing no pending Inbox before one durable
+      // projector wins. The fallback must still run the private commit instead of
+      // treating same-type Inbox recovery as an unconditional success.
+      const fallback = makeRequest("call-continuation-fallback", "fallback prompt")
+      yield* continuations.admit(fallback).pipe(Effect.orDie)
+      const fallbackConflict = { ...fallback, description: "fallback conflict" }
+      const racingBus = {
+        publish: () =>
+          db
+            .insert(SessionInboxTable)
+            .values({
+              id: fallback.inboxID,
+              session_id: sessionID,
+              type: "user",
+              payload: { text: "fallback prompt" },
+              delivery: "steer",
+              enqueued_seq: 10_000,
+            })
+            .run()
+            .pipe(
+              Effect.orDie,
+              Effect.andThen(Effect.die(new SessionInbox.LifecycleConflict({ id: fallback.inboxID }))),
+            ),
+      } as unknown as Bus.Interface
+      const fallbackExit = yield* SessionInbox.admit(db, racingBus, {
+        id: fallback.inboxID,
+        sessionID,
+        item: { type: "user", payload: { text: "fallback prompt" }, delivery: "steer" },
+        commit: () => continuations.admit(fallbackConflict).pipe(Effect.orDie),
+      }).pipe(Effect.exit)
+      expect(Exit.isFailure(fallbackExit)).toBe(true)
+      expect(String(fallbackExit)).toContain("Continuation identity was reused with different input")
+
+      const concurrent = makeRequest("call-continuation-concurrent", "concurrent prompt")
+      const concurrentConflict = { ...concurrent, description: "concurrent conflict" }
+      const outcomes = yield* Effect.all(
+        [
+          session.prompt(privatePrompt(concurrent, "concurrent prompt")).pipe(Effect.exit),
+          session.prompt(privatePrompt(concurrentConflict, "concurrent prompt")).pipe(Effect.exit),
+        ],
+        { concurrency: "unbounded" },
+      )
+      expect(outcomes.filter(Exit.isSuccess)).toHaveLength(1)
+      expect(outcomes.filter(Exit.isFailure)).toHaveLength(1)
+      expect(
+        yield* db
+          .select()
+          .from(SessionSubagentContinuationTable)
+          .where(eq(SessionSubagentContinuationTable.id, concurrent.id))
+          .all()
+          .pipe(Effect.orDie),
+      ).toHaveLength(1)
+      expect(wakeCalls).toEqual([])
+    }),
+  )
+
   it.effect("reconciles an exact retry from the promoted message without admission history", () =>
     Effect.gen(function* () {
       yield* setup
@@ -638,53 +796,52 @@ describe("Session.prompt", () => {
     }),
   )
 
-  it.effect("rejects reuse of one ID with a different prompt", () =>
+  it.effect("keeps the first admission when one ID is reused with a different prompt", () =>
     Effect.gen(function* () {
       yield* setup
       const session = yield* Session.Service
 
-      yield* session.prompt({
+      const first = yield* session.prompt({
         sessionID,
         id: messageID,
         text: "Fix the failing tests",
       })
-      const failure = yield* session
-        .prompt({
-          sessionID,
-          id: messageID,
-          text: "Delete the failing tests",
-          resume: false,
-        })
-        .pipe(Effect.flip)
+      const retried = yield* session.prompt({
+        sessionID,
+        id: messageID,
+        text: "Delete the failing tests",
+        resume: false,
+      })
 
-      expect(failure._tag).toBe("Session.PromptConflictError")
+      expect(retried).toEqual(first)
+      expect(retried.payload.text).toBe("Fix the failing tests")
       expect(yield* session.messages({ sessionID })).toHaveLength(0)
       expect(yield* admittedCount).toBe(1)
     }),
   )
 
-  it.effect("rejects reuse of one ID with a different delivery mode", () =>
+  it.effect("keeps the first admission's delivery mode when one ID is reused with another", () =>
     Effect.gen(function* () {
       yield* setup
       const session = yield* Session.Service
 
-      yield* session.prompt({
+      const first = yield* session.prompt({
         id: messageID,
         sessionID,
         text: "Fix the failing tests",
         resume: false,
       })
-      const failure = yield* session
-        .prompt({
-          id: messageID,
-          sessionID,
-          text: "Fix the failing tests",
-          delivery: "queue",
-          resume: false,
-        })
-        .pipe(Effect.flip)
+      const retried = yield* session.prompt({
+        id: messageID,
+        sessionID,
+        text: "Fix the failing tests",
+        delivery: "queue",
+        resume: false,
+      })
 
-      expect(failure._tag).toBe("Session.PromptConflictError")
+      expect(retried).toEqual(first)
+      expect(retried.delivery).toBe("steer")
+      expect(yield* admittedCount).toBe(1)
     }),
   )
 
@@ -900,7 +1057,7 @@ describe("Session.prompt", () => {
     }),
   )
 
-  it.effect("treats prompt metadata as durable retry identity", () =>
+  it.effect("keeps the first admission's metadata when one ID is reused with other metadata", () =>
     Effect.gen(function* () {
       yield* setup
       const session = yield* Session.Service
@@ -914,11 +1071,12 @@ describe("Session.prompt", () => {
 
       const first = yield* session.prompt(input)
       const retried = yield* session.prompt(input)
-      const failure = yield* session.prompt({ ...input, metadata: { source: "plugin" } }).pipe(Effect.flip)
+      const differing = yield* session.prompt({ ...input, metadata: { source: "plugin" } })
 
       expect(retried).toEqual(first)
+      expect(differing).toEqual(first)
       expect(first.payload.metadata).toEqual({ source: "api" })
-      expect(failure._tag).toBe("Session.PromptConflictError")
+      expect(yield* admittedCount).toBe(1)
     }),
   )
 
@@ -964,7 +1122,7 @@ describe("Session.prompt", () => {
     }),
   )
 
-  it.effect("reconciles exact synthetic retries and rejects conflicting reuse", () =>
+  it.effect("reconciles synthetic retries from the promoted message regardless of payload", () =>
     Effect.gen(function* () {
       yield* setup
       const session = yield* Session.Service
@@ -977,11 +1135,11 @@ describe("Session.prompt", () => {
       })
       yield* SessionInbox.promote(database.db, bus, sessionID, "steer")
       const promotedRetry = yield* session.synthetic(input)
-      const failure = yield* session.synthetic({ ...input, text: "Different completion" }).pipe(Effect.flip)
+      const differing = yield* session.synthetic({ ...input, text: "Different completion" })
 
       expect(entries[1]).toEqual(entries[0])
       expect(promotedRetry).toMatchObject({ id: messageID, type: "synthetic", payload: { text: "Completed" } })
-      expect(failure).toMatchObject({ _tag: "Session.SyntheticConflictError", sessionID, inputID: messageID })
+      expect(differing).toMatchObject({ id: messageID, type: "synthetic", payload: { text: "Completed" } })
       expect(yield* admittedCount).toBe(0)
       expect(yield* eventCount(Bus.versionedType(SessionEvent.InboxEnqueued.type, 1))).toBe(1)
     }),
@@ -1041,6 +1199,128 @@ describe("Session.prompt", () => {
       ).toEqual(["First prompt", "Background completion", "Second prompt"])
     }),
   )
+
+  it.effect("previews without mutation and promotes the exact ordered batch once", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* Session.Service
+      const bus = yield* Bus.Service
+      const { db } = yield* Database.Service
+      const first = yield* session.prompt({
+        sessionID,
+        text: "Previewed prompt",
+        metadata: { source: "preview" },
+        resume: false,
+      })
+      const second = yield* session.synthetic({ sessionID, text: "Previewed completion", resume: false })
+
+      const preview = yield* SessionInbox.previewPromotable(db, sessionID, "steer")
+
+      expect(preview.map((entry) => entry.id)).toEqual([first.id, second.id])
+      expect(yield* session.messages({ sessionID })).toEqual([])
+      expect((yield* session.inbox(sessionID)).map((entry) => entry.id)).toEqual([first.id, second.id])
+      expect(SessionInbox.toMessage(preview[0]!, preview[0]!.timeCreated)).toMatchObject({
+        id: first.id,
+        type: "user",
+        text: "Previewed prompt",
+        metadata: { source: "preview" },
+      })
+      expect(SessionInbox.toMessage(preview[1]!, preview[1]!.timeCreated)).toMatchObject({
+        id: second.id,
+        type: "synthetic",
+        text: "Previewed completion",
+      })
+
+      const commits: Array<{ readonly id: SessionMessage.ID; readonly seq: number }> = []
+      const promoted = yield* SessionInbox.promotePreviewed(db, bus, sessionID, "steer", preview, {
+        commit: (entry, seq) => Effect.sync(() => commits.push({ id: entry.id, seq })),
+      })
+
+      expect(promoted).toMatchObject({ status: "promoted" })
+      if (promoted.status === "promoted")
+        expect(promoted.entries.map((entry) => entry.id)).toEqual([first.id, second.id])
+      expect(commits.map((item) => item.id)).toEqual([first.id, second.id])
+      expect(commits[0]!.seq).toBeLessThan(commits[1]!.seq)
+      expect((yield* session.messages({ sessionID, order: "asc" })).map((message) => message.id)).toEqual([
+        first.id,
+        second.id,
+      ])
+      expect(yield* eventCount(Bus.versionedType(SessionEvent.InboxDelivered.type, 1))).toBe(2)
+    }),
+  )
+
+  it.effect("rejects a stale queued preview when a higher-priority steer arrives", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* Session.Service
+      const bus = yield* Bus.Service
+      const { db } = yield* Database.Service
+      const queued = yield* session.prompt({
+        sessionID,
+        text: "Queued input",
+        delivery: "queue",
+        resume: false,
+      })
+      const preview = yield* SessionInbox.previewPromotable(db, sessionID, "input")
+      expect(preview.map((entry) => entry.id)).toEqual([queued.id])
+      const steer = yield* session.prompt({ sessionID, text: "New steer", resume: false })
+
+      expect(yield* SessionInbox.promotePreviewed(db, bus, sessionID, "input", preview)).toEqual({
+        status: "mismatch",
+      })
+      expect(yield* session.messages({ sessionID })).toEqual([])
+      expect(yield* eventCount(Bus.versionedType(SessionEvent.InboxDelivered.type, 1))).toBe(0)
+      expect((yield* session.inbox(sessionID)).map((entry) => entry.id)).toEqual([queued.id, steer.id])
+
+      const refreshed = yield* SessionInbox.previewPromotable(db, sessionID, "input")
+      expect(refreshed.map((entry) => entry.id)).toEqual([steer.id])
+    }),
+  )
+
+  it.effect("keeps controls as preview boundaries", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* Session.Service
+      const bus = yield* Bus.Service
+      const { db } = yield* Database.Service
+      const first = yield* session.prompt({ sessionID, text: "Before control", resume: false })
+      const control = yield* session.compact({ sessionID, delivery: "steer" })
+      const later = yield* session.prompt({ sessionID, text: "After control", resume: false })
+
+      const preview = yield* SessionInbox.previewPromotable(db, sessionID, "steer")
+      expect(preview.map((entry) => entry.id)).toEqual([first.id])
+      expect(yield* SessionInbox.promotePreviewed(db, bus, sessionID, "steer", preview)).toMatchObject({
+        status: "promoted",
+      })
+      expect(yield* SessionInbox.previewPromotable(db, sessionID, "steer")).toEqual([])
+      expect((yield* session.inbox(sessionID)).map((entry) => entry.id)).toEqual([control.id, later.id])
+    }),
+  )
+})
+
+describe("Session.revert", () => {
+  it.effect("waits for location plugins before staging", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const { db } = yield* Database.Service
+      const session = yield* Session.Service
+      yield* db.insert(SessionMessageTable).values(assistantRow(messageID, 0)).run().pipe(Effect.orDie)
+      yield* session.revert.stage({ sessionID, messageID })
+    }),
+  )
+
+  it.effect("waits for location plugins before clearing", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* Session.Service
+      const bus = yield* Bus.Service
+      yield* bus.publish(SessionEvent.RevertEvent.Staged, {
+        sessionID,
+        revert: { messageID, snapshot: Snapshot.ID.make("tree"), files: [] },
+      })
+      yield* session.revert.clear(sessionID)
+    }),
+  )
 })
 
 describe("Session.inbox", () => {
@@ -1090,12 +1370,11 @@ describe("Session.inbox", () => {
       const { db } = yield* Database.Service
 
       const barrier = yield* session.compact({ sessionID })
-      expect(yield* SessionInbox.has(db, sessionID, "any")).toBe(true)
       expect(yield* SessionInbox.has(db, sessionID, "input")).toBe(true)
       expect(yield* session.inbox(sessionID)).toMatchObject([{ id: barrier.id, type: "compaction" }])
 
       yield* session.cancelInbox({ sessionID, inboxID: barrier.id })
-      expect(yield* SessionInbox.has(db, sessionID, "any")).toBe(false)
+      expect(yield* SessionInbox.has(db, sessionID, "input")).toBe(false)
       expect(yield* session.inbox(sessionID)).toEqual([])
     }),
   )

@@ -33,7 +33,7 @@ export const Plugin = define({
     const changes = yield* PubSub.sliding<string>(1)
     const lock = Semaphore.makeUnsafe(1)
 
-    const watch = Effect.fn("ConfigSkillPlugin.watch")(function* (directory: string, type: Watcher.WatchInput["type"]) {
+    const watch = Effect.fn("ConfigSkillPlugin.watch")(function* (directory: string, type: "file" | "directory") {
       const target = path.resolve(directory)
       const updates = yield* watcher.subscribe({ path: target, type })
       yield* FiberMap.run(
@@ -46,7 +46,7 @@ export const Plugin = define({
 
     function firstMissing(target: string): Effect.Effect<string | undefined> {
       const parent = path.dirname(target)
-      if (parent === target) return Effect.succeed(undefined)
+      if (parent === target) return Effect.undefined
       return fs.isDir(parent).pipe(Effect.flatMap((exists) => (exists ? Effect.succeed(target) : firstMissing(parent))))
     }
 
@@ -54,7 +54,7 @@ export const Plugin = define({
       "ConfigSkillPlugin.watchDirectory",
     )(function* (directory: string) {
       const target = path.resolve(directory)
-      const resolved = yield* fs.realPath(directory).pipe(Effect.catch(() => Effect.succeed(undefined)))
+      const resolved = yield* fs.realPath(directory).pipe(Effect.orElseSucceed(() => undefined))
       if (resolved) {
         yield* watch(resolved, "directory")
         if (resolved !== target) yield* watch(target, "file")
@@ -65,7 +65,7 @@ export const Plugin = define({
       if (
         yield* fs.realPath(directory).pipe(
           Effect.as(true),
-          Effect.catch(() => Effect.succeed(false)),
+          Effect.orElseSucceed(() => false),
         )
       ) {
         if (missing) yield* FiberMap.remove(watches, `file:${path.resolve(missing)}`)
@@ -124,11 +124,11 @@ export const Plugin = define({
       for (const directory of directories) {
         const files = yield* fs
           .scan("{*.md,**/SKILL.md}", { cwd: directory, absolute: true, include: "file", symlink: true, dot: true })
-          .pipe(Effect.catch(() => Effect.succeed([] as string[])))
+          .pipe(Effect.orElseSucceed(() => [] as string[]))
         for (const filepath of files.toSorted()) {
-          const resolved = yield* fs.realPath(filepath).pipe(Effect.catch(() => Effect.succeed(filepath)))
+          const resolved = yield* fs.realPath(filepath).pipe(Effect.orElseSucceed(() => filepath))
           if (!roots.some((root) => FSUtil.contains(root, resolved))) yield* watch(path.dirname(resolved), "directory")
-          const content = yield* fs.readFileStringSafe(filepath).pipe(Effect.catch(() => Effect.succeed(undefined)))
+          const content = yield* fs.readFileStringSafe(filepath).pipe(Effect.orElseSucceed(() => undefined))
           if (!content) continue
           const parsed = SkillFile.parse(directory, filepath, content)
           if (parsed._tag === "Skipped") {
@@ -172,13 +172,17 @@ export const Plugin = define({
       )
     })
 
-    yield* Stream.fromPubSub(changes).pipe(
+    // Editor saves arrive as bursts. Open the subscription before starting the debounce so
+    // updates cannot slip through while the stream fiber begins pulling.
+    const updates = yield* PubSub.subscribe(changes)
+    yield* Stream.fromSubscription(updates).pipe(
+      Stream.debounce("100 millis"),
       Stream.runForEach((file) => refresh(file).pipe(Effect.andThen(ctx.skill.reload()))),
       Effect.forkScoped({ startImmediately: true }),
     )
     yield* refresh()
-    yield* ctx.skill.transform((draft) => {
-      for (const skill of loaded.skills) draft.add(skill)
+    yield* ctx.skill.transform((editor) => {
+      for (const skill of loaded.skills) editor.add(skill)
     })
     yield* ctx.event.subscribe().pipe(
       Stream.filter((event) => event.type === "config.updated"),

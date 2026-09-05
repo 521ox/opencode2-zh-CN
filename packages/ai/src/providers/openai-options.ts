@@ -1,20 +1,21 @@
-import type { ProviderOptions } from "../schema/index.js"
-import { mergeProviderOptions } from "../schema/index.js"
-import type { OpenResponsesOptionsInput } from "./open-responses-options.js"
+import { mergeProviderOptions, type ProviderOptions } from "../schema/index.js"
+import type { OpenAIServiceTier } from "../protocols/utils/openai-options.js"
+import type { Options } from "../protocols/utils/open-responses-options.js"
 
 export type { OpenAIResponseIncludable, OpenAIServiceTier } from "../protocols/utils/openai-options.js"
 
-export type OpenAIOptionsInput = OpenResponsesOptionsInput
-
-export type OpenAIProviderOptionsInput = ProviderOptions & {
-  readonly openai?: OpenAIOptionsInput
+export type OpenAIOptionsInput = Omit<Options, "serviceTier"> & {
+  readonly serviceTier?: OpenAIServiceTier
+  readonly [key: string]: unknown
 }
+
+export type OpenAIProviderOptionsInput = OpenAIOptionsInput
 
 const definedEntries = (input: Record<string, unknown>) =>
   Object.entries(input).filter((entry) => entry[1] !== undefined)
 
 export const openAIProviderOptions = (options: OpenAIOptionsInput | undefined): ProviderOptions | undefined => {
-  const openai = Object.fromEntries(
+  const result = Object.fromEntries(
     definedEntries({
       store: options?.store,
       compactThreshold: options?.compactThreshold,
@@ -25,8 +26,8 @@ export const openAIProviderOptions = (options: OpenAIOptionsInput | undefined): 
       serviceTier: options?.serviceTier,
     }),
   )
-  if (Object.keys(openai).length === 0) return undefined
-  return { openai }
+  if (Object.keys(result).length === 0) return undefined
+  return result
 }
 
 export const gpt5DefaultOptions = (

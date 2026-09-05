@@ -3,23 +3,42 @@ import path from "path"
 import { describe, expect } from "bun:test"
 import { Config } from "@opencode-ai/schema/config"
 import { Money } from "@opencode-ai/schema/money"
-import { DateTime, Deferred, Effect, Equal, Fiber, Hash, RcMap, Schema, Stream } from "effect"
+import {
+  DateTime,
+  Deferred,
+  Duration,
+  Effect,
+  Equal,
+  Fiber,
+  Hash,
+  Layer,
+  LayerMap,
+  Option,
+  RcMap,
+  Schema,
+  Stream,
+} from "effect"
+import { TestClock } from "effect/testing"
 import { Plugin as EffectPlugin } from "@opencode-ai/plugin/effect"
 import { Agent } from "@opencode-ai/core/agent"
 import { Catalog } from "@opencode-ai/core/catalog"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/util/effect/layer-node"
 import { Global } from "@opencode-ai/util/global"
-import { LocationServiceMap } from "@opencode-ai/core/location-services"
+import { LocationServiceMap, type LocationServices } from "@opencode-ai/core/location-services"
+import { LocationActivity } from "@opencode-ai/core/location-activity"
 import { Location } from "@opencode-ai/core/location"
 import { Plugin } from "@opencode-ai/core/plugin"
 import { SdkPlugins } from "@opencode-ai/core/plugin/sdk"
 import { PluginSupervisor } from "@opencode-ai/core/plugin/supervisor"
 import { Model } from "@opencode-ai/core/model"
+import { Mcp } from "@opencode-ai/core/mcp/index"
 import { Project } from "@opencode-ai/core/project"
 import { Provider } from "@opencode-ai/core/provider"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { Session } from "@opencode-ai/core/session"
+import { Workspace } from "@opencode-ai/core/workspace"
+import { SessionEvent } from "@opencode-ai/core/session/event"
 import { SessionRunnerModel } from "@opencode-ai/core/session/runner/model"
 import { tmpdir } from "./fixture/tmpdir"
 import { tempGlobalLayer } from "./fixture/global"
@@ -40,8 +59,156 @@ const itWithSdk = testEffect(
     [Global.node, tempGlobalLayer],
   ]),
 )
+const activityLocations = Layer.effect(
+  LocationServiceMap.Service,
+  LayerMap.make(
+    (ref) =>
+      // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
+      Layer.succeed(
+        Location.Service,
+        Location.Service.of({
+          directory: ref.directory,
+          workspaceID: ref.workspaceID,
+          project: { id: Project.ID.global, directory: ref.directory, canonical: ref.directory },
+        }),
+      ) as unknown as Layer.Layer<LocationServices>,
+    { idleTimeToLive: Duration.infinity },
+  ),
+)
+const itWithActivity = testEffect(
+  AppNodeBuilder.build(LayerNode.group([Database.node, Bus.node, LocationServiceMap.node, LocationActivity.node]), [
+    [LocationServiceMap.node, activityLocations],
+  ]),
+)
 
 describe("LocationServiceMap", () => {
+  it.live("retries an explicitly acquired location after repairing its config", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          const locations = yield* LocationServiceMap.Service
+          const ref = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
+          const config = path.join(dir.path, "opencode.json")
+          yield* Effect.promise(() =>
+            fs.writeFile(config, JSON.stringify({ username: "{file:username.txt}" })),
+          )
+
+          const load = Location.Service.pipe(Effect.provide(locations.get(ref)), Effect.scoped)
+          expect((yield* load.pipe(Effect.exit))._tag).toBe("Failure")
+          // Passive inspection observes the failed boot's eviction without acquiring a replacement.
+          expect(yield* locations.contextEffectOption(ref).pipe(Effect.scoped)).toEqual(Option.none())
+          expect(Array.from(yield* RcMap.keys(locations.rcMap))).toEqual([])
+
+          yield* Effect.promise(() => fs.writeFile(path.join(dir.path, "username.txt"), "test-user"))
+          const repaired = yield* load
+          expect(repaired.directory).toBe(ref.directory)
+          expect(yield* load).toBe(repaired)
+        }),
+      ),
+    ),
+  )
+
+  itWithActivity.effect("does not refresh lifetime from inferred Session routing", () =>
+    Effect.gen(function* () {
+      const locations = yield* LocationServiceMap.Service
+      const bus = yield* Bus.Service
+      const ref = Location.Ref.make({ directory: AbsolutePath.make("/project") })
+      const sessionID = Session.ID.make("ses_routing_activity")
+      yield* Location.Service.pipe(Effect.provide(locations.get(ref)), Effect.scoped)
+      yield* bus.publish(SessionEvent.Created, {
+        sessionID,
+        location: ref,
+        projectID: Project.ID.global,
+        slug: "routing",
+        version: "test",
+      })
+      yield* TestClock.adjust("59 minutes")
+      const event = yield* bus.publish(SessionEvent.Execution.Succeeded, { sessionID })
+      expect(event).not.toHaveProperty("location")
+      yield* TestClock.adjust("2 minutes")
+      expect(Array.from(yield* RcMap.keys(locations.rcMap))).toEqual([])
+    }),
+  )
+
+  itWithActivity.effect("refreshes lifetime from Session events only", () =>
+    Effect.gen(function* () {
+      const locations = yield* LocationServiceMap.Service
+      const bus = yield* Bus.Service
+      const ref = Location.Ref.make({ directory: AbsolutePath.make("/project") })
+      const sessionID = Session.ID.make("ses_location_activity")
+      const read = Location.Service.pipe(Effect.provide(locations.get(ref)), Effect.scoped)
+
+      yield* read
+      yield* TestClock.adjust("59 minutes")
+      yield* bus.publish(Catalog.Event.Updated, {}, { location: ref })
+      yield* TestClock.adjust("2 minutes")
+      expect(Array.from(yield* RcMap.keys(locations.rcMap))).toEqual([])
+
+      yield* read
+      yield* bus.publish(SessionEvent.Execution.Started, { sessionID }, { location: ref })
+      yield* TestClock.adjust("59 minutes")
+      yield* bus.publish(SessionEvent.Execution.Succeeded, { sessionID }, { location: ref })
+      yield* TestClock.adjust("1 minute")
+      expect(Array.from(yield* RcMap.keys(locations.rcMap))).toEqual([ref])
+      yield* TestClock.adjust("59 minutes")
+      expect(Array.from(yield* RcMap.keys(locations.rcMap))).toEqual([])
+    }),
+  )
+
+  it.live("retries a location after its missing directory is recreated", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          const locations = yield* LocationServiceMap.Service
+          const directory = path.join(dir.path, "recreated")
+          const ref = Location.Ref.make({ directory: AbsolutePath.make(directory) })
+
+          const first = yield* Location.Service.pipe(Effect.provide(locations.get(ref)), Effect.scoped, Effect.exit)
+          expect(first._tag).toBe("Failure")
+
+          yield* Effect.promise(() => fs.mkdir(directory))
+          const location = yield* Location.Service.pipe(Effect.provide(locations.get(ref)), Effect.scoped)
+          expect(location.directory).toBe(ref.directory)
+        }),
+      ),
+    ),
+  )
+
+  it.live("keeps a workspace location admitted when its directory does not exist locally", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          const locations = yield* LocationServiceMap.Service
+          const directory = AbsolutePath.make(path.join(dir.path, "workspace-only"))
+          const workspaceRef = Location.Ref.make({ directory, workspaceID: Workspace.ID.make("wrk_liveness") })
+          const localRef = Location.Ref.make({ directory })
+
+          // The directory only exists inside the workspace, so neither liveness
+          // nor boot may consult the local filesystem: the full location graph
+          // must construct and the entry must survive release instead of being
+          // evicted by a zero idle time-to-live.
+          const location = yield* Location.Service.pipe(Effect.provide(locations.get(workspaceRef)), Effect.scoped)
+          expect(location.directory).toBe(directory)
+          expect(Array.from(yield* RcMap.keys(locations.rcMap))).toEqual([workspaceRef])
+
+          // A local ref with the same missing directory keeps the existing
+          // behavior: dropped as soon as it goes idle so a retry can rebuild it.
+          yield* Location.Service.pipe(Effect.provide(locations.get(localRef)), Effect.scoped, Effect.exit)
+          expect(Array.from(yield* RcMap.keys(locations.rcMap))).toEqual([workspaceRef])
+        }),
+      ),
+    ),
+  )
+
   itWithSdk.live("preserves embedded SDK plugins after Location eviction", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
@@ -61,7 +228,7 @@ describe("LocationServiceMap", () => {
           const ref = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
           const read = Effect.gen(function* () {
             const supervisor = yield* PluginSupervisor.Service
-            yield* supervisor.flush
+            yield* supervisor.awaitActivation
             const agents = yield* Agent.Service
             return yield* agents.get(id)
           })
@@ -95,14 +262,14 @@ describe("LocationServiceMap", () => {
           const context = yield* locations.contextEffect(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))
           yield* Deferred.await(started)
 
-          const flushFiber = yield* PluginSupervisor.Service.use((supervisor) => supervisor.flush).pipe(
+          const activationFiber = yield* PluginSupervisor.Service.use((supervisor) => supervisor.awaitActivation).pipe(
             Effect.provide(context),
             Effect.forkChild,
           )
-          expect(flushFiber.pollUnsafe()).toBeUndefined()
+          expect(activationFiber.pollUnsafe()).toBeUndefined()
           yield* Deferred.succeed(release, undefined)
-          yield* Fiber.join(flushFiber)
-          yield* PluginSupervisor.Service.use((supervisor) => supervisor.flush).pipe(
+          yield* Fiber.join(activationFiber)
+          yield* PluginSupervisor.Service.use((supervisor) => supervisor.awaitActivation).pipe(
             Effect.provide(context),
             Effect.timeout("1 second"),
           )
@@ -143,7 +310,7 @@ describe("LocationServiceMap", () => {
           const context = yield* locations.contextEffect(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))
           yield* Deferred.await(firstStarted)
 
-          const flushFiber = yield* PluginSupervisor.Service.use((supervisor) => supervisor.flush).pipe(
+          const activationFiber = yield* PluginSupervisor.Service.use((supervisor) => supervisor.awaitActivation).pipe(
             Effect.provide(context),
             Effect.forkChild({ startImmediately: true }),
           )
@@ -158,10 +325,10 @@ describe("LocationServiceMap", () => {
 
           yield* Deferred.succeed(releaseFirst, undefined)
           yield* Deferred.await(secondStarted)
-          expect(flushFiber.pollUnsafe()).toBeUndefined()
+          expect(activationFiber.pollUnsafe()).toBeUndefined()
 
           yield* Deferred.succeed(releaseSecond, undefined)
-          yield* Fiber.join(flushFiber)
+          yield* Fiber.join(activationFiber)
         }),
       ),
     ),
@@ -179,19 +346,14 @@ describe("LocationServiceMap", () => {
           yield* Effect.promise(() => fs.writeFile(file, "{}"))
           const firstStarted = yield* Deferred.make<void>()
           const releaseFirst = yield* Deferred.make<void>()
-          const secondStarted = yield* Deferred.make<void>()
-          const releaseSecond = yield* Deferred.make<void>()
           const sdk = yield* SdkPlugins.Service
           yield* sdk.register(
             EffectPlugin.define({
               id: "blocked-config-reload",
               effect: () =>
                 Effect.sync(() => ++activations.count).pipe(
-                  Effect.flatMap((activation) =>
-                    activation === 1
-                      ? Deferred.succeed(firstStarted, undefined).pipe(Effect.andThen(Deferred.await(releaseFirst)))
-                      : Deferred.succeed(secondStarted, undefined).pipe(Effect.andThen(Deferred.await(releaseSecond))),
-                  ),
+                  Effect.andThen(Deferred.succeed(firstStarted, undefined)),
+                  Effect.andThen(Deferred.await(releaseFirst)),
                 ),
             }),
           )
@@ -214,16 +376,21 @@ describe("LocationServiceMap", () => {
           )
           yield* Fiber.join(updated)
 
-          const flushFiber = yield* PluginSupervisor.Service.use((supervisor) => supervisor.flush).pipe(
+          const flushFiber = yield* PluginSupervisor.Service.use((supervisor) => supervisor.awaitActivation).pipe(
             Effect.provide(context),
             Effect.forkChild,
           )
-          yield* Deferred.succeed(releaseFirst, undefined)
-          yield* Deferred.await(secondStarted)
           expect(flushFiber.pollUnsafe()).toBeUndefined()
-          yield* Deferred.succeed(releaseSecond, undefined)
+          yield* Deferred.succeed(releaseFirst, undefined)
           yield* Fiber.join(flushFiber)
-          expect(activations.count).toBe(2)
+          const configured = yield* Effect.gen(function* () {
+            const agents = yield* Agent.Service
+            return yield* agents.get(Agent.ID.make("effect-configured"))
+          }).pipe(Effect.provide(context))
+          expect(configured).toMatchObject({ mode: "subagent" })
+          // The accepted Plugin registry keeps the unchanged SDK prefix and
+          // activates only the newly configured suffix.
+          expect(activations.count).toBe(1)
         }),
       ),
     ),
@@ -238,7 +405,7 @@ describe("LocationServiceMap", () => {
         Effect.gen(function* () {
           const locations = yield* LocationServiceMap.Service
           const context = yield* locations.contextEffect(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))
-          const flushFiber = yield* PluginSupervisor.Service.use((supervisor) => supervisor.flush).pipe(
+          const activationFiber = yield* PluginSupervisor.Service.use((supervisor) => supervisor.awaitActivation).pipe(
             Effect.provide(context),
             Effect.forkChild({ startImmediately: true }),
           )
@@ -249,8 +416,8 @@ describe("LocationServiceMap", () => {
             () => bus.publish(SdkPlugins.Updated, {}).pipe(Effect.andThen(Effect.sleep("50 millis"))),
             { discard: true },
           )
-          expect(flushFiber.pollUnsafe()).toBeUndefined()
-          yield* Fiber.join(flushFiber)
+          expect(activationFiber.pollUnsafe()).toBeUndefined()
+          yield* Fiber.join(activationFiber)
         }),
       ),
     ),
@@ -274,7 +441,7 @@ describe("LocationServiceMap", () => {
 
           const locations = yield* LocationServiceMap.Service
           const context = yield* locations.contextEffect(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))
-          yield* PluginSupervisor.Service.use((supervisor) => supervisor.flush).pipe(Effect.provide(context))
+          yield* PluginSupervisor.Service.use((supervisor) => supervisor.awaitActivation).pipe(Effect.provide(context))
           expect(activations.count).toBe(1)
 
           yield* Bus.Service.use((bus) => bus.publish(Config.Event.Updated, {})).pipe(Effect.provide(context))
@@ -286,7 +453,7 @@ describe("LocationServiceMap", () => {
     ),
   )
 
-  itWithSdk.live("keeps flush open while later hot reload runs", () =>
+  itWithSdk.live("keeps awaitActivation pending while later hot reload runs", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
       (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
@@ -295,7 +462,7 @@ describe("LocationServiceMap", () => {
         Effect.gen(function* () {
           const locations = yield* LocationServiceMap.Service
           const context = yield* locations.contextEffect(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))
-          yield* PluginSupervisor.Service.use((supervisor) => supervisor.flush).pipe(Effect.provide(context))
+          yield* PluginSupervisor.Service.use((supervisor) => supervisor.awaitActivation).pipe(Effect.provide(context))
 
           const started = yield* Deferred.make<void>()
           const release = yield* Deferred.make<void>()
@@ -313,20 +480,20 @@ describe("LocationServiceMap", () => {
           )
           yield* Deferred.await(started)
 
-          const flushFiber = yield* PluginSupervisor.Service.use((supervisor) => supervisor.flush).pipe(
+          const activationFiber = yield* PluginSupervisor.Service.use((supervisor) => supervisor.awaitActivation).pipe(
             Effect.provide(context),
             Effect.forkChild({ startImmediately: true }),
           )
-          expect(flushFiber.pollUnsafe()).toBeUndefined()
+          expect(activationFiber.pollUnsafe()).toBeUndefined()
           yield* Deferred.succeed(release, undefined)
-          yield* Fiber.join(flushFiber)
+          yield* Fiber.join(activationFiber)
           yield* Deferred.await(completed)
         }),
       ),
     ),
   )
 
-  itWithSdk.live("does not cancel activation when a flush waiter is interrupted", () =>
+  itWithSdk.live("does not cancel activation when an awaitActivation waiter is interrupted", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
       (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
@@ -351,15 +518,15 @@ describe("LocationServiceMap", () => {
           const locations = yield* LocationServiceMap.Service
           const context = yield* locations.contextEffect(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))
           yield* Deferred.await(started)
-          const flushFiber = yield* PluginSupervisor.Service.use((supervisor) => supervisor.flush).pipe(
+          const activationFiber = yield* PluginSupervisor.Service.use((supervisor) => supervisor.awaitActivation).pipe(
             Effect.provide(context),
             Effect.forkChild({ startImmediately: true }),
           )
-          yield* Fiber.interrupt(flushFiber)
+          yield* Fiber.interrupt(activationFiber)
 
           yield* Deferred.succeed(release, undefined)
           yield* Deferred.await(completed)
-          yield* PluginSupervisor.Service.use((supervisor) => supervisor.flush).pipe(
+          yield* PluginSupervisor.Service.use((supervisor) => supervisor.awaitActivation).pipe(
             Effect.provide(context),
             Effect.timeout("500 millis"),
           )
@@ -380,7 +547,7 @@ describe("LocationServiceMap", () => {
           )
           const plugins = yield* Effect.gen(function* () {
             const plugins = yield* Plugin.Service
-            yield* (yield* PluginSupervisor.Service).flush
+            yield* (yield* PluginSupervisor.Service).awaitActivation
             return yield* plugins.list()
           }).pipe(
             Effect.scoped,
@@ -407,7 +574,7 @@ describe("LocationServiceMap", () => {
           yield* Effect.gen(function* () {
             const registry = yield* Plugin.Service
             const supervisor = yield* PluginSupervisor.Service
-            yield* supervisor.flush
+            yield* supervisor.awaitActivation
             expect((yield* registry.list()).map((plugin) => String(plugin.id))).toEqual(["opencode.agent"])
 
             yield* Effect.promise(() => fs.writeFile(file, JSON.stringify({ plugins: ["-*", "opencode.command"] })))
@@ -427,10 +594,18 @@ describe("LocationServiceMap", () => {
               ),
             )
             for (let attempt = 0; attempt < 100; attempt++) {
-              if ((yield* registry.list()).length === 0) break
+              if ((yield* registry.list()).some((plugin) => plugin.status === "failed")) break
               yield* Effect.sleep("20 millis")
             }
-            expect(yield* registry.list()).toEqual([])
+            expect(yield* registry.list()).toEqual([
+              {
+                id: Plugin.ID.make("failing-plugin"),
+                source: { type: "local", path: path.join(import.meta.dir, "plugin/fixtures/failing-plugin.ts") },
+                status: "failed",
+                error: expect.stringContaining("plugin failed"),
+                tui: false,
+              },
+            ])
 
             yield* Effect.promise(() => fs.writeFile(file, JSON.stringify({ plugins: ["-*", "opencode.agent"] })))
             for (let attempt = 0; attempt < 100; attempt++) {
@@ -529,14 +704,19 @@ describe("LocationServiceMap", () => {
             expect(Equal.equals(absent, present)).toBe(false)
             if (process.platform === "win32") expect(absent.directory).not.toBe(present.directory)
 
+            expect(yield* locations.contextEffectOption(absent).pipe(Effect.scoped)).toEqual(Option.none())
+            expect(Array.from(yield* RcMap.keys(locations.rcMap))).toHaveLength(0)
+
             const first = yield* locations.contextEffect(absent)
             expect(yield* locations.contextEffect(present)).toBe(first)
+            expect(Option.getOrThrow(yield* locations.contextEffectOption(present).pipe(Effect.scoped))).toBe(first)
             expect(Array.from(yield* RcMap.keys(locations.rcMap))).toEqual([
               Location.Ref.make({ directory, workspaceID: undefined }),
             ])
 
             // Invalidating with the shape opposite to the one that booted must evict.
             yield* locations.invalidate(present)
+            expect(yield* locations.contextEffectOption(absent).pipe(Effect.scoped)).toEqual(Option.none())
             expect(Array.from(yield* RcMap.keys(locations.rcMap))).toHaveLength(0)
           }),
         ),
@@ -561,7 +741,9 @@ describe("LocationServiceMap", () => {
               // every expected tool rather than relying on batch ordering.
               yield* Effect.forEach(
                 [
+                  "direct_exec",
                   "edit",
+                  "environment_tools",
                   "glob",
                   "grep",
                   "question",
@@ -593,7 +775,9 @@ describe("LocationServiceMap", () => {
           expect(blockedState.providers.some((provider) => provider.id === allowedID)).toBe(false)
           const blockedTools = blockedState.tools.map((tool) => tool.name)
           expect(blockedTools.filter((name) => name !== "execute").sort()).toEqual([
+            "direct_exec",
             "edit",
+            "environment_tools",
             "glob",
             "grep",
             "patch",
@@ -612,7 +796,9 @@ describe("LocationServiceMap", () => {
           const allowedTools = allowedState.tools.map((tool) => tool.name)
           expect(blockedTools.includes("execute")).toBe(allowedTools.includes("execute"))
           expect(allowedTools.filter((name) => name !== "execute").sort()).toEqual([
+            "direct_exec",
             "edit",
+            "environment_tools",
             "glob",
             "grep",
             "patch",
@@ -652,8 +838,10 @@ describe("LocationServiceMap", () => {
               }),
             ),
           )
-          const failure = yield* SessionRunnerModel.Service.use((models) =>
-            models.resolve(
+          const failure = yield* Effect.gen(function* () {
+            const catalog = yield* Catalog.Service
+            const models = yield* SessionRunnerModel.Service
+            return yield* models.resolve(
               Session.Info.make({
                 id: Session.ID.make("ses_unavailable_model"),
                 projectID: Project.ID.global,
@@ -667,8 +855,9 @@ describe("LocationServiceMap", () => {
                 time: { created: DateTime.makeUnsafe(0), updated: DateTime.makeUnsafe(0) },
                 location,
               }),
-            ),
-          ).pipe(Effect.provide(LocationServiceMap.Service.get(location)), Effect.flip)
+              catalog.model.available,
+            )
+          }).pipe(Effect.provide(LocationServiceMap.Service.get(location)), Effect.flip)
 
           expect(failure).toMatchObject({
             _tag: "SessionRunnerModel.ModelUnavailableError",
@@ -692,8 +881,10 @@ describe("LocationServiceMap", () => {
             ["azure-cognitive-services", "azure"],
             ["google-vertex-anthropic", "google-vertex"],
           ] as const) {
-            const failure = yield* SessionRunnerModel.Service.use((models) =>
-              models.resolve(
+            const failure = yield* Effect.gen(function* () {
+              const catalog = yield* Catalog.Service
+              const models = yield* SessionRunnerModel.Service
+              return yield* models.resolve(
                 Session.Info.make({
                   id: Session.ID.make(`ses_removed_${providerID}`),
                   projectID: Project.ID.global,
@@ -707,8 +898,9 @@ describe("LocationServiceMap", () => {
                   time: { created: DateTime.makeUnsafe(0), updated: DateTime.makeUnsafe(0) },
                   location,
                 }),
-              ),
-            ).pipe(Effect.provide(LocationServiceMap.Service.get(location)), Effect.flip)
+                catalog.model.available,
+              )
+            }).pipe(Effect.provide(LocationServiceMap.Service.get(location)), Effect.flip)
 
             expect(failure).toMatchObject({
               _tag: "SessionRunnerModel.ModelUnavailableError",
@@ -760,6 +952,7 @@ describe("LocationServiceMap", () => {
                 time: { created: DateTime.makeUnsafe(0), updated: DateTime.makeUnsafe(0) },
                 location,
               }),
+              catalog.model.available,
             )
           }).pipe(Effect.provide(LocationServiceMap.Service.get(location)))
 
@@ -796,7 +989,7 @@ describe("LocationServiceMap", () => {
                 })
                 .pipe(Effect.asVoid),
           })
-          yield* plugins.activate([{ ...reviewer, version: "1" }])
+          yield* plugins.activate([{ ...reviewer, revision: "1" }])
 
           expect(yield* (yield* Agent.Service).get(Agent.ID.make("reviewer"))).toMatchObject({
             description: "Reviews code",
@@ -806,6 +999,63 @@ describe("LocationServiceMap", () => {
           Effect.scoped,
           Effect.provide(LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))),
         ),
+      ),
+    ),
+  )
+
+  itWithSdk.live("lets public plugins mutate configured and runtime MCP servers", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          const url = "https://example.com/mcp"
+          yield* Effect.promise(() =>
+            fs.writeFile(
+              path.join(dir.path, "opencode.json"),
+              JSON.stringify({ mcp: { servers: { example: { type: "remote", url, disabled: true } } } }),
+            ),
+          )
+          const observed: Record<string, boolean | undefined> = {}
+          const sdk = yield* SdkPlugins.Service
+          yield* sdk.register(
+            EffectPlugin.define({
+              id: "mcp-codemode-policy",
+              effect: (ctx) =>
+                ctx.mcp
+                  .transform((mcp) => {
+                    for (const [name, server] of mcp.list()) {
+                      if (server.type !== "remote" || new URL(server.url).hostname !== "example.com") continue
+                      mcp.update(name, (current) => {
+                        current.codemode = false
+                        observed[name] = current.codemode
+                      })
+                    }
+                  })
+                  .pipe(Effect.asVoid),
+            }),
+          )
+
+          yield* Effect.gen(function* () {
+            const supervisor = yield* PluginSupervisor.Service
+            const mcp = yield* Mcp.Service
+            yield* supervisor.awaitActivation
+            expect(observed.example).toBe(false)
+            yield* mcp.add("dynamic", {
+              type: "remote",
+              url: "https://example.com/dynamic",
+              disabled: true,
+            })
+            expect(observed.dynamic).toBe(false)
+            expect((yield* mcp.servers()).map((server) => String(server.name))).toEqual(["dynamic", "example"])
+          }).pipe(
+            Effect.scoped,
+            Effect.provide(
+              LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(dir.path) })),
+            ),
+          )
+        }),
       ),
     ),
   )

@@ -1,6 +1,6 @@
 export * as SessionProjector from "./projector.js"
 
-import { and, asc, desc, eq, gt, gte, inArray, lt, lte, sql } from "drizzle-orm"
+import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, or, sql } from "drizzle-orm"
 import { DateTime, Effect, Layer, Schema, Stream } from "effect"
 import path from "path"
 import { Database } from "../database/database.js"
@@ -11,10 +11,12 @@ import { Model } from "../model.js"
 import { SessionEvent } from "./event.js"
 import { SessionMessage } from "./message.js"
 import { SessionMessageUpdater } from "./message-updater.js"
+import { SessionMessageProjection } from "./message-projection.js"
 import { SessionInbox } from "./inbox.js"
 import { Workspace } from "../workspace.js"
 import { InstructionState } from "./instruction-state.js"
 import { SessionInboxTable, SessionMessageTable, SessionTable } from "./sql.js"
+import { InstructionEntry } from "./instruction-entry.js"
 import { Slug } from "../util/slug.js"
 import { FSUtil } from "@opencode-ai/util/fs-util"
 import { Money } from "@opencode-ai/schema/money"
@@ -22,6 +24,7 @@ import { Worktree } from "@opencode-ai/schema/worktree"
 import { Project } from "@opencode-ai/schema/project"
 import { AbsolutePath, RelativePath } from "../schema.js"
 import type { SessionSchema } from "./schema.js"
+import { ProjectTable } from "../project/sql.js"
 
 type DatabaseService = Database.Interface["db"]
 type CurrentDurableEvent = Extract<SessionEvent.Event, { readonly durable: object }>
@@ -156,6 +159,7 @@ const projectFork = Effect.fn("SessionProjector.projectFork")(function* (
       title: forkTitle(parent.title ?? undefined),
       agent: parent.agent,
       model: parent.model,
+      metadata: parent.metadata,
       version: parent.version,
       cost: 0,
       tokens_input: 0,
@@ -172,6 +176,9 @@ const projectFork = Effect.fn("SessionProjector.projectFork")(function* (
     .pipe(Effect.orDie)
   if (!stored) return yield* Effect.die(new SessionAlreadyProjected())
 
+  if (event.data.instructionEntries)
+    yield* InstructionEntry.initialize(db, event.data.sessionID, event.data.instructionEntries, event.created)
+
   let cursor = -1
   while (copiedSeq !== undefined) {
     const rows = yield* db
@@ -182,6 +189,9 @@ const projectFork = Effect.fn("SessionProjector.projectFork")(function* (
           eq(SessionMessageTable.session_id, event.data.parentID),
           gt(SessionMessageTable.seq, cursor),
           lt(SessionMessageTable.seq, copiedSeq + 1),
+          // Terminal events for active projections stay on the parent, so forks copy only settled history.
+          sql`${SessionMessageTable.type} != 'assistant' or json_extract(${SessionMessageTable.data}, '$.time.completed') is not null`,
+          sql`${SessionMessageTable.type} != 'shell' or json_extract(${SessionMessageTable.data}, '$.status') != 'running'`,
           sql`${SessionMessageTable.type} != 'compaction' or json_extract(${SessionMessageTable.data}, '$.status') != 'running'`,
         ),
       )
@@ -195,7 +205,7 @@ const projectFork = Effect.fn("SessionProjector.projectFork")(function* (
       .insert(SessionMessageTable)
       .values(
         rows.map((row) => ({
-          id: SessionMessage.ID.create(),
+          id: SessionMessage.ID.make(`${SessionMessage.ID.fromEvent(event.id)}_${row.seq}`),
           session_id: event.data.sessionID,
           type: row.type,
           seq: row.seq,
@@ -219,8 +229,6 @@ function run(db: DatabaseService, event: MessageEvent) {
     const decodeRow = (row: typeof SessionMessageTable.$inferSelect) =>
       decodeMessage({ ...row.data, id: row.id, type: row.type })
     const updateMessage = (message: SessionMessage.Info) => {
-      if (event.durable === undefined)
-        return Effect.die(new Error("Durable Session event is missing aggregate sequence"))
       const encoded = encodeMessage(message)
       const { id, type, ...data } = encoded
       return db
@@ -370,12 +378,17 @@ function run(db: DatabaseService, event: MessageEvent) {
       updateCompaction: updateMessage,
       appendMessage,
     }
+    if (SessionMessageProjection.handles(event)) {
+      yield* SessionMessageProjection.projectInTransaction(db, event, adapter)
+      return
+    }
+    if (event.type === SessionEvent.MessageContentUpdated.type)
+      yield* SessionMessageProjection.requireSettled(db, event.data.sessionID, event.data.messageID)
     yield* SessionMessageUpdater.update(adapter, event)
   })
 }
 
 function insertMessage(db: DatabaseService, event: SessionEvent.DurableEvent, message: SessionMessage.Info) {
-  if (event.durable === undefined) return Effect.die(new Error("Durable Session event is missing aggregate sequence"))
   const encoded = encodeMessage(message)
   const { id, type, ...data } = encoded
   return db
@@ -390,6 +403,37 @@ function insertMessage(db: DatabaseService, event: SessionEvent.DurableEvent, me
     })
     .run()
     .pipe(Effect.orDie)
+}
+
+function projectIdle(
+  db: DatabaseService,
+  event:
+    | typeof SessionEvent.Execution.Succeeded.Type
+    | typeof SessionEvent.Execution.Failed.Type
+    | typeof SessionEvent.Execution.Interrupted.Type,
+) {
+  return Effect.gen(function* () {
+    yield* run(db, event)
+    if (event.type === SessionEvent.Execution.Interrupted.type && event.data.reason === "shutdown") return
+    const time = event.created
+    const outcome =
+      event.type === SessionEvent.Execution.Succeeded.type
+        ? "succeeded"
+        : event.type === SessionEvent.Execution.Failed.type
+          ? "failed"
+          : "interrupted"
+    yield* db
+      .update(SessionTable)
+      .set({
+        // Unread uses a strict timestamp comparison, so every terminal must advance even within one millisecond.
+        time_idle: sql`max(${time}, coalesce(${SessionTable.time_idle} + 1, ${time}))`,
+        idle_outcome: outcome,
+        time_updated: sql`${SessionTable.time_updated}`,
+      })
+      .where(eq(SessionTable.id, event.data.sessionID))
+      .run()
+      .pipe(Effect.orDie)
+  })
 }
 
 const layer = Layer.effectDiscard(
@@ -412,6 +456,7 @@ const layer = Layer.effectDiscard(
             title: event.data.title,
             agent: event.data.agent,
             model: event.data.model,
+            metadata: event.data.metadata,
             version: event.data.version,
             time_created: event.created,
             time_updated: event.created,
@@ -445,18 +490,34 @@ const layer = Layer.effectDiscard(
     // are untouched: the session did not move, its directory got identified.
     yield* bus.project(Worktree.Event.Resolved, (event) =>
       Effect.gen(function* () {
-        const stale = [event.data.previous, Project.ID.global].filter((id) => id !== event.data.projectID)
-        if (stale.length === 0) return
+        const candidates = [
+          ...new Set(
+            [event.data.previous, Project.ID.global, ...(event.data.adopted ?? [])].filter(
+              (id) => id !== event.data.projectID,
+            ),
+          ),
+        ]
+        if (candidates.length === 0) return
         const rows = yield* db
-          .select({ id: SessionTable.id, directory: SessionTable.directory })
+          .select({
+            id: SessionTable.id,
+            directory: SessionTable.directory,
+            projectID: SessionTable.project_id,
+            canonical: ProjectTable.worktree,
+          })
           .from(SessionTable)
+          .innerJoin(ProjectTable, eq(SessionTable.project_id, ProjectTable.id))
           .where(
             and(
-              inArray(SessionTable.project_id, stale),
-              // Lexicographic range narrows the scan to prefix neighbors without
-              // LIKE escaping; FSUtil.contains below decides containment exactly.
-              gte(SessionTable.directory, event.data.directory),
-              lte(SessionTable.directory, AbsolutePath.make(event.data.directory + "\uffff")),
+              inArray(SessionTable.project_id, candidates),
+              isNull(SessionTable.workspace_id),
+              or(
+                event.data.adopted?.length ? inArray(SessionTable.project_id, event.data.adopted) : undefined,
+                and(
+                  gte(SessionTable.directory, event.data.directory),
+                  lte(SessionTable.directory, AbsolutePath.make(event.data.directory + "\uffff")),
+                ),
+              ),
             ),
           )
           .all()
@@ -464,12 +525,15 @@ const layer = Layer.effectDiscard(
         yield* Effect.forEach(
           rows,
           (row) => {
-            if (!FSUtil.contains(event.data.directory, row.directory)) return Effect.void
+            const directory = event.data.adopted?.includes(row.projectID)
+              ? row.canonical
+              : AbsolutePath.make(path.resolve(row.directory))
+            if (!FSUtil.contains(event.data.directory, directory)) return Effect.void
             return db
               .update(SessionTable)
               .set({
                 project_id: event.data.projectID,
-                path: RelativePath.make(path.relative(event.data.directory, row.directory).replaceAll("\\", "/")),
+                path: RelativePath.make(path.relative(event.data.directory, directory).replaceAll("\\", "/")),
                 // Self-assignment suppresses the column's $onUpdate: adoption is not activity.
                 time_updated: sql`${SessionTable.time_updated}`,
               })
@@ -514,46 +578,35 @@ const layer = Layer.effectDiscard(
         .run()
         .pipe(Effect.orDie),
     )
+    yield* bus.project(SessionEvent.Viewed, (event) => {
+      const idle = event.data.idle
+      return db
+        .update(SessionTable)
+        .set({
+          // Monotone watermark: a duplicate or stale view never regresses, and a terminal event
+          // committing after the viewer's observation keeps the newer idle transition unread.
+          time_viewed: sql`max(${idle}, coalesce(${SessionTable.time_viewed}, ${idle}))`,
+          time_updated: sql`${SessionTable.time_updated}`,
+        })
+        .where(eq(SessionTable.id, event.data.sessionID))
+        .run()
+        .pipe(Effect.orDie)
+    })
+    yield* bus.project(SessionEvent.MessageContentUpdated, (event) => run(db, event))
     yield* bus.project(SessionEvent.UsageRecorded, (event) => applyUsage(db, event.data.sessionID, event.data))
     yield* bus.project(SessionEvent.Forked, (event) => projectFork(db, event))
     yield* bus.project(SessionEvent.InboxDelivered, (event) =>
       Effect.gen(function* () {
-        if (event.durable === undefined)
-          return yield* Effect.die(new Error("Durable Session event is missing aggregate sequence"))
         const input = yield* SessionInbox.projectDelivered(db, {
           id: event.data.inboxID,
           sessionID: event.data.sessionID,
         })
         if (input.type === "compaction" || input.type === "move") return
-        yield* insertMessage(
-          db,
-          event,
-          input.type === "user"
-            ? {
-                id: input.id,
-                type: "user",
-                metadata: input.payload.metadata,
-                text: input.payload.text,
-                files: input.payload.files,
-                agents: input.payload.agents,
-                skills: input.payload.skills,
-                time: { created: DateTime.makeUnsafe(event.created) },
-              }
-            : {
-                id: input.id,
-                type: "synthetic",
-                text: input.payload.text,
-                description: input.payload.description,
-                metadata: input.payload.metadata,
-                time: { created: DateTime.makeUnsafe(event.created) },
-              },
-        )
+        yield* insertMessage(db, event, SessionInbox.toMessage(input, DateTime.makeUnsafe(event.created)))
       }),
     )
     yield* bus.project(SessionEvent.InboxEnqueued, (event) =>
       Effect.gen(function* () {
-        if (event.durable === undefined)
-          return yield* Effect.die(new Error("Durable Session event is missing aggregate sequence"))
         yield* SessionInbox.projectAdmitted(db, {
           enqueuedSeq: event.durable.seq,
           id: event.data.inboxID,
@@ -582,9 +635,9 @@ const layer = Layer.effectDiscard(
         delivery: event.data.delivery,
       }),
     )
-    yield* bus.project(SessionEvent.Execution.Succeeded, (event) => run(db, event))
-    yield* bus.project(SessionEvent.Execution.Failed, (event) => run(db, event))
-    yield* bus.project(SessionEvent.Execution.Interrupted, (event) => run(db, event))
+    yield* bus.project(SessionEvent.Execution.Succeeded, (event) => projectIdle(db, event))
+    yield* bus.project(SessionEvent.Execution.Failed, (event) => projectIdle(db, event))
+    yield* bus.project(SessionEvent.Execution.Interrupted, (event) => projectIdle(db, event))
     yield* bus.project(SessionEvent.InstructionsUpdated, (event) =>
       Effect.gen(function* () {
         yield* run(db, event)
@@ -596,6 +649,7 @@ const layer = Layer.effectDiscard(
     yield* bus.project(SessionEvent.Shell.Started, (event) => run(db, event))
     yield* bus.project(SessionEvent.Shell.Ended, (event) => run(db, event))
     yield* bus.project(SessionEvent.Step.Started, (event) => run(db, event))
+    yield* bus.project(SessionEvent.Step.Streamed, (event) => run(db, event))
     yield* bus.project(SessionEvent.Step.Ended, (event) =>
       Effect.gen(function* () {
         yield* run(db, event)
@@ -625,17 +679,9 @@ const layer = Layer.effectDiscard(
       Effect.gen(function* () {
         yield* run(db, event)
         yield* InstructionState.advanceEpoch(db, event.data.sessionID, event.durable.seq)
-        if (event.durable === undefined)
-          return yield* Effect.die(new Error("Durable Session event is missing aggregate sequence"))
       }),
     )
-    yield* bus.project(SessionEvent.Compaction.Failed, (event) =>
-      Effect.gen(function* () {
-        yield* run(db, event)
-        if (event.durable === undefined)
-          return yield* Effect.die(new Error("Durable Session event is missing aggregate sequence"))
-      }),
-    )
+    yield* bus.project(SessionEvent.Compaction.Failed, (event) => run(db, event))
     yield* bus.project(SessionEvent.RevertEvent.Staged, (event) =>
       Effect.gen(function* () {
         const revert = event.data.revert

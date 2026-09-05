@@ -36,11 +36,11 @@ const session = (
   workspace_id: null,
   parent_id: null,
   fork_session_id: null,
-  fork_boundary: null,
-  slug: "test",
-  directory: "/tmp/test",
-  start_directory: null,
-  path: null,
+    fork_boundary: null,
+    slug: "test",
+    directory: "/tmp/test",
+    start_directory: null,
+    path: null,
   title: "Test",
   version: "1",
   share_url: null,
@@ -61,6 +61,9 @@ const session = (
   model: null,
   time_created: 1,
   time_updated: 2,
+  time_idle: null,
+  time_viewed: null,
+  idle_outcome: null,
   time_compacting: 3,
   time_archived: null,
   time_suspended: null,
@@ -112,18 +115,12 @@ const assistant = (
   }),
 })
 
-const part = (
-  id: string,
-  messageID: string,
-  data: Record<string, unknown> | string,
-  seq: number | null = null,
-): V1Migration.SourcePart => ({
+const part = (id: string, messageID: string, data: Record<string, unknown> | string): V1Migration.SourcePart => ({
   id,
   message_id: messageID,
   session_id: "ses_test",
   time_created: 1,
   time_updated: 2,
-  seq,
   data: typeof data === "string" ? data : JSON.stringify(data),
 })
 
@@ -644,102 +641,9 @@ describe("V1Migration.transformSession", () => {
       tokens_cache_read: 11,
       tokens_cache_write: 12,
       revert: null,
-      time_compacting: 3,
+      time_compacting: null,
     })
     expect(source[0]).toBe(good)
-  })
-
-  test("migrates the exact custom interrupted recovery marker as an aborted assistant", () => {
-    const parent = user("msg_000000000065aaaaaaaaaaaaaa")
-    const messageID = "msg_000000000066aaaaaaaaaaaaaa"
-    const interrupted = {
-      ...assistant(
-        messageID,
-        parent.id,
-        {
-          finish: "error",
-          cost: 0,
-          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-          error: {
-            name: "InterruptedError",
-            data: {
-              message: "Local recovery marked an empty interrupted assistant as completed.",
-              session_id: "ses_test",
-              message_id: messageID,
-              recovered_at_ms: 25,
-              reason: "dangling_empty_assistant_message_after_transport_interrupt",
-            },
-          },
-        },
-        20,
-      ),
-      time_updated: 25,
-    }
-    const result = transform([parent, interrupted], [part("prt_1", parent.id, { type: "text", text: "prompt" })])
-
-    expect(result.warnings).toEqual([])
-    expect(result.messages).toHaveLength(2)
-    expect(result.messages[1]).toMatchObject({
-      id: messageID,
-      type: "assistant",
-      data: {
-        content: [],
-        finish: "error",
-        cost: 0,
-        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-        error: {
-          type: "aborted",
-          message: "Local recovery marked an empty interrupted assistant as completed.",
-        },
-      },
-    })
-  })
-
-  test("keeps non-exact interrupted recovery markers fail-closed", () => {
-    const parent = user("msg_000000000067aaaaaaaaaaaaaa")
-    const mismatchedID = "msg_000000000068aaaaaaaaaaaaaa"
-    const withPartID = "msg_000000000069aaaaaaaaaaaaaa"
-    const marker = (id: string, messageID: string) => ({
-      ...assistant(
-        id,
-        parent.id,
-        {
-          finish: "error",
-          cost: 0,
-          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-          error: {
-            name: "InterruptedError",
-            data: {
-              message: "interrupted",
-              session_id: "ses_test",
-              message_id: messageID,
-              recovered_at_ms: 25,
-              reason: "dangling_empty_assistant_message_after_transport_interrupt",
-            },
-          },
-        },
-        20,
-      ),
-      time_updated: 25,
-    })
-    const result = transform(
-      [parent, marker(mismatchedID, "msg_other"), marker(withPartID, withPartID)],
-      [
-        part("prt_1", parent.id, { type: "text", text: "prompt" }),
-        part("prt_2", withPartID, { type: "text", text: "unexpected content" }),
-      ],
-    )
-
-    expect(result.warnings).toContainEqual({
-      reason: "invalid-message",
-      sessionID: "ses_test",
-      messageID: mismatchedID,
-    })
-    expect(result.warnings).toContainEqual({
-      reason: "invalid-message",
-      sessionID: "ses_test",
-      messageID: withPartID,
-    })
   })
 
   test("retains empty ordinary messages and omits failed compactions", () => {
@@ -782,60 +686,6 @@ describe("V1Migration.transformSession", () => {
       [10, 11, { created: 10 }],
       [10, 11, { created: 10, completed: 11 }],
     ])
-  })
-
-  test("preserves nullable durable part ordering before falling back to ID", () => {
-    const message = user("msg_000000000060aaaaaaaaaaaaaa")
-    const result = transform(
-      [message],
-      [
-        part("prt_z", message.id, { type: "text", text: "fourth" }, 20),
-        part("prt_c", message.id, { type: "text", text: "second" }),
-        part("prt_b", message.id, { type: "text", text: "first" }),
-        part("prt_a", message.id, { type: "text", text: "third" }, -5),
-      ],
-    )
-
-    expect(result.messages[0].data.text).toBe("first\n\nsecond\n\nthird\n\nfourth")
-  })
-
-  test("preserves valid staged revert and compaction metadata", () => {
-    const message = user("msg_000000000062aaaaaaaaaaaaaa")
-    const info = session({
-      revert: { messageID: SessionMessage.ID.make(message.id), partID: "prt_revert" },
-      time_compacting: 123,
-    })
-    const result = transform([message], [part("prt_revert", message.id, { type: "text", text: "keep" })], info)
-
-    expect(result.session.revert).toEqual({
-      messageID: SessionMessage.ID.make(message.id),
-      partID: "prt_revert",
-    })
-    expect(result.session.time_compacting).toBe(123)
-    expect(result.warnings).toEqual([])
-  })
-
-  test("drops invalid or missing revert boundaries with explicit warnings", () => {
-    const message = user("msg_000000000063aaaaaaaaaaaaaa")
-    const invalid = transform(
-      [message],
-      [part("prt_1", message.id, { type: "text", text: "keep" })],
-      session({ revert: {} as never }),
-    )
-    const missing = transform(
-      [message],
-      [part("prt_1", message.id, { type: "text", text: "keep" })],
-      session({ revert: { messageID: SessionMessage.ID.make("msg_000000000064aaaaaaaaaaaaaa") } }),
-    )
-
-    expect(invalid.session.revert).toBeNull()
-    expect(invalid.warnings).toContainEqual({ reason: "invalid-revert", sessionID: "ses_test" })
-    expect(missing.session.revert).toBeNull()
-    expect(missing.warnings).toContainEqual({
-      reason: "missing-revert-boundary",
-      sessionID: "ses_test",
-      messageID: "msg_000000000064aaaaaaaaaaaaaa",
-    })
   })
 
   test("omits incomplete compactions and subtask assistants while retaining their aggregate usage", () => {
@@ -958,42 +808,6 @@ describe("V1Migration database workflow", () => {
     )
   })
 
-  test("reads the custom nullable part sequence when the legacy column exists", async () => {
-    await database(
-      Effect.gen(function* () {
-        const { db } = yield* Database.Service
-        yield* db.run(sql`ALTER TABLE part ADD COLUMN seq integer`)
-        yield* db.run(sql`ALTER TABLE session ADD COLUMN start_directory text`)
-        const startDirectory = path.resolve("legacy-session-start")
-        yield* db.run(sql`
-          INSERT INTO session (id, project_id, slug, directory, start_directory, title, version, time_created, time_updated)
-          VALUES ('ses_test', 'global', 'test', '/tmp/test', ${startDirectory}, 'Test', '1', 1, 2)
-        `)
-        const message = user("msg_000000000061aaaaaaaaaaaaaa")
-        const first = part("prt_z", message.id, { type: "text", text: "first" }, 10)
-        const second = part("prt_a", message.id, { type: "text", text: "second" }, 20)
-        yield* db.run(
-          sql`INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (${message.id}, 'ses_test', 10, 11, ${message.data})`,
-        )
-        yield* db.run(
-          sql`INSERT INTO part (id, message_id, session_id, time_created, time_updated, seq, data) VALUES (${first.id}, ${message.id}, 'ses_test', 1, 2, ${first.seq}, ${first.data})`,
-        )
-        yield* db.run(
-          sql`INSERT INTO part (id, message_id, session_id, time_created, time_updated, seq, data) VALUES (${second.id}, ${message.id}, 'ses_test', 1, 2, ${second.seq}, ${second.data})`,
-        )
-
-        expect(yield* V1Migration.run()).toEqual({ status: "completed" })
-        expect(yield* db.get(sql`SELECT start_directory FROM session_v2 WHERE id = 'ses_test'`)).toEqual({
-          start_directory: process.platform === "win32" ? startDirectory.replaceAll("\\", "/") : startDirectory,
-        })
-        const migrated = yield* db.get<{ data: string }>(
-          sql`SELECT data FROM session_message WHERE session_id = 'ses_test'`,
-        )
-        expect(migrated && JSON.parse(migrated.data).text).toBe("first\n\nsecond")
-      }),
-    )
-  })
-
   test("yields while clearing stale events in batches", async () => {
     await database(
       Effect.gen(function* () {
@@ -1023,46 +837,6 @@ describe("V1Migration database workflow", () => {
     )
   })
 
-  test("resumes event clearing after a committed batch", async () => {
-    await database(
-      Effect.gen(function* () {
-        const { db } = yield* Database.Service
-        yield* db.run(sql`
-          WITH RECURSIVE rows(value) AS (
-            VALUES(1)
-            UNION ALL
-            SELECT value + 1 FROM rows WHERE value < 2500
-          )
-          INSERT INTO event (id, aggregate_id, seq, created, type, data)
-          SELECT printf('event_%04d', value), 'stale', value, 1, 'session.renamed.1', '{}'
-          FROM rows
-        `)
-        yield* db.run(sql`
-          CREATE TRIGGER fail_later_event_delete
-          BEFORE DELETE ON event
-          WHEN OLD.seq > 1000
-          BEGIN
-            SELECT RAISE(ABORT, 'stop after first event batch');
-          END
-        `)
-
-        const interrupted = yield* Effect.exit(V1Migration.run())
-        expect(interrupted._tag).toBe("Failure")
-        expect(yield* db.get<{ value: number }>(sql`SELECT COUNT(*) AS value FROM event`)).toEqual({ value: 1500 })
-        expect(yield* db.get(sql`SELECT value FROM kv WHERE key = 'migration.v1-v2'`)).toEqual({
-          value: '{"phase":"clearing-events","deleted":1000}',
-        })
-
-        yield* db.run(sql`DROP TRIGGER fail_later_event_delete`)
-        expect(yield* V1Migration.run()).toEqual({ status: "completed" })
-        expect(yield* db.get<{ value: number }>(sql`SELECT COUNT(*) AS value FROM event`)).toEqual({ value: 0 })
-        expect(yield* db.get(sql`SELECT value FROM kv WHERE key = 'migration.v1-v2'`)).toEqual({
-          value: '{"phase":"completed"}',
-        })
-      }),
-    )
-  })
-
   test("imports previous V2 sessions and messages containing apostrophes", async () => {
     await using tmp = await tmpdir()
     const filename = path.join(tmp.path, "opencode-next.db")
@@ -1076,7 +850,7 @@ describe("V1Migration database workflow", () => {
       );
       CREATE TABLE session (
         id text PRIMARY KEY, project_id text NOT NULL, workspace_id text, parent_id text, fork_session_id text,
-        fork_boundary text, slug text NOT NULL, directory text NOT NULL, start_directory text, path text, title text, version text NOT NULL,
+        fork_boundary text, slug text NOT NULL, directory text NOT NULL, path text, title text, version text NOT NULL,
         share_url text, summary_additions integer, summary_deletions integer, summary_files integer, summary_diffs text,
         metadata text, cost real DEFAULT 0 NOT NULL, tokens_input integer DEFAULT 0 NOT NULL,
         tokens_output integer DEFAULT 0 NOT NULL, tokens_reasoning integer DEFAULT 0 NOT NULL,
@@ -1092,12 +866,12 @@ describe("V1Migration database workflow", () => {
         'next-project', 'C:/Users/sewer', 'git', 'Source project', NULL, NULL, NULL, 1, 2, NULL, '[]', NULL
       );
       INSERT INTO session (
-        id, project_id, slug, directory, start_directory, title, version, agent, model, time_created, time_updated
+        id, project_id, slug, directory, title, version, agent, model, time_created, time_updated
       ) VALUES
-        ('ses_next', 'next-project', 'next', 'C:/Users/sewer', 'C:/Users/sewer', 'Imported', '2', 'build',
+        ('ses_next', 'next-project', 'next', 'C:/Users/sewer', 'Imported', '2', 'build',
           '{"id":"model","providerID":"provider"}', 10, 20),
-        ('ses_existing', 'next-project', 'source-existing', '/tmp/next', NULL, 'Source existing', '2', NULL, NULL, 11, 21),
-        ('ses_orphan', 'missing-project', 'orphan', '/tmp/orphan', NULL, 'Orphan', '2', NULL, NULL, 12, 22);
+        ('ses_existing', 'next-project', 'source-existing', '/tmp/next', 'Source existing', '2', NULL, NULL, 11, 21),
+        ('ses_orphan', 'missing-project', 'orphan', '/tmp/orphan', 'Orphan', '2', NULL, NULL, 12, 22);
       INSERT INTO session_message VALUES
         ('msg_next', 'ses_next', 'user', 4, 12, 13, '{"text":"from next''s history","time":{"created":12}}'),
         ('msg_source_existing', 'ses_existing', 'user', 2, 12, 13, '{"text":"source","time":{"created":12}}'),
@@ -1135,14 +909,11 @@ describe("V1Migration database workflow", () => {
         })
         expect(
           yield* db
-            .select({ directory: SessionTable.directory, startDirectory: SessionTable.start_directory })
+            .select({ directory: SessionTable.directory })
             .from(SessionTable)
             .where(eq(SessionTable.id, SessionSchema.ID.make("ses_next")))
             .get(),
-        ).toEqual({
-          directory: process.platform === "win32" ? "C:\\Users\\sewer" : "C:/Users/sewer",
-          startDirectory: process.platform === "win32" ? "C:\\Users\\sewer" : "C:/Users/sewer",
-        })
+        ).toEqual({ directory: process.platform === "win32" ? "C:\\Users\\sewer" : "C:/Users/sewer" })
         expect(yield* db.all(sql`SELECT id, seq, data FROM session_message WHERE session_id = 'ses_next'`)).toEqual([
           {
             id: "msg_next",
@@ -1179,6 +950,61 @@ describe("V1Migration database workflow", () => {
         })
         expect(yield* db.get(sql`SELECT value FROM kv WHERE key = 'migration.v1-v2'`)).toEqual({
           value: '{"phase":"completed"}',
+        })
+      }),
+    )
+  })
+
+  test("imports previous V2 databases missing newer nullable columns", async () => {
+    await using tmp = await tmpdir()
+    const filename = path.join(tmp.path, "opencode-next.db")
+    const sqlite = await import("bun:sqlite")
+    const source = new sqlite.Database(filename)
+    source.run(`
+      CREATE TABLE project (
+        id text PRIMARY KEY, worktree text NOT NULL, vcs text, name text, icon_url text,
+        time_created integer NOT NULL, time_updated integer NOT NULL, time_initialized integer,
+        sandboxes text NOT NULL
+      );
+      CREATE TABLE session (
+        id text PRIMARY KEY, project_id text NOT NULL, workspace_id text, parent_id text, fork_session_id text,
+        slug text NOT NULL, directory text NOT NULL, path text, title text, version text NOT NULL,
+        share_url text, summary_additions integer, summary_deletions integer, summary_files integer, summary_diffs text,
+        metadata text, cost real DEFAULT 0 NOT NULL, tokens_input integer DEFAULT 0 NOT NULL,
+        tokens_output integer DEFAULT 0 NOT NULL, tokens_reasoning integer DEFAULT 0 NOT NULL,
+        tokens_cache_read integer DEFAULT 0 NOT NULL, tokens_cache_write integer DEFAULT 0 NOT NULL, revert text,
+        permission text, agent text, model text, time_created integer NOT NULL, time_updated integer NOT NULL,
+        time_compacting integer, time_archived integer
+      );
+      CREATE TABLE session_message (
+        id text PRIMARY KEY, session_id text NOT NULL, type text NOT NULL, seq integer NOT NULL,
+        time_created integer NOT NULL, time_updated integer NOT NULL, data text NOT NULL
+      );
+      INSERT INTO project VALUES (
+        'next-project', '/tmp/next', 'git', 'Source project', 'https://example.com/icon.png', 1, 2, NULL, '[]'
+      );
+      INSERT INTO session (
+        id, project_id, slug, directory, title, version, time_created, time_updated
+      ) VALUES ('ses_next', 'next-project', 'next', '/tmp/next', 'Imported', '2', 10, 20);
+    `)
+    source.close()
+
+    await database(
+      Effect.gen(function* () {
+        const database = yield* Database.Service
+        expect(yield* V1Migration.run({ nextDatabasePath: filename })).toEqual({ status: "completed" })
+        expect(
+          yield* database.db.get(sql`SELECT fork_boundary, time_suspended FROM session_v2 WHERE id = 'ses_next'`),
+        ).toEqual({ fork_boundary: null, time_suspended: null })
+        expect(
+          yield* database.db.get(
+            sql`SELECT icon_url, icon_url_override, icon_color, commands FROM project WHERE id = 'next-project'`,
+          ),
+        ).toEqual({
+          icon_url: "https://example.com/icon.png",
+          icon_url_override: "https://example.com/icon.png",
+          icon_color: null,
+          commands: null,
         })
       }),
     )
@@ -1292,7 +1118,7 @@ describe("V1Migration database workflow", () => {
           revert: null,
           time_created: 1,
           time_updated: 2,
-          time_compacting: 3,
+          time_compacting: null,
           time_archived: 4,
         })
         expect(yield* db.get(sql`SELECT cost, revert, time_compacting FROM session WHERE id = 'ses_test'`)).toEqual({

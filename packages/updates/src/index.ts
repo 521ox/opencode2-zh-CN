@@ -31,7 +31,7 @@ const audience = "https://update.opencode.ai"
 const githubKeys = createRemoteJWKSet(new URL("https://token.actions.githubusercontent.com/.well-known/jwks"))
 
 export default {
-  async fetch(request, env): Promise<Response> {
+  async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url)
 
     if (url.pathname === "/") return json({ service: "opencode-updates" })
@@ -40,28 +40,15 @@ export default {
     if (url.pathname === "/api/publish" && request.method === "POST") return publishArtifact(request, env)
     if (request.method !== "GET") return new Response("Method not allowed", { status: 405 })
 
-    const segments = url.pathname.split("/").filter(Boolean)
-    if (segments.length === 2 && segments[0] === "api" && validIdentifier(segments[1])) {
-      return channel(env.DB, segments[1])
+    const [root, ...path] = url.pathname.split("/").filter(Boolean)
+    if (root !== "api" || path.length < 1 || path.length > 3 || !path.every(validIdentifier)) {
+      return new Response("Not found", { status: 404 })
     }
-    if (
-      segments.length === 3 &&
-      segments[0] === "api" &&
-      validIdentifier(segments[1]) &&
-      validIdentifier(segments[2])
-    ) {
-      return artifactName(env.DB, segments[1], segments[2])
-    }
-    if (
-      segments.length === 4 &&
-      segments[0] === "api" &&
-      validIdentifier(segments[1]) &&
-      validIdentifier(segments[2]) &&
-      validIdentifier(segments[3])
-    ) {
-      return artifactDistribution(env.DB, segments[1], segments[2], segments[3])
-    }
-    return new Response("Not found", { status: 404 })
+
+    const resolved = resolveChannel(path[0])
+    if (path.length === 1) return channel(env.DB, resolved)
+    if (path.length === 2) return artifactName(env.DB, resolved, path[1])
+    return artifactDistribution(env.DB, resolved, path[1], path[2])
   },
 } satisfies ExportedHandler<Env>
 
@@ -344,12 +331,16 @@ export function validGitHubClaims(claims: JWTPayload): claims is GitHubClaims {
 
 export function channelsForRef(ref: string) {
   if (ref === "refs/heads/dev") return ["dev", "latest"]
-  if (ref === "refs/heads/v2") return ["next"]
+  if (ref === "refs/heads/v2") return ["dev"]
   if (ref === "refs/heads/beta") return ["beta"]
   if (ref === "refs/heads/ci") return ["ci"]
   if (ref === "refs/heads/fix/npm-native-binary-install") return ["fix/npm-native-binary-install"]
   const snapshot = ref.match(/^refs\/heads\/(snapshot-[a-zA-Z0-9._-]+)$/)?.[1]
   return snapshot ? [snapshot] : []
+}
+
+export function resolveChannel(channel: string) {
+  return channel === "next" ? "beta" : channel
 }
 
 function validMutation(request: Request) {

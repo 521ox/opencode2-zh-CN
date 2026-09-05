@@ -36,8 +36,7 @@ export function cliErrorMessage(input: unknown, t: Translator = englishTranslato
   }
 
   const provider = configData(input, "ProviderInitError")
-  if (provider)
-    return t("common.error.providerInit", { providerID: field(provider, "providerID") ?? "" })
+  if (provider) return t("common.error.providerInit", { providerID: field(provider, "providerID") ?? "" })
 
   const json = configData(input, "ConfigJsonError")
   if (json) {
@@ -72,9 +71,8 @@ export function cliErrorMessage(input: unknown, t: Translator = englishTranslato
         })
       : []
     return [
-      (path && path !== "config"
-        ? t("common.error.configInvalidAt", { path })
-        : t("common.error.configInvalid")) + (message ? `: ${message}` : ""),
+      (path && path !== "config" ? t("common.error.configInvalidAt", { path }) : t("common.error.configInvalid")) +
+        (message ? `: ${message}` : ""),
       ...issues.map((issue) => "↳ " + issue.message + " " + issue.path.join(".")),
     ].join("\n")
   }

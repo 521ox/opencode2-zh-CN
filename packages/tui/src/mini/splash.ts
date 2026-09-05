@@ -24,6 +24,7 @@ import { monoTruncate, monoTruncateMiddle } from "./mono"
 import type { RunSplashTheme } from "./theme"
 
 const SPLASH_TITLE_LIMIT = 50
+
 type SplashInput = {
   title: string | undefined
   session_id: string

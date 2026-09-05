@@ -51,48 +51,49 @@ async function renderSubagent(interrupt: "ctrl+i" | "none") {
       <I18nProvider locale="en">
         <Keymap.Provider config={config}>
           <RunFooterView
-          directory={() => "/tmp"}
-          findFiles={async () => []}
-          agents={() => []}
-          references={() => []}
-          commands={() => []}
-          providers={() => undefined}
-          currentAgent={() => "Build"}
-          currentAgentID={() => "build"}
-          currentAgentExplicit={() => false}
-          currentModel={() => undefined}
-          variants={() => []}
-          currentVariant={() => undefined}
-          state={state}
-          view={view}
-          subagent={subagents}
-          theme={() => RUN_THEME_FALLBACK}
-          miniSettings={() => ({
-            thinking: "hide",
-            shell_output: "hide",
-            turn_summary: "show",
-            footer: "show",
-            splash: "show",
-            mono: false,
-          })}
-          mono={false}
-          onSubmit={() => true}
-          onPermissionReply={() => {}}
-          onFormReply={() => {}}
-          onFormCancel={() => {}}
-          onCycle={() => {}}
-          onInterrupt={() => false}
-          onEditorOpen={async () => undefined}
-          onInputClear={() => {}}
-          onExit={() => {}}
-          onAgentSelect={() => {}}
-          onModelSelect={() => {}}
-          onVariantSelect={() => {}}
-          onRows={() => {}}
-          onLayout={() => {}}
-          onStatus={() => {}}
-          onMiniSettingChange={() => {}}
-          onSubagentInterrupt={(sessionID) => interrupted.push(sessionID)}
+            directory={() => "/tmp"}
+            findFiles={async () => []}
+            agents={() => []}
+            references={() => []}
+            commands={() => []}
+            providers={() => undefined}
+            currentAgent={() => "Build"}
+            currentAgentID={() => "build"}
+            currentAgentExplicit={() => false}
+            currentModel={() => undefined}
+            variants={() => []}
+            currentVariant={() => undefined}
+            state={state}
+            view={view}
+            subagent={subagents}
+            theme={() => RUN_THEME_FALLBACK}
+            tuiConfig={config}
+            miniSettings={() => ({
+              thinking: "hide",
+              shell_output: "hide",
+              turn_summary: "show",
+              footer: "show",
+              splash: "show",
+              mono: false,
+            })}
+            mono={false}
+            onSubmit={() => true}
+            onPermissionReply={() => {}}
+            onFormReply={() => {}}
+            onFormCancel={() => {}}
+            onCycle={() => {}}
+            onInterrupt={() => false}
+            onEditorOpen={async () => undefined}
+            onInputClear={() => {}}
+            onExit={() => {}}
+            onAgentSelect={() => {}}
+            onModelSelect={() => {}}
+            onVariantSelect={() => {}}
+            onRows={() => {}}
+            onLayout={() => {}}
+            onStatus={() => {}}
+            onMiniSettingChange={() => {}}
+            onSubagentInterrupt={(sessionID) => interrupted.push(sessionID)}
           />
         </Keymap.Provider>
       </I18nProvider>

@@ -23,6 +23,7 @@ import { useStorage } from "../context/storage"
 import { useConfig } from "../config"
 import { withTimestampedFallback } from "@opencode-ai/util/session-title-fallback"
 import { projectName } from "../util/project"
+import { useLocation } from "../context/location"
 import { useI18n } from "../context/i18n"
 
 export function DialogSessionList() {
@@ -37,27 +38,36 @@ export function DialogSessionList() {
   const sessionTabs = useSessionTabs()
   const config = useConfig().data
   const toast = useToast()
+  const { t } = useI18n()
+  const activeLocation = useLocation()
   const [filter, setFilter] = createSignal("")
   const shortcuts = Keymap.useShortcuts()
-  const { t } = useI18n()
   const [search, setSearch] = createDebouncedSignal("", 150)
   const [toDelete, setToDelete] = createSignal<string>()
+  const [prefs, updatePrefs] = useStorage().store("session-list", {
+    initial: { allProjects: config.tabs?.scope !== "cwd" },
+  })
+  const allProjects = () => prefs.allProjects
   const quickSwitchRange = (first: string, last: string) => {
     const prefix = first.slice(0, -1)
     if (first.endsWith("1") && last === `${prefix}9`) return `${prefix}1-9`
     return t("dialog.sessionList.range", { first, last })
   }
-  const [prefs, updatePrefs] = useStorage().store("session-list", {
-    initial: { allProjects: config.tabs?.scope !== "cwd" },
-  })
-  const allProjects = () => prefs.allProjects
+  const pickerLocation = () =>
+    (route.data.type === "session" ? data.session.get(route.data.sessionID)?.location : undefined) ??
+    activeLocation.ref ??
+    data.location.default()
 
   const [searchResults, { mutate: setSearchResults }] = createResource(
-    () => ({ query: search().trim(), allProjects: allProjects() }),
-    async ({ query, allProjects }) => {
+    () => ({
+      query: search().trim(),
+      allProjects: allProjects(),
+      location: pickerLocation(),
+    }),
+    async ({ query, allProjects, location }) => {
       try {
-        if (!data.location.info()) await data.location.sync()
-        const current = data.location.info()
+        if (!data.location.info(location)) await data.location.sync(location)
+        const current = data.location.info(location)
         if (!current) throw new Error("Location unavailable")
         const response = await client.api.session.list({
           ...(allProjects
@@ -85,7 +95,7 @@ export function DialogSessionList() {
   const currentSessionID = createMemo(() => (route.data.type === "session" ? route.data.sessionID : undefined))
   const localSessions = createMemo(() => {
     const query = filter().trim().toLowerCase()
-    const current = data.location.info()
+    const current = data.location.info(pickerLocation())
     const sessions = data.session
       .list()
       .filter(
@@ -132,7 +142,7 @@ export function DialogSessionList() {
     return hint && local.session.slots().length > 0 ? [{ title: t("dialog.sessionList.switch"), label: hint }] : []
   })
   const currentProjectName = createMemo(() => {
-    const current = data.location.info()
+    const current = data.location.info(pickerLocation())
     if (!current) return ""
     const project = data.project.get(current.project.id)
     return projectName(project) ?? ""
@@ -186,7 +196,10 @@ export function DialogSessionList() {
         return option(session, date === today ? t("dialog.sessionList.today") : date)
       })
 
-    return [...pinned.map((sessionID) => option(sessionMap.get(sessionID)!, t("dialog.sessionList.pinned"))), ...remaining]
+    return [
+      ...pinned.map((sessionID) => option(sessionMap.get(sessionID)!, t("dialog.sessionList.pinned"))),
+      ...remaining,
+    ]
   })
 
   onMount(() => dialog.setSize("large"))
@@ -200,7 +213,9 @@ export function DialogSessionList() {
             {t("dialog.sessionList.title")}
           </text>
           <Show when={!allProjects() && currentProjectName()}>
-            <text fg={theme.text.subdued}>{t("dialog.sessionList.titleForProject", { project: currentProjectName() })}</text>
+            <text fg={theme.text.subdued}>
+              {t("dialog.sessionList.titleForProject", { project: currentProjectName() })}
+            </text>
           </Show>
         </box>
       }

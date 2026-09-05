@@ -3,11 +3,13 @@ import { createStore } from "solid-js/store"
 import { TextAttributes } from "@opentui/core"
 import { useTheme } from "../../../context/theme"
 import { SplitBorder } from "../../../ui/border"
+import { CloseButton } from "../../../ui/dialog"
 import { Keymap } from "../../../context/keymap"
 import { SubagentsTab } from "./subagents-tab"
 import { ShellTab } from "./shell-tab"
 import { useI18n } from "../../../context/i18n"
-import { CloseButton } from "../../../ui/dialog"
+import { TerminalsTab } from "./terminals-tab"
+import { useConfig } from "../../../config"
 
 export interface ComposerHint {
   label: string
@@ -38,11 +40,13 @@ export type ComposerProps = {
   open: boolean
   defaultTab?: string
   onClose?: () => void
+  visibleTerminalID?: string
 }
 
 export function Composer(props: ComposerProps) {
   const theme = useTheme("elevated")
   const i18n = useI18n()
+  const config = useConfig().data
 
   const [store, setStore] = createStore({
     tabs: {} as Record<string, Tab>,
@@ -117,6 +121,12 @@ export function Composer(props: ComposerProps) {
         group: i18n.t("session.group.composer"),
         run: close,
       },
+      {
+        bind: "ctrl+c",
+        title: i18n.t("session.composer.command.close"),
+        group: i18n.t("session.group.composer"),
+        run: close,
+      },
     ],
   }))
 
@@ -163,6 +173,9 @@ export function Composer(props: ComposerProps) {
             </box>
             <SubagentsTab sessionID={props.sessionID} />
             <ShellTab sessionID={props.sessionID} />
+            <Show when={config.session.terminal}>
+              <TerminalsTab sessionID={props.sessionID} visibleTerminalID={props.visibleTerminalID} />
+            </Show>
             <box flexDirection="row" gap={2} paddingLeft={1} flexShrink={0}>
               <For each={footerHints()}>
                 {(hint) => (

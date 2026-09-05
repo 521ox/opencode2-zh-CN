@@ -114,7 +114,8 @@ export function DialogExportOptions(props: DialogExportOptionsProps) {
                         : theme.text.formfield.default
                   }
                 >
-                  {store.format === format ? "◉" : "○"} {format === "markdown" ? t("ui.dialog.export.markdown") : "JSON"}
+                  {store.format === format ? "◉" : "○"}{" "}
+                  {format === "markdown" ? t("ui.dialog.export.markdown") : "JSON"}
                 </text>
               </box>
             )}

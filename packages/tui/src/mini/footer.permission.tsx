@@ -433,7 +433,7 @@ export function RunPermissionBody(props: {
                   </Show>
                   <Show when={!info().diff && !info().patch && info().lines.length === 0}>
                     <box paddingLeft={1}>
-                  <text fg={props.theme.muted}>{t("mini.permission.noDiff")}</text>
+                      <text fg={props.theme.muted}>{t("mini.permission.noDiff")}</text>
                     </box>
                   </Show>
                 </box>
@@ -489,7 +489,8 @@ export function RunPermissionBody(props: {
           >
             <box flexDirection="row" gap={2} flexShrink={0}>
               <text fg={props.theme.text}>
-                {props.mono ? "left/right" : "⇆"} <span style={{ fg: props.theme.muted }}>{t("mini.permission.select")}</span>
+                {props.mono ? "left/right" : "⇆"}{" "}
+                <span style={{ fg: props.theme.muted }}>{t("mini.permission.select")}</span>
               </text>
               <text fg={props.theme.text}>
                 enter <span style={{ fg: props.theme.muted }}>{t("mini.permission.confirm")}</span>

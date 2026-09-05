@@ -1,282 +1,135 @@
-# OpenCode V2 Customization Contract
+# OpenCode2 zh-CN Public Customization Contract
 
-> Public fork note: absolute build, rehearsal, and installation paths in this
-> document are historical validation examples, not required installation
-> locations. Use paths appropriate for your own environment.
+## Purpose and Authority
 
-## Purpose
+OpenCode2 zh-CN is an independent community fork of
+[anomalyco/opencode](https://github.com/anomalyco/opencode). It is not
+affiliated with, authorized by, sponsored by, or endorsed by anomalyco or the
+upstream maintainers.
 
-This worktree is the V2 successor to the historical `opencode-v1.18.9-custom`
-fork. It ports only product-specific value onto the official OpenCode V2
-architecture. It must not recreate the former mixed V1/V2 runtime.
+This root document owns the stable public customization boundary. Current
+source and focused tests are the executable owners. If source, tests, and
+documentation disagree, stop the integration and reconcile the contract; do
+not silently select whichever text is easiest to preserve.
 
-For upstream synchronization, `specs/v2/upstream-sync-preservation.md` is the
-operational preservation manifest. Every upstream merge or rebase must account
-for each stable customization ID in that document before the result can be
-accepted.
+Upstream changes have been selectively reviewed through
+[`0808ebc3`](https://github.com/anomalyco/opencode/commit/0808ebc3c52286f5a3a602f82f069ae597f86469).
+That revision is not a direct ancestor of this fork, and this statement does
+not claim that every upstream change in the reviewed range was integrated.
 
-## Upstream Baseline
+## Product Boundary
 
-- Upstream repository: `anomalyco/opencode`
-- Upstream line: official V2 beta
-- Pinned source commit: `b0480a6f9350d1846cca12a4fd282bdf2286e603`
-- Custom branch: `native-responses-v2`
-- Historical custom source: `D:\src\opencode-v1.18.9-custom`
-- Historical source policy: frozen reference only; do not develop new product
-  behavior there.
+- V2 packages own current runtime behavior. Fork-specific V1 migration and
+  rehearsal tools are retired and must not be restored.
+- Preserve behavior and tests, not historical file layout. Prefer an upstream
+  owner only after semantic equivalence is demonstrated.
+- Keep provider credentials, endpoints, prompts, response IDs, session data,
+  generated memory snapshots, and machine evidence out of fixtures and docs.
+- The source runtime prerequisite is Bun 1.3.14, as declared by the root
+  `packageManager`. Historical canary build modes are not a current product
+  contract.
 
-## Product Contract
+## Complete Provider, Protocol, and Operation Whitelist
 
-1. V2 packages are the only owners of new runtime behavior. Follow the
-   repository dependency direction and package-specific `AGENTS.md` files.
-2. Do not add a Legacy session writer, Legacy execution loop, compatibility
-   execution fallback, or dual-write path.
-3. Historical V1 support is restricted to the official, isolated migration or
-   read-only decoder boundary required to preserve existing user data.
-4. A session that has entered the V2 runtime must never fall back to a Legacy
-   writer after an error.
-5. Native full OpenAI Responses behavior is the preferred product contract.
-   OpenAI-compatible or AI SDK routes are compatibility routes and must not be
-   presented as equivalent to the full native contract.
-6. The `mycodex` provider should use the native V2 OpenAI Responses route. The
-   finished product must not require users to add a legacy
-   `"npm": "@ai-sdk/openai"` selector merely to obtain the full route.
-7. Default provider storage remains stateless unless explicitly enabled. Cache,
-   continuation, and remote compaction policy must have one V2 owner.
-8. Production databases are never used for development migration experiments.
-   Database validation uses an offline copy and records rollback evidence.
-9. Startup migrations must be metadata-bounded unless an explicitly approved,
-   copy-only rehearsal proves that data work is necessary and safe.
-10. Native OpenAI Responses requests expose provider-hosted `web_search` by
-    default when the selected agent grants wildcard `websearch` permission.
-    The local `websearch` function tool is hidden on that route so a request has
-    only one search execution owner. `ask` and `deny` do not pre-authorize a
-    provider-executed search.
-11. The V2 `subagent` tool may continue an existing Session only when the
-    supplied `sessionID` identifies a direct child of the caller and the child
-    uses the requested agent. Cross-parent and cross-agent reuse are rejected.
-    Foreground completion exposes the Core-owned child Session ID in both
-    structured metadata and model-visible content so a later call can continue
-    the same child even when a tool adapter does not surface metadata.
-    Nested delegation remains disabled by default and requires both an explicit
-    depth increase and agent permission.
-12. When `compaction.prune` is enabled, the upstream request projection bounds
-    completed local tool results in immutable chronological blocks of 32. The
-    active block shares a budget equal to 10% of model prompt capacity, clamped
-    to 10,000-64,000 estimated tokens; completed blocks retain bounded 64-token
-    head/tail previews and recovery locations. Appending within one block must
-    not change an already-sent prompt prefix. Crossing a block boundary may
-    archive the previous block once, batching cache invalidation instead of
-    moving a boundary on every result. The durable Session history, exports,
-    TUI transcript, managed full-output files, provider-executed results, media
-    attachments, and opaque remote compaction checkpoints remain unchanged.
-13. Every normal Agent request receives protected Session rules location context
-    after the `session.context` hook. The directory is derived only from the
-    immutable root Session `start_directory` and readable root Session ID, and
-    all descendant subagents share it. Missing or unsafe lineage fails closed;
-    Core never guesses from the current directory and never accesses the rules
-    directory while resolving context. Persisted Windows and POSIX paths survive
-    cross-host migration. Forks without an explicit creation Location remain
-    unavailable instead of copying the source Session's start directory.
-    Auxiliary title, compaction, and generate requests remain unchanged. See
-    `specs/session-rules-context.md`.
-14. User-requested native remote compaction uses the normal Responses stream
-    with a final `{ "type": "compaction_trigger" }` input item. It never calls
-    or falls back to the legacy `/responses/compact` endpoint. Automatic remote
-    compaction remains the separate normal-request
-    `context_management.compaction.compact_threshold` contract. Core gives that
-    automatic path a 5% grace above the submitted threshold. If completed
-    provider usage exceeds the grace without a completed automatic checkpoint,
-    Core invokes the same remote `compaction_trigger` path once. A request-level
-    context overflow before assistant output invokes that trigger immediately.
-    Trigger failure stops the Session; it does not retry indefinitely or fall
-    back to a local summary.
-15. TUI dialog and composer header close controls use the shared `×` icon with
-    the original three-cell mouse target instead of a clickable `esc` label.
-    Mouse clicks preserve each caller's existing close callback, and keyboard
-    Escape behavior remains unchanged. Textual `esc` hints remain only where
-    they mean back, cancel, dismiss, or a keyboard-only action rather than a
-    window close control.
-16. Launching the main interactive TUI with no subcommand uses a private
-    standalone server by default. The server is owned by the TUI scope and exits
-    when the TUI exits, including Ctrl+C and owner termination. An explicit
-    `--server` still connects to a persistent or external server, and non-TUI
-    commands retain their existing service defaults. Persistent service
-    lifecycle remains available through the explicit `service` commands.
-17. Session execution claims are cross-process SQLite leases. Every Core process
-    owns claims through a PID/UUID/hostname identity, renews active leases, and
-    can release or terminalize only its own Sessions. A second private or managed
-    server cannot resume, publish continuation, or drain a Session while the
-    first owner's lease is fresh. Graceful teardown expires the lease for
-    immediate handoff; crash recovery waits for bounded expiry.
-18. The optional upstream `--cpu-profile` flag profiles the actual serving
-    process in both managed-service and private-standalone modes. An explicit
-    flag takes precedence. The parent CLI propagates `OPENCODE_CPU_PROFILE` only
-    together with an internal explicit-source marker; a `serve` child may
-    inherit the marked value when no flag is present, while non-serve commands
-    and managed service discovery ignore an unmarked ambient value. Default
-    startup and service ownership remain unchanged when profiling is disabled.
+Capabilities are granted by package ownership, the selected protocol, and the
+operations implemented by that route. Provider IDs, display names, base URLs,
+and shared labels are not capability evidence.
 
-## Porting Rules
+| Package / selected route | Required behavior | Remote compaction owner |
+| --- | --- | --- |
+| `@opencode-ai/ai/providers/openai` | Full native OpenAI Responses; explicit native storage policy and optional native WebSocket | Native in-band automatic and trigger operations |
+| `@opencode-ai/ai/providers/openai/responses` | Alias of the same native OpenAI owner | Same as native parent |
+| `@opencode-ai/ai/providers/openai-compatible/responses` | Generic Responses-compatible HTTP; final dispatch forces `store: false` and strips native compaction fields | None; local summary |
+| `aisdk:@ai-sdk/openai` | Compatibility selector mapped to generic compatible Responses; it does not execute the AI SDK OpenAI provider | None; local summary |
+| `@opencode-ai/ai/providers/openai-compatible` | Generic OpenAI-compatible Chat Completions | None; local summary |
+| `@opencode-ai/ai/providers/xai` + dedicated Responses protocol | Official xAI Responses; final dispatch forces `store: false` | Dedicated client `POST /responses/compact` operation |
+| `@opencode-ai/ai/providers/xai` + Chat protocol | xAI Chat Completions | None; local summary |
 
-- Classify every historical customization as `upstream-equivalent`, `port`, or
-  `drop` before copying code.
-- Prefer the official V2 implementation when it provides equivalent behavior.
-- Port behavior and tests, not old file structure.
-- Do not copy `packages/opencode` runtime code into V2 packages.
-- Do not copy temporary Phase 1-5 adapters when their durable owner already
-  exists upstream.
-- Keep provider credentials, URLs, prompt contents, response IDs, session IDs,
-  and real database data out of committed fixtures and measurement artifacts.
+DeepSeek, Anthropic, Azure, Modal, Copilot, Chat routes, and all other routes not
+explicitly granted an operation above use local-summary compaction. Generic
+compatible routes must not inherit native hosted tools, storage, WebSocket, or
+remote-compaction behavior.
 
-## Localization
+### Native OpenAI Responses compaction
 
-- Official V2 already contains Simplified Chinese resources for App, UI,
-  Desktop, and documentation. Those resources are the baseline and should not
-  be replaced by the old fork wholesale.
-- V2 TUI localization is owned by package-local English and Simplified Chinese
-  dictionaries. English is the source of truth and fallback; this custom build
-  defaults to Simplified Chinese and permits an explicit English locale.
-- The TUI, Mini frontend, dialogs, session views, feature plugins, shared UI,
-  generated form validation, startup errors, and session epilogue use the same
-  locale owner. Dynamic values are interpolated by named parameters; provider
-  names, commands, paths, protocol values, model content, and external error
-  text remain unchanged.
-- Non-interactive `opencode run` tool chrome resolves the same TUI locale; JSON
-  events and raw tool output remain unchanged.
-- Historical V1 TUI strings are terminology and coverage references, not source
-  files to copy, because the V2 component structure changed.
-- V1 runtime messages and the historical custom subagent center are not ported.
+- Ordinary `/responses` requests use
+  `context_management: [{ type: "compaction", compact_threshold: ... }]`.
+- Manual compaction and bounded overflow recovery use the same ordinary
+  `/responses` stream with a final `{ "type": "compaction_trigger" }` input.
+- No native OpenAI production path calls `/responses/compact`.
+- A missing checkpoint or trigger failure is visible and does not fall back to
+  local summary.
 
-## Windows Build
+### Official xAI Responses compaction
 
-Run from the repository root:
+- Threshold crossing and manual compaction each issue exactly one
+  `<baseURL>/responses/compact` request before ordinary generation.
+- The selected endpoint or proxy must implement that operation and return one
+  opaque, replayable `encrypted_content` compaction item.
+- A 404, malformed response, or missing item fails visibly without local
+  fallback or durable transcript mutation.
+- xAI Chat and look-alike routes do not own this operation.
 
-```powershell
-pwsh -File .\script\build-custom-windows.ps1
+### Shared compaction settings
+
+Current V2 configuration fields are `compaction.auto` (default `true`),
+`compaction.prune` (default `false`), `compaction.buffer` (default `20000`), and
+`compaction.keep.tokens` (default `15000`). `keep.tokens` applies only to the
+tail retained for local summary. There is no top-level `compact_threshold`.
+
+With buffer `B`, the remote prompt ceiling is:
+
+```text
+min(inputLimit - B,
+    contextLimit - max(min(outputLimit, 32000), B))
 ```
 
-Useful switches:
+A missing input limit contributes infinity. A non-positive or non-safe-integer
+result is unusable and must not trigger remote compaction.
 
-- `-SkipInstall`: reuse the current lockfile installation.
-- `-SkipWebUI`: diagnostic build without embedded App assets; not for release.
-- `-Baseline`: build the non-AVX2 Windows x64 target.
-- `-RunServiceSmoke`: run the official isolated compiled-service lifecycle
-  smoke test after building. The smoke writes an isolated service config with a
-  free loopback port so it can run while another OpenCode channel is active.
-- `-CompileRuntime PinnedCanary|Current|MovingCanary`: choose the embedded Bun
-  runtime. `PinnedCanary` is the release default; `Current` is the stable
-  recovery path, and `MovingCanary` is diagnostic only.
+## Public Customization Inventory
 
-The wrapper preserves the official internal binary name `opencode2`, writes a
-root worktree copy at `opencode2.exe`, and publishes timestamped artifacts to a
-V2-specific directory. It verifies the Bun version, binary version, and SHA-256
-identity of all exported copies. The default pinned snapshot is Bun
-`1.4.0-canary.1+aec33f581`; normal and baseline Windows x64 assets are addressed
-by immutable GitHub asset IDs. A cache is accepted only when `bun.exe`, the
-matching archive, and `snapshot.json` are all present and every metadata,
-archive-SHA, executable-SHA, version, and revision check passes. New caches are
-fully assembled and verified in staging before the complete directory is
-published. Each candidate receives a `.build.json` sidecar that distinguishes
-the Bun running the build from the Bun runtime embedded in the executable and
-records source, runtime, asset, and candidate hashes. Git HEAD and complete
-porcelain status are sampled before and after the build; Git failure or any
-source-state difference prevents candidate publication.
+The public customization whitelist preserves these behavior groups:
 
-## Safety And Rollback
+1. Native OpenAI ownership, compatible-route separation, hosted-tool ownership,
+   strict request lowering, stream completion, and input boundaries.
+2. Native OpenAI automatic/manual compaction and official xAI explicit remote
+   compaction, each with fail-visible route-specific behavior.
+3. Pressure-gated request-only tool-result pruning and deterministic checkpoint
+   projection/replay.
+4. Cross-process Session execution leases and bounded process-local Job
+   retention.
+5. Direct-child subagent continuation, complete final conclusions, background
+   completion, and durable continuation admission.
+6. Protected root-Session rules context and request-time Plan reminder
+   reconciliation.
+7. Fork-owned `environment_tools` and argv-only `direct_exec` with separate
+   catalog and execution permissions.
+8. Code Mode-only pinned `opencode.session_move`, limited to the current Session
+   or an owned direct child.
+9. Simplified Chinese-first TUI, compaction status, tab/cache ownership, prompt
+   navigation, exact child IDs, MCP status activation, and background-child
+   navigation.
+10. Plugin management in CLI/TUI, `/stats` and CLI stats, App/WebUI Copy Session
+    ID, command subagents/background Jobs, and the root `update` alias.
+11. Idempotent child-process output settlement and retained-Location/MCP shutdown
+    containment.
+12. Behavior-preserving request-path allocation/read optimizations.
 
-- The historical binary and source remain available until the V2 port passes
-  isolated data migration, provider, CLI, TUI, and service gates.
-- Do not replace the installed binary as part of a build or test command.
-- Do not point a development V2 binary at the production database.
-- Release activation is a separate user-authorized operation.
-- Run `script/rehearse-v1-to-v2-database.ps1` only after every OpenCode
-  process has exited. The script holds read-only source guards, keeps an exact
-  raw copy, migrates a separate working copy, and verifies every migrated
-  session with the production `transformSession()` implementation.
-- A rehearsal succeeds only when `COMPLETE` exists in its timestamped
-  directory and `status.json` reports `outcome: passed`. Migration warnings
-  fail by default and require explicit review before
-  `-AllowMigrationWarnings` may be used.
+Windows persistent terminal panes remain default-off. Internal ACP and
+diagnostic surfaces are not ordinary user UI and are not promoted as public
+workflow entry points.
 
-## Baseline Evidence
+## Synchronization Rule
 
-On August 14, 2026, before custom runtime changes:
+For every upstream synchronization:
 
-- Bun `1.3.14` dependency installation completed.
-- `packages/ai`, `packages/core`, `packages/cli`, and `packages/tui` typechecks
-  passed.
-- A Windows x64 single-file `opencode2.exe` built successfully and passed
-  isolated `--version` and `--help` smoke checks without creating a database.
-- TUI tests passed (`715` passed, `6` skipped).
-- Upstream baseline test failures were recorded separately and must not be
-  attributed to later custom changes unless their count or behavior changes.
+1. classify each affected stable customization ID;
+2. identify the current upstream and fork owners;
+3. preserve, rebase the semantic delta, or adopt an upstream-equivalent owner;
+4. run focused evidence capable of falsifying the affected contract;
+5. record exclusions and residual risks without treating a clean textual merge
+   as acceptance evidence.
 
-Current TUI localization verification:
-
-- Package typecheck passed.
-- English and Simplified Chinese dictionaries passed complete key,
-  placeholder, and domain-ownership checks.
-- Localization-focused helper, Mini, dialog, session, feature, and component
-  suites passed.
-- The integrated suite passed `730` tests and skipped `6`; the only observed
-  failure was the unchanged timing-sensitive spring retarget test. Isolated
-  repetition reproduced the existing nondeterminism once in ten runs, so no
-  animation behavior or assertion was changed to mask it.
-
-## Release Candidate Evidence
-
-The full WebUI-enabled Windows x64 release build completed successfully and
-passed the isolated compiled-service lifecycle smoke test. The build wrapper
-verified that the package output, worktree export, and timestamped candidate
-have identical lengths and SHA-256 hashes.
-
-- Version: `1.18.4`
-- Bun: `1.3.14`
-- Candidate:
-  `D:\opencode2-zh-CN-nightly-windows-x64\opencode2-zh-CN-1.18.4-windows-x64-20260815-063640.exe`
-- Length: `206949376` bytes
-- SHA-256:
-  `704E0CC6CBC09169D35C59676F094B31468D68F69372A735FD4534578CC8B4A0`
-- Embedded WebUI: `true`
-- Baseline target: `false`
-- Service smoke: `passed`
-
-This candidate has not replaced the installed or currently running binary.
-Release activation remains a separate user-authorized operation.
-
-## V1 Database Rehearsal Evidence
-
-The copy-only V1-to-V2 rehearsal passed against a production database snapshot.
-The machine-local artifact timestamp is
-`2026-08-15T00:35:09.7130249+08:00`; this is an artifact identifier rather than
-the project plan date.
-
-- Migration rehearsal candidate:
-  `D:\opencode2-zh-CN-nightly-windows-x64\opencode2-zh-CN-1.18.4-windows-x64-20260815-002523.exe`
-- Candidate SHA-256:
-  `0D7C8C9421C1E90013FB23DB93E51FA96F49F0791549509EBE63C3DF185D5761`
-- Rehearsal:
-  `D:\opencode2-migration-rehearsal\v1-to-v2-20260815-002821`
-- Sessions compared: `1732`
-- Migration warnings, projection mismatches, missing sessions, extra sessions,
-  and foreign-key violations: `0`
-- SQLite quick check and integrity check: `ok`
-- Migration state: `completed`
-
-The successful working database is a verified rehearsal snapshot. It must not
-be copied over the active database after OpenCode has been reopened, because
-the active V1 database may contain newer messages. Production activation still
-requires a fresh stopped-process migration from the latest source database.
-
-See `specs/v2/custom-port-plan.md` for the port matrix and release gates once
-the protocol and database inventories are finalized.
-
-## Upstream Synchronization
-
-- Product preservation contract:
-  `specs/v2/upstream-sync-preservation.md`
-- Executable synchronization procedure:
-  `specs/v2/upstream-sync-runbook.md`
-- Completed synchronization records:
-  `specs/v2/upstream-sync-records/`
+Retired migration behavior, private operational evidence, build sidecars,
+machine diagnostics, and local audit data are not public product features.

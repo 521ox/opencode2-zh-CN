@@ -26,6 +26,7 @@ import {
   webSearchProviderLabel,
 } from "../util/tool-display"
 import { formatPath } from "../util/path-format"
+import { isRecord } from "../util/record"
 import type { Translator } from "../i18n"
 import type { RunEntryBody, StreamCommit, ToolSnapshot } from "./types"
 
@@ -140,11 +141,7 @@ type ToolRegistry = Record<ToolName, ToolRule>
 type AnyToolRule = ToolRule
 
 function dict(v: unknown): ToolDict {
-  if (!v || typeof v !== "object" || Array.isArray(v)) {
-    return {}
-  }
-
-  return { ...v }
+  return isRecord(v) ? { ...v } : {}
 }
 
 function props(frame: ToolFrame, t: Translator): ToolProps {
@@ -804,7 +801,7 @@ function scrollTaskFinal(p: ToolProps): string {
   const kind = Locale.titlecase(p.input.agent || "general")
   const row = p.input.description
   if (!row) {
-      return `# ${p.t("mini.tool.subagent", { agent: kind })}`
+    return `# ${p.t("mini.tool.subagent", { agent: kind })}`
   }
 
   return `# ${p.t("mini.tool.subagent", { agent: kind })}\n${row}`
@@ -1266,7 +1263,7 @@ function structuredFallback(value: ToolDict, t: Translator): RunEntryBody | unde
   if (Object.keys(value).length === 0) return
   const content = JSON.stringify(value, null, 2)
   if (!content) return
-  const suffix = `\n... ${t("mini.tool.truncated")}`
+  const suffix = `\n… ${t("mini.tool.truncated")}`
   return {
     type: "code",
     content:

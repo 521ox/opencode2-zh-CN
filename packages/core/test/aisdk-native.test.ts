@@ -2,9 +2,113 @@ import { describe, expect, test } from "bun:test"
 import { AISDKNative } from "@opencode-ai/core/aisdk-native"
 
 const map = (packageName: string, settings: Readonly<Record<string, unknown>>, modelID = "test-model") =>
-  AISDKNative.map({ packageName, settings, modelID })
+  AISDKNative.map({ packageName, settings, modelID, providerID: "test-provider" })
 
 describe("AISDKNative", () => {
+  test("maps OpenAI-family packages and request options to native providers", () => {
+    expect(
+      map("@ai-sdk/openai", {
+        apiKey: "secret",
+        baseURL: "https://api.meta.ai/v1",
+        organization: "org",
+        reasoningEffort: "xhigh",
+        reasoningSummary: "auto",
+        include: ["reasoning.encrypted_content"],
+        truncation: "auto",
+      }),
+    ).toEqual({
+      package: "@opencode-ai/ai/providers/openai",
+      settings: {
+        apiKey: "secret",
+        baseURL: "https://api.meta.ai/v1",
+        providerOptions: {
+          reasoningEffort: "xhigh",
+          reasoningSummary: "auto",
+          include: ["reasoning.encrypted_content"],
+          truncation: "auto",
+        },
+        organization: "org",
+      },
+    })
+    expect(map("@ai-sdk/openai-compatible", { baseURL: "https://example.com/v1", reasoningEffort: "high" })).toEqual({
+      package: "@opencode-ai/ai/providers/openai-compatible",
+      settings: {
+        baseURL: "https://example.com/v1",
+        provider: "test-provider",
+        providerOptions: { reasoningEffort: "high" },
+      },
+    })
+  })
+
+  test("maps Anthropic settings and request options to the native provider", () => {
+    expect(
+      map("@ai-sdk/anthropic", {
+        authToken: "token",
+        baseURL: "https://anthropic.example/v1",
+        thinking: { type: "adaptive", display: "summarized" },
+        effort: "high",
+      }),
+    ).toEqual({
+      package: "@opencode-ai/ai/providers/anthropic",
+      settings: {
+        authToken: "token",
+        baseURL: "https://anthropic.example/v1",
+        providerOptions: {
+          thinking: { type: "adaptive", display: "summarized" },
+          effort: "high",
+        },
+      },
+    })
+  })
+
+  test("maps Cerebras, DeepInfra, Groq, and Together AI settings, headers, and reasoning options to native providers", () => {
+    for (const name of ["cerebras", "deepinfra", "groq", "togetherai"]) {
+      expect(
+        map(`@ai-sdk/${name}`, {
+          apiKey: "secret",
+          baseURL: `https://${name}.example/v1`,
+          headers: { "x-provider": name },
+          name: "custom-provider",
+          reasoningEffort: "high",
+          customOption: { enabled: true },
+        }),
+      ).toEqual({
+        package: `@opencode-ai/ai/providers/${name}`,
+        settings: {
+          apiKey: "secret",
+          baseURL: `https://${name}.example/v1`,
+          providerOptions: { reasoningEffort: "high", customOption: { enabled: true } },
+        },
+        headers: { "x-provider": name },
+      })
+      expect(map(`@ai-sdk/${name}`, {})).toEqual({
+        package: `@opencode-ai/ai/providers/${name}`,
+        settings: {},
+      })
+    }
+  })
+
+  test("maps Google Vertex settings to the native provider", () => {
+    expect(
+      map("@ai-sdk/google-vertex", {
+        project: "project",
+        location: "us-central1",
+        labels: { environment: "test" },
+        thinkingConfig: { thinkingLevel: "high" },
+      }),
+    ).toEqual({
+      package: "@opencode-ai/ai/providers/google-vertex",
+      settings: {
+        project: "project",
+        location: "us-central1",
+        providerOptions: {
+          labels: { environment: "test" },
+          thinkingConfig: { thinkingLevel: "high" },
+        },
+      },
+    })
+  })
+
   test("maps both models.dev Bedrock packages to native providers", () => {
     expect(map("@ai-sdk/amazon-bedrock", { region: "us-east-1" })).toEqual({
       package: "@opencode-ai/ai/providers/amazon-bedrock",
@@ -33,7 +137,7 @@ describe("AISDKNative", () => {
         apiVersion: "2025-01-01-preview",
         queryParams: { feature: "enabled" },
         useDeploymentBasedUrls: true,
-        providerOptions: { openai: { reasoningEffort: "high" } },
+        providerOptions: { reasoningEffort: "high" },
       },
     })
     expect(map("@ai-sdk/azure", { ...settings, useCompletionUrls: true }, "custom-deployment")?.package).toBe(
@@ -111,18 +215,18 @@ describe("AISDKNative", () => {
         baseURL: "https://mantle.test/v1",
         region: "us-west-2",
         providerOptions: {
-          openai: {
-            reasoningEffort: "high",
-            reasoningSummary: "auto",
-            include: ["reasoning.encrypted_content"],
-          },
+          reasoningEffort: "high",
+          reasoningSummary: "auto",
+          include: ["reasoning.encrypted_content"],
         },
       },
       headers: { "x-test": "value" },
     })
-    expect(map("@ai-sdk/amazon-bedrock/mantle", settings, "openai.gpt-oss-safeguard-20b")?.package).toBe(
-      "@opencode-ai/ai/providers/amazon-bedrock/mantle/chat",
-    )
+    for (const modelID of ["openai.gpt-oss-safeguard-20b", "openai.gpt-oss-safeguard-120b"]) {
+      expect(map("@ai-sdk/amazon-bedrock/mantle", settings, modelID)?.package).toBe(
+        "@opencode-ai/ai/providers/amazon-bedrock/mantle/chat",
+      )
+    }
     expect(
       map(
         "@ai-sdk/amazon-bedrock/mantle",
@@ -164,7 +268,7 @@ describe("AISDKNative", () => {
           region: "eu-west-1",
         },
         baseURL: "https://bedrock-mantle.eu-west-1.api.aws/v1",
-        providerOptions: { openai: { store: false } },
+        providerOptions: { store: false },
       },
     })
   })
@@ -196,12 +300,10 @@ describe("AISDKNative", () => {
       package: "@opencode-ai/ai/providers/openrouter",
       settings: {
         providerOptions: {
-          openrouter: {
-            models: ["anthropic/claude-sonnet-4.6"],
-            provider: { only: ["anthropic"], require_parameters: true },
-            reasoning: { effort: "high" },
-            future_option: { enabled: true },
-          },
+          models: ["anthropic/claude-sonnet-4.6"],
+          provider: { only: ["anthropic"], require_parameters: true },
+          reasoning: { effort: "high" },
+          future_option: { enabled: true },
         },
       },
       headers: {
@@ -230,15 +332,13 @@ describe("AISDKNative", () => {
       package: "@opencode-ai/ai/providers/google",
       settings: {
         providerOptions: {
-          gemini: {
-            cachedContent: "cachedContents/example",
-            safetySettings: [{ category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" }],
-            serviceTier: "flex",
-            thinkingConfig: {
-              thinkingBudget: 0,
-              includeThoughts: false,
-              thinkingLevel: "high",
-            },
+          cachedContent: "cachedContents/example",
+          safetySettings: [{ category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" }],
+          serviceTier: "flex",
+          thinkingConfig: {
+            thinkingBudget: 0,
+            includeThoughts: false,
+            thinkingLevel: "high",
           },
         },
       },
@@ -248,7 +348,7 @@ describe("AISDKNative", () => {
   test("maps Google thinking settings independently", () => {
     for (const thinkingConfig of [{ thinkingBudget: -1 }, { includeThoughts: true }, { thinkingLevel: "medium" }]) {
       expect(map("@ai-sdk/google", { thinkingConfig })).toMatchObject({
-        settings: { providerOptions: { gemini: { thinkingConfig } } },
+        settings: { providerOptions: { thinkingConfig } },
       })
     }
   })
@@ -263,13 +363,38 @@ describe("AISDKNative", () => {
     ).toMatchObject({
       settings: {
         providerOptions: {
-          gemini: {
-            cachedContent: "cachedContents/example",
-            safetySettings: [{ category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" }],
-            serviceTier: "future-tier",
-          },
+          cachedContent: "cachedContents/example",
+          safetySettings: [{ category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" }],
+          serviceTier: "future-tier",
         },
       },
+    })
+  })
+
+  test("maps Vertex Gemini settings to the native Gemini route", () => {
+    expect(
+      map("@ai-sdk/google-vertex", {
+        accessToken: "vertex-token",
+        baseURL: "https://vertex.example/v1",
+        headers: { "x-test": "value" },
+        labels: { component: "opencode", environment: "test" },
+        location: "eu",
+        project: "vertex-project",
+        thinkingConfig: { thinkingLevel: "high" },
+      }),
+    ).toEqual({
+      package: "@opencode-ai/ai/providers/google-vertex",
+      settings: {
+        accessToken: "vertex-token",
+        baseURL: "https://vertex.example/v1",
+        location: "eu",
+        project: "vertex-project",
+        providerOptions: {
+          labels: { component: "opencode", environment: "test" },
+          thinkingConfig: { thinkingLevel: "high" },
+        },
+      },
+      headers: { "x-test": "value" },
     })
   })
 
@@ -292,10 +417,8 @@ describe("AISDKNative", () => {
         location: "eu",
         project: "vertex-project",
         providerOptions: {
-          anthropic: {
-            thinking: { type: "adaptive", display: "summarized" },
-            effort: "high",
-          },
+          thinking: { type: "adaptive", display: "summarized" },
+          effort: "high",
         },
       },
       headers: { "x-test": "value" },
@@ -316,10 +439,8 @@ describe("AISDKNative", () => {
         apiKey: "secret",
         baseURL: "https://xai.example/v1",
         providerOptions: {
-          xai: {
-            reasoningEffort: "custom",
-            store: true,
-          },
+          reasoningEffort: "custom",
+          store: true,
         },
       },
     })

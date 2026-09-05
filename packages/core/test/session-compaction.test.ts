@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test"
-import { LLMClient, LLMEvent, LanguageModel, type LLMRequest } from "@opencode-ai/ai"
-import { OpenAIChat, OpenAICompatibleResponses, OpenAIResponses } from "@opencode-ai/ai/protocols"
-import type { AnyRoute } from "@opencode-ai/ai/route"
-import { Config } from "@opencode-ai/core/config"
+import { LLM, LLMClient, LLMEvent, LanguageModel, SystemPart, ToolDefinition, type LLMRequest } from "@opencode-ai/ai"
+import { OpenAIChat } from "@opencode-ai/ai/protocols"
+import * as OpenAIResponses from "@opencode-ai/ai/protocols/openai-responses"
+import { OpenAICompatibleResponses, XAI } from "@opencode-ai/ai/providers"
 import { Database } from "@opencode-ai/core/database/database"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { llmClient } from "@opencode-ai/core/effect/app-node-platform"
@@ -12,6 +12,7 @@ import { EventTable } from "@opencode-ai/core/event/sql"
 import { SessionCompaction } from "@opencode-ai/core/session/compaction"
 import { SessionEvent } from "@opencode-ai/core/session/event"
 import { SessionMessage } from "@opencode-ai/core/session/message"
+import { SessionModelRequest } from "@opencode-ai/core/session/model-request"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { SessionRunnerModel } from "@opencode-ai/core/session/runner/model"
 import { SessionTable } from "@opencode-ai/core/session/sql"
@@ -20,10 +21,13 @@ import { Session } from "@opencode-ai/core/session"
 import { Project } from "@opencode-ai/core/project"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { App } from "@opencode-ai/core/app"
+import { Config } from "@opencode-ai/core/config"
 import { Agent } from "@opencode-ai/core/agent"
+import { PluginHooks } from "@opencode-ai/core/plugin/hooks"
 import { Location } from "@opencode-ai/core/location"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { Money } from "@opencode-ai/schema/money"
+import { Skill } from "@opencode-ai/schema/skill"
 import { DateTime, Effect, Fiber, Layer, Schema, Stream } from "effect"
 import { asc, eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
@@ -32,7 +36,7 @@ let requests: LLMRequest[] = []
 const model = LanguageModel.make({
   id: "summary-model",
   provider: "test",
-  route: OpenAIChat.route.with({ limits: { context: 10_000, output: 1_000 } }),
+  route: OpenAIChat.route,
 })
 const cost = [
   {
@@ -68,35 +72,72 @@ const client = Layer.mock(LLMClient.Service)({
   },
   generate: () => Effect.die("unused"),
 })
-const config = Layer.mock(Config.Service)({ entries: () => Effect.succeed([]) })
-const models = Layer.mock(SessionRunnerModel.Service)({
-  resolve: () =>
-    Effect.succeed(
-      SessionRunnerModel.resolved(model, {
-        capabilities: { tools: true, input: ["text", "image"], output: ["text"] },
-        cost,
-      }),
-    ),
+const resolved = SessionRunnerModel.resolved(model, {
+  capabilities: { tools: true, input: ["text", "image"], output: ["text"] },
+  cost,
+  limit: { context: 200_000, output: 32_000 },
 })
 const it = testEffect(
   AppNodeBuilder.build(
-    LayerNode.group([Database.node, Bus.node, SessionProjector.node, SessionStore.node, SessionCompaction.node]),
+    LayerNode.group([
+      Database.node,
+      Bus.node,
+      SessionProjector.node,
+      SessionStore.node,
+      PluginHooks.node,
+      SessionCompaction.node,
+      SessionModelRequest.node,
+      Config.node,
+    ]),
     [
       [Bus.node, Bus.configured({ persist: true })],
+      [Config.node, Config.testLayer()],
       [llmClient, client],
-      [Config.node, config],
-      [SessionRunnerModel.node, models],
     ],
   ),
 )
 
 test("compaction prompt preserves detailed work state and relevant files", () => {
-  const prompt = SessionCompaction.buildPrompt({ context: ["conversation history"] })
+  const prompt = SessionCompaction.buildPrompt(false)
 
   expect(prompt).toContain("## Work State\n### Completed")
   expect(prompt).toContain("### Active")
   expect(prompt).toContain("### Blocked")
   expect(prompt).toContain("## Relevant Files")
+})
+
+test("waits for five percent remote compaction grace", () => {
+  const tokens = (input: number) => ({ input, output: 0, reasoning: 0, cache: { read: 0, write: 0 } })
+
+  expect(
+    SessionCompaction.remoteFallbackRequired({ threshold: 304_000, tokens: tokens(319_200), checkpointed: false }),
+  ).toBe(false)
+  expect(
+    SessionCompaction.remoteFallbackRequired({ threshold: 304_000, tokens: tokens(319_201), checkpointed: false }),
+  ).toBe(true)
+  expect(
+    SessionCompaction.remoteFallbackRequired({ threshold: 304_000, tokens: tokens(400_000), checkpointed: true }),
+  ).toBe(false)
+})
+
+test("selects explicit compaction only from the route-owned operation", () => {
+  const xai = XAI.configure()
+  const compatible = OpenAICompatibleResponses.configure({
+    provider: "deepseek",
+    baseURL: "https://compatible.invalid/v1",
+  })
+
+  expect(LLMClient.canCompact(LLM.request({ model: xai.responses("grok-test"), prompt: "test" }))).toBeTrue()
+  expect(LLMClient.canCompact(LLM.request({ model: xai.chat("grok-test"), prompt: "test" }))).toBeFalse()
+  expect(LLMClient.canCompact(LLM.request({ model: compatible.model("deepseek-test"), prompt: "test" }))).toBeFalse()
+  expect(
+    LLMClient.canCompact(
+      LLM.request({
+        model: LanguageModel.make({ id: "gpt-test", provider: "openai", route: OpenAIResponses.route }),
+        prompt: "test",
+      }),
+    ),
+  ).toBeFalse()
 })
 
 test("compaction describes tool media without embedding base64", () => {
@@ -115,51 +156,43 @@ test("compaction describes tool media without embedding base64", () => {
   expect(serialized).not.toContain(base64)
 })
 
+test("compaction truncation does not split surrogate pairs", () => {
+  const prefix = "a".repeat(1_999)
+
+  expect(SessionCompaction.truncateToolOutput(`${prefix}😀suffix`)).toBe(`${prefix}😀\n[truncated]`)
+  expect(SessionCompaction.truncateToolOutput("😀".repeat(2_000))).toBe("😀".repeat(2_000))
+})
+
 test("compaction prompt requires the checkpoint headings in order", () => {
-  const prompt = SessionCompaction.buildPrompt({ context: ["Conversation history"] })
+  const prompt = SessionCompaction.buildPrompt(false)
   expect(prompt.match(/^#{2,3} .+$/gm)).toEqual([
     "## Objective",
-    "## Important Details",
+    "## Requirements",
+    "## Decisions",
     "## Work State",
     "### Completed",
     "### Active",
     "### Blocked",
     "## Next Move",
     "## Relevant Files",
+    "## Additional Context",
   ])
   expect(prompt).toContain("one or two brief sentences")
-  expect(prompt).toContain("constraints/preferences, decisions and why")
-  expect(prompt).toContain("immediate concrete action")
-  expect(prompt).toContain("next action if known")
-  expect(prompt).toContain("Keep every section, even when empty.")
+  expect(prompt).toContain("constraints, preferences, requirements")
+  expect(prompt).toContain("ordered list of next actions")
+  expect(prompt).toContain("consequential workflow state")
 })
 
-test("waits for five percent remote compaction grace", () => {
-  const tokens = (input: number) => ({
-    input,
-    output: 0,
-    reasoning: 0,
-    cache: { read: 0, write: 0 },
-  })
+test("compaction points an existing summary to the following history", () => {
+  const prompt = SessionCompaction.buildPrompt(true)
 
-  expect(
-    SessionCompaction.remoteFallbackRequired({ threshold: 304_000, tokens: tokens(319_200), checkpointed: false }),
-  ).toBe(false)
-  expect(
-    SessionCompaction.remoteFallbackRequired({ threshold: 304_000, tokens: tokens(319_201), checkpointed: false }),
-  ).toBe(true)
-  expect(
-    SessionCompaction.remoteFallbackRequired({ threshold: 304_000, tokens: tokens(400_000), checkpointed: true }),
-  ).toBe(false)
-  expect(
-    SessionCompaction.remoteFallbackRequired({ threshold: 333_333, tokens: tokens(349_999), checkpointed: false }),
-  ).toBe(false)
-  expect(
-    SessionCompaction.remoteFallbackRequired({ threshold: 333_333, tokens: tokens(350_000), checkpointed: false }),
-  ).toBe(true)
+  expect(prompt.split("\n", 1)[0]).toBe(
+    "Update the existing checkpoint in the conversation above into one consolidated summary.",
+  )
+  expect(prompt).toContain("Newer history always takes precedence")
 })
 
-it.effect("auto compaction reserves a buffer below the prompt ceiling", () =>
+it.effect("auto compaction estimates current content against the buffered prompt ceiling", () =>
   Effect.gen(function* () {
     const compaction = yield* SessionCompaction.Service
     const session = Session.Info.make({
@@ -170,27 +203,45 @@ it.effect("auto compaction reserves a buffer below the prompt ceiling", () =>
       time: { created: DateTime.makeUnsafe(0), updated: DateTime.makeUnsafe(0) },
       location: Location.Ref.make({ directory: AbsolutePath.make("/tmp") }),
     })
-    const input = (tokens: number, limits: { context: number; input?: number; output: number }) => ({
-      session,
-      model: LanguageModel.make({
-        id: "test-model",
-        provider: "test-provider",
-        route: OpenAIChat.route.with({ limits }),
-      }),
-      providerPackage: "@opencode-ai/ai/providers/test",
-      cost: [],
-      messages: [
+    const input = (tokens: number, limit: { context: number; input?: number; output: number }) => {
+      const resolved = SessionRunnerModel.resolved(model, {
+        capabilities: { tools: true, input: ["text", "image", "pdf"], output: ["text"] },
+        cost: [],
+        limit,
+      })
+      const messages = [
         Schema.decodeUnknownSync(SessionMessage.Assistant)({
           id: SessionMessage.ID.make("msg_assistant"),
           type: "assistant",
           agent: Agent.defaultID,
           model: { id: "test-model", providerID: "test-provider" },
-          content: [],
+          content: [{ type: "text", text: "Done" }],
           tokens: { input: tokens, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
           time: { created: 0, completed: 0 },
         }),
-      ],
-    })
+      ]
+      return {
+        session,
+        resolved,
+        messages,
+        context: {
+          session,
+          model: resolved,
+          messages,
+          agent: {
+            id: Agent.defaultID,
+            info: { ...Agent.Info.default(Agent.defaultID), system: "You are a helpful assistant." },
+          },
+          initial: "Project instructions.",
+          tools: {
+            definitions: [
+              ToolDefinition.make({ name: "read", description: "Read files", inputSchema: { type: "object" } }),
+            ],
+            execute: () => Effect.die("unused"),
+          },
+        },
+      }
+    }
 
     const inputLimited = { context: 400_000, input: 272_000, output: 128_000 }
     expect(compaction.required(input(251_999, inputLimited))).toBe(false)
@@ -200,63 +251,157 @@ it.effect("auto compaction reserves a buffer below the prompt ceiling", () =>
     expect(compaction.required(input(79_999, contextLimited))).toBe(false)
     expect(compaction.required(input(80_000, contextLimited))).toBe(true)
 
+    const xai = XAI.configure().responses("grok-ceiling")
+    const explicit = (tokens: number) => {
+      const selected = input(tokens, contextLimited)
+      return {
+        ...selected,
+        resolved: { ...selected.resolved, model: xai },
+        request: LLM.request({ model: xai, prompt: "pending turn" }),
+      }
+    }
+    expect(compaction.required(explicit(79_999))).toBe(false)
+    expect(compaction.required(explicit(80_000))).toBe(true)
+
     const outputLimited = { context: 100_000, output: 30_000 }
     expect(compaction.required(input(69_999, outputLimited))).toBe(false)
     expect(compaction.required(input(70_000, outputLimited))).toBe(true)
-  }),
-)
 
-it.effect("remote compaction requires the native OpenAI Responses route owner", () =>
-  Effect.gen(function* () {
-    const compaction = yield* SessionCompaction.Service
-    const session = Session.Info.make({
-      id: Session.ID.make("ses_remote_compaction_owner"),
-      projectID: Project.ID.global,
-      cost: Money.USD.zero,
-      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-      time: { created: DateTime.makeUnsafe(0), updated: DateTime.makeUnsafe(0) },
-      location: Location.Ref.make({ directory: AbsolutePath.make("/tmp") }),
+    const assistant = input(79_000, contextLimited).messages[0]
+    const tool = SessionMessage.AssistantTool.make({
+      type: "tool",
+      id: "call_read",
+      name: "read",
+      state: { status: "completed", input: {}, content: [{ type: "text", text: "x".repeat(4_000) }] },
+      time: { created: DateTime.makeUnsafe(0) },
     })
-    const limits = { context: 400_000, input: 380_000, output: 128_000 }
-    const message = Schema.decodeUnknownSync(SessionMessage.Assistant)({
-      id: SessionMessage.ID.make("msg_remote_compaction_owner"),
-      type: "assistant",
-      agent: Agent.defaultID,
-      model: { id: "gpt-5", providerID: "openai" },
-      content: [],
-      tokens: { input: 360_000, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    const grown = { ...input(79_000, contextLimited), messages: [{ ...assistant, content: [tool] }] }
+    expect(SessionCompaction.estimateTokens(grown)).toBe(80_000)
+    expect(compaction.required(grown)).toBe(true)
+
+    const interrupted = { ...assistant, id: SessionMessage.ID.create(), tokens: undefined }
+    expect(SessionCompaction.estimateTokens({ ...grown, messages: [...grown.messages, interrupted] })).toBe(80_001)
+    // Without provider usage, include 20 tokens for the system prompt, instructions, and tool definition.
+    expect(SessionCompaction.estimateTokens({ ...grown, messages: [interrupted] })).toBe(21)
+    expect(
+      SessionCompaction.estimateTokens({
+        ...grown,
+        messages: [{ ...interrupted, tokens: input(0, contextLimited).messages[0].tokens }],
+      }),
+    ).toBe(21)
+
+    const media = [
+      { type: "file", mime: "image/png", uri: `data:image/png;base64,${"a".repeat(100_000)}` },
+      { type: "file", mime: "application/pdf", uri: `data:application/pdf;base64,${"a".repeat(100_000)}` },
+    ] as const
+    const messages = [
+      { ...assistant, content: [{ ...tool, state: { status: "completed" as const, input: {}, content: media } }] },
+    ]
+    expect(SessionCompaction.estimateTokens({ ...grown, messages })).toBe(82_500)
+    const user = Schema.decodeUnknownSync(SessionMessage.User)({
+      id: SessionMessage.ID.create(),
+      type: "user",
+      text: "",
+      files: media.map((file) => ({ mime: file.mime, data: "a".repeat(100_000), source: { type: "inline" } })),
+      time: { created: 0 },
+    })
+    expect(SessionCompaction.estimateTokens({ ...grown, messages: [...messages, user] })).toBe(86_000)
+    for (const [modalities, tokens, fallback] of [
+      [["text", "image"], 82_040, 1_520],
+      [["text", "pdf"], 83_042, 2_021],
+      [["text"], 79_082, 41],
+    ] as const) {
+      const selected = {
+        ...grown,
+        resolved: { ...grown.resolved, capabilities: { ...grown.resolved.capabilities, input: modalities } },
+      }
+      expect(SessionCompaction.estimateTokens({ ...selected, messages: [...messages, user] })).toBe(tokens)
+      expect(SessionCompaction.estimateTokens({ ...selected, messages: [user] })).toBe(fallback + 20)
+    }
+
+    const checkpoint = Schema.decodeUnknownSync(SessionMessage.CompactionCompleted)({
+      id: SessionMessage.ID.create(),
+      type: "compaction",
+      status: "completed",
+      reason: "auto",
+      summary: "x".repeat(400_000),
+      recent: "",
       time: { created: 0, completed: 0 },
     })
-    const input = (
-      provider: string,
-      route: AnyRoute = OpenAIResponses.route,
-      providerPackage = "@opencode-ai/ai/providers/openai",
-    ) => ({
-      session,
-      model: LanguageModel.make({
-        id: "gpt-5",
-        provider,
-        route: route.with({ provider, limits, endpoint: { baseURL: "https://api.openai.test/v1" } }),
-      }),
-      providerPackage,
-      cost: [],
-      messages: [message],
-    })
-
-    expect(compaction.remoteThreshold(input("openai"))).toBe(360_000)
-    expect(compaction.required(input("openai"))).toBe(false)
-    expect(compaction.remoteThreshold(input("xai"))).toBeUndefined()
-    const collision = OpenAICompatibleResponses.route.with({ id: "openai-responses", provider: "openai" })
-    expect(compaction.remoteThreshold(input("openai", collision))).toBeUndefined()
-    expect(compaction.required(input("openai", collision))).toBe(true)
-    expect(
-      compaction.remoteThreshold(input("openai", OpenAIResponses.route, "@opencode-ai/ai/providers/custom-openai")),
-    ).toBeUndefined()
-    expect(compaction.required(input("openai", OpenAIResponses.route, "@opencode-ai/ai/providers/custom-openai"))).toBe(
-      true,
-    )
+    expect(compaction.required({ ...grown, messages: [checkpoint] })).toBe(false)
   }),
 )
+
+it.effect("uses remote thresholds only for the native OpenAI Responses route owner", () =>
+  Effect.gen(function* () {
+    const compaction = yield* SessionCompaction.Service
+    const messages = [
+      Schema.decodeUnknownSync(SessionMessage.Assistant)({
+        id: SessionMessage.ID.make("msg_remote_threshold"),
+        type: "assistant",
+        agent: Agent.defaultID,
+        model: { id: "gpt-5", providerID: "openai" },
+        content: [],
+        tokens: { input: 8_000, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        time: { created: 0, completed: 0 },
+      }),
+    ]
+    const native = SessionRunnerModel.resolved(
+      LanguageModel.make({ id: "gpt-5", provider: "mycodex", route: OpenAIResponses.route }),
+      {
+        capabilities: { tools: true, input: ["text"], output: ["text"] },
+        cost: [],
+        limit: { context: 40_000, output: 2_000 },
+      },
+    )
+    const collision = SessionRunnerModel.resolved(
+      LanguageModel.make({
+        id: "gpt-5",
+        provider: "openai",
+        route: OpenAIChat.route.with({ id: "openai-responses", provider: "openai" }),
+      }),
+      {
+        capabilities: { tools: true, input: ["text"], output: ["text"] },
+        cost: [],
+        limit: { context: 40_000, output: 2_000 },
+      },
+    )
+
+    expect(compaction.remoteThreshold({ messages, resolved: native })).toBe(20_000)
+    expect(compaction.required({ messages, resolved: native })).toBe(false)
+    expect(compaction.remoteThreshold({ messages, resolved: collision })).toBeUndefined()
+    expect(compaction.required({ messages, resolved: collision })).toBe(false)
+  }),
+)
+
+/** Seeds the global project plus one session row, returning the projected session. */
+const insertSession = (id: Session.ID, overrides?: Partial<typeof SessionTable.$inferInsert>) =>
+  Effect.gen(function* () {
+    const db = (yield* Database.Service).db
+    yield* db
+      .insert(ProjectTable)
+      .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+      .onConflictDoNothing()
+      .run()
+      .pipe(Effect.orDie)
+    yield* db
+      .insert(SessionTable)
+      .values({
+        id,
+        project_id: Project.ID.global,
+        slug: id,
+        directory: "/project",
+        title: id,
+        version: "test",
+        ...overrides,
+      })
+      .run()
+      .pipe(Effect.orDie)
+    const store = yield* SessionStore.Service
+    return yield* store
+      .get(id)
+      .pipe(Effect.flatMap((session) => (session ? Effect.succeed(session) : Effect.die(`session missing: ${id}`))))
+  })
 
 it.effect("manual compaction summarizes short context instead of no-op", () =>
   Effect.gen(function* () {
@@ -271,35 +416,17 @@ it.effect("manual compaction summarizes short context instead of no-op", () =>
       id: SessionMessage.ID.create(),
       type: "user" as const,
       text: "Manual compaction should include this short conversation.",
+      skills: [
+        {
+          id: Skill.ID.make("effect"),
+          name: Skill.Name.make("Effect"),
+          text: "Use Effect services and generators.",
+        },
+      ],
       time: { created: DateTime.makeUnsafe(0) },
     }
-    yield* db
-      .insert(ProjectTable)
-      .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
-      .onConflictDoNothing()
-      .run()
-      .pipe(Effect.orDie)
-    yield* db
-      .insert(SessionTable)
-      .values({
-        id: sessionID,
-        project_id: Project.ID.global,
-        parent_id: parentID,
-        slug: "manual-compaction",
-        directory: "/project",
-        title: "Manual compaction",
-        version: "test",
-      })
-      .run()
-      .pipe(Effect.orDie)
-
-    const session = yield* store
-      .get(sessionID)
-      .pipe(
-        Effect.flatMap((session) =>
-          session ? Effect.succeed(session) : Effect.die("manual compaction test session missing"),
-        ),
-      )
+    const session = yield* insertSession(sessionID, { parent_id: parentID })
+    const modelRequests = yield* SessionModelRequest.Service
 
     const delta = yield* bus
       .subscribe(SessionEvent.Compaction.Delta)
@@ -308,6 +435,8 @@ it.effect("manual compaction summarizes short context instead of no-op", () =>
     expect(
       yield* compaction.compactManual({
         session,
+        resolveModel: () => Effect.succeed(resolved),
+        prepare: modelRequests.prepare,
         messages: [userMessage],
         inputID: SessionMessage.ID.make("msg_manual_compaction"),
       }),
@@ -327,6 +456,7 @@ it.effect("manual compaction summarizes short context instead of no-op", () =>
     })
     expect(requests[0]?.generation).toBeUndefined()
     expect(JSON.stringify(requests[0]?.messages)).toContain("Manual compaction should include this short conversation.")
+    expect(JSON.stringify(requests[0]?.messages)).toContain("Use Effect services and generators.")
     expect(yield* store.context(sessionID)).toMatchObject([
       { type: "compaction", reason: "manual", summary: "manual summary", recent: "" },
     ])
@@ -346,6 +476,102 @@ it.effect("manual compaction summarizes short context instead of no-op", () =>
       { type: Bus.versionedType(SessionEvent.Compaction.Started.type, 1) },
       { type: Bus.versionedType(SessionEvent.UsageRecorded.type, 1) },
       { type: Bus.versionedType(SessionEvent.Compaction.Ended.type, 1) },
+    ])
+  }),
+)
+
+it.effect("forked session compaction reuses the fork root prompt cache key", () =>
+  Effect.gen(function* () {
+    requests = []
+    const compaction = yield* SessionCompaction.Service
+    const sessionID = Session.ID.make("ses_fork_compaction")
+    const rootID = Session.ID.make("ses_fork_compaction_root")
+    const session = yield* insertSession(sessionID, {
+      fork_session_id: rootID,
+      fork_boundary: { type: "before", messageID: SessionMessage.ID.create() },
+    })
+    const modelRequests = yield* SessionModelRequest.Service
+    expect(
+      yield* compaction.compactManual({
+        session,
+        resolveModel: () => Effect.succeed(resolved),
+        prepare: modelRequests.prepare,
+        messages: [
+          {
+            id: SessionMessage.ID.create(),
+            type: "user",
+            text: "Summarize the forked conversation.",
+            time: { created: DateTime.makeUnsafe(0) },
+          },
+        ],
+        inputID: SessionMessage.ID.make("msg_fork_compaction"),
+      }),
+    ).toEqual({ status: "completed" })
+
+    expect(requests).toHaveLength(1)
+    expect(requests[0]?.promptCacheKey).toBe(rootID)
+  }),
+)
+
+it.effect("keeps session context hooks away from compaction requests", () =>
+  Effect.gen(function* () {
+    requests = []
+    const compaction = yield* SessionCompaction.Service
+    // Compaction reuses the selected Session context without invoking normal conversation hooks again.
+    const hooks = yield* PluginHooks.Service
+    let contextHooks = 0
+    yield* hooks.register("session", "context", (event) =>
+      Effect.sync(() => {
+        contextHooks++
+        event.system.push(SystemPart.make("Injected conversation context"))
+      }),
+    )
+    const session = yield* insertSession(Session.ID.make("ses_hook_compaction"))
+    const modelRequests = yield* SessionModelRequest.Service
+    expect(
+      yield* compaction.compactManual({
+        session,
+        resolveContext: () =>
+          Effect.succeed({
+            session,
+            agent: {
+              id: Agent.defaultID,
+              info: { ...Agent.Info.default(Agent.defaultID), system: "Selected agent instructions" },
+            },
+            model: resolved,
+            initial: "Selected Session instructions",
+            messages: [
+              {
+                id: SessionMessage.ID.create(),
+                type: "user",
+                text: "Summarize this conversation.",
+                time: { created: DateTime.makeUnsafe(0) },
+              },
+            ],
+            tools: {
+              definitions: [],
+              execute: () => Effect.die("unused"),
+            },
+            instructionUpdate: "",
+          }),
+        prepare: modelRequests.prepare,
+        messages: [
+          {
+            id: SessionMessage.ID.create(),
+            type: "user",
+            text: "Summarize this conversation.",
+            time: { created: DateTime.makeUnsafe(0) },
+          },
+        ],
+        inputID: SessionMessage.ID.make("msg_hook_compaction"),
+      }),
+    ).toEqual({ status: "completed" })
+
+    expect(requests).toHaveLength(1)
+    expect(contextHooks).toBe(0)
+    expect(requests[0]?.system.map((part) => part.text)).toEqual([
+      "Selected agent instructions",
+      "Selected Session instructions",
     ])
   }),
 )

@@ -1,11 +1,43 @@
 export * as Job from "./job.js"
 
-import { Cause, Clock, Context, Deferred, Effect, Exit, Layer, Scope, SynchronizedRef } from "effect"
+import { Array, Cause, Clock, Context, Deferred, Effect, Exit, Layer, Schema, Scope, SynchronizedRef } from "effect"
 import { makeGlobalNode } from "@opencode-ai/util/effect/app-node"
 import { Identifier } from "./id/id.js"
+import { KV } from "./kv.js"
+import { SessionMessage } from "./session/message.js"
 import { SessionSchema } from "./session/schema.js"
 
-export type Status = "running" | "completed" | "error" | "cancelled"
+const Background = Schema.Struct({
+  id: Schema.String,
+  notificationID: SessionMessage.ID,
+  recovery: Schema.Union([
+    Schema.Struct({
+      kind: Schema.Literal("shell"),
+      sessionID: SessionSchema.ID,
+      shellID: Schema.String,
+      command: Schema.String,
+    }),
+    Schema.Struct({
+      kind: Schema.Literal("subagent"),
+      parentSessionID: SessionSchema.ID,
+      childSessionID: SessionSchema.ID,
+      agent: Schema.String,
+      description: Schema.String,
+      /** Core-private request correlation for prompt-owned subagent recovery. */
+      continuationID: Schema.optionalKey(Schema.String),
+    }),
+  ]),
+  status: Schema.Literals(["running", "completed", "error", "cancelled"]),
+  output: Schema.optionalKey(Schema.String),
+  error: Schema.optionalKey(Schema.String),
+})
+
+export type Background = typeof Background.Type
+export type Recovery = Background["recovery"]
+export type Status = Background["status"]
+
+const decodeBackground = Schema.decodeUnknownResult(Background)
+const backgroundPrefix = "job.background/"
 
 export type Info = {
   id: string
@@ -17,6 +49,7 @@ export type Info = {
   output?: string
   error?: string
   metadata?: Record<string, unknown>
+  notificationID?: SessionMessage.ID
 }
 
 type Active = {
@@ -24,9 +57,10 @@ type Active = {
   done: Deferred.Deferred<Info>
   backgrounded: Deferred.Deferred<Info>
   scope: Scope.Closeable
-  token: object
   blockingSessions: Map<SessionSchema.ID, number>
   isBackgrounded: boolean
+  retainedBytes: number
+  recovery?: Recovery
 }
 
 type State = {
@@ -45,7 +79,13 @@ type BackgroundResult = {
   backgrounded?: Deferred.Deferred<Info>
 }
 
-type StartResult = { info: Info } | { info: Info; scope: Scope.Closeable; token: object }
+type StartResult = { info: Info } | { info: Info; scope: Scope.Closeable }
+
+type GuardedStartMutation =
+  | { type: "running"; info: Info }
+  | { type: "started"; info: Info; scope: Scope.Closeable }
+  | { type: "existing-terminal"; info: Info }
+  | { type: "skipped-terminal" }
 
 type BlockWait = {
   done: Deferred.Deferred<Info>
@@ -63,8 +103,24 @@ export type StartInput = {
   type: string
   title?: string
   metadata?: Record<string, unknown>
+  recovery?: Recovery
+  notificationID?: SessionMessage.ID
   run: Effect.Effect<string, unknown>
 }
+
+/**
+ * A short private predicate evaluated under Job's map lock when no running
+ * generation exists. It must not call another Job operation.
+ */
+export type GuardedStartInput = StartInput & {
+  readonly guard: Effect.Effect<boolean>
+}
+
+export type GuardedStartResult =
+  | { readonly type: "running"; readonly info: Info }
+  | { readonly type: "started"; readonly info: Info }
+  | { readonly type: "existing-terminal"; readonly info: Info }
+  | { readonly type: "skipped-terminal" }
 
 export type WaitInput = {
   id: string
@@ -91,11 +147,14 @@ export type BackgroundAllInput = {
 export interface Interface {
   readonly get: (id: string) => Effect.Effect<Info | undefined>
   readonly start: (input: StartInput) => Effect.Effect<Info>
+  readonly guardedStart: (input: GuardedStartInput) => Effect.Effect<GuardedStartResult>
   readonly wait: (input: WaitInput) => Effect.Effect<WaitResult>
   readonly block: (input: BlockInput) => Effect.Effect<BlockResult | undefined>
   readonly background: (id: string) => Effect.Effect<Info | undefined>
   readonly backgroundAll: (input: BackgroundAllInput) => Effect.Effect<Info[]>
   readonly cancel: (id: string) => Effect.Effect<Info | undefined>
+  readonly pendingBackground: Effect.Effect<readonly Background[]>
+  readonly completeBackground: (notificationID: SessionMessage.ID) => Effect.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Job") {}
@@ -112,6 +171,45 @@ function errorText(error: unknown) {
   return String(error)
 }
 
+export const TERMINAL_RETENTION_MAX_JOBS = 128
+export const TERMINAL_RETENTION_MAX_BYTES = 16 * 1024 * 1024
+
+function estimateTerminalBytes(info: Info) {
+  const detail = info.output ?? info.error ?? ""
+  return 256 + ((info.title?.length ?? 0) + info.type.length + detail.length) * 2
+}
+
+function pruneTerminalJobs(jobs: Map<string, Active>, consumedID?: string) {
+  const terminal = [...jobs.values()].filter((job) => job.info.status !== "running").reverse()
+  const next = new Map(jobs)
+  let count = 0
+  let bytes = 0
+  let first = true
+  for (const job of terminal) {
+    const grace = first && job.info.id !== consumedID
+    first = false
+    const fits = count < TERMINAL_RETENTION_MAX_JOBS && bytes + job.retainedBytes <= TERMINAL_RETENTION_MAX_BYTES
+    if (grace) {
+      count += 1
+      continue
+    }
+    if (fits) {
+      count += 1
+      bytes += job.retainedBytes
+      continue
+    }
+    next.delete(job.info.id)
+  }
+  return next
+}
+
+function setRecent(jobs: Map<string, Active>, id: string, job: Active) {
+  const next = new Map(jobs)
+  next.delete(id)
+  next.set(id, job)
+  return next
+}
+
 function incrementSession(input: Map<SessionSchema.ID, number>, sessionID: SessionSchema.ID) {
   return new Map(input).set(sessionID, (input.get(sessionID) ?? 0) + 1)
 }
@@ -126,43 +224,64 @@ function decrementSession(input: Map<SessionSchema.ID, number>, sessionID: Sessi
 }
 
 /**
- * Makes one scoped, process-local registry. Entries are intentionally not
- * durable: process restart or owner-scope closure loses status and interrupts
- * live work. Persisted observation, restart recovery, and remote workers need a
- * separate durable ownership slice rather than pretending this registry has
- * those semantics.
+ * Makes one scoped, process-local registry. Explicitly recoverable background
+ * work also owns a durable notification marker until its notification is admitted.
+ * Running work is never evicted; terminal projections stay within count and
+ * estimated string-memory bounds while Deferred observers retain full results.
  */
 export const make = Effect.gen(function* () {
+  const kv = yield* KV.Service
   const state: State = {
     jobs: yield* SynchronizedRef.make(new Map()),
     scope: yield* Scope.Scope,
   }
 
-  const settle = Effect.fn("Job.settle")(function* (id: string, token: object, exit: Exit.Exit<string, unknown>) {
+  const persistBackground = Effect.fnUntraced(function* (job: Active) {
+    if (!job.recovery || !job.info.notificationID) return
+    yield* kv.set(`${backgroundPrefix}${job.info.notificationID}`, {
+      id: job.info.id,
+      notificationID: job.info.notificationID,
+      recovery: job.recovery,
+      status: job.info.status,
+      ...(job.info.output !== undefined ? { output: job.info.output } : {}),
+      ...(job.info.error !== undefined ? { error: job.info.error } : {}),
+    })
+  })
+
+  const settle = Effect.fnUntraced(function* (id: string, scope: Scope.Closeable, exit: Exit.Exit<string, unknown>) {
     const completed_at = yield* Clock.currentTimeMillis
-    const result = yield* SynchronizedRef.modify(state.jobs, (jobs): readonly [FinishResult, Map<string, Active>] => {
-      const job = jobs.get(id)
-      if (!job) return [{}, jobs]
-      if (job.token !== token) return [{}, jobs]
-      if (job.info.status !== "running") return [{ info: snapshot(job) }, jobs]
-      const status: Exclude<Status, "running"> = Exit.isSuccess(exit)
-        ? "completed"
-        : Cause.hasInterruptsOnly(exit.cause)
-          ? "cancelled"
-          : "error"
-      const next = {
-        ...job,
-        blockingSessions: new Map<SessionSchema.ID, number>(),
-        info: {
+    const result = yield* SynchronizedRef.modifyEffect(
+      state.jobs,
+      Effect.fnUntraced(function* (jobs): Effect.fn.Return<readonly [FinishResult, Map<string, Active>]> {
+        const job = jobs.get(id)
+        if (!job) return [{}, jobs]
+        if (job.scope !== scope) return [{}, jobs]
+        if (job.info.status !== "running") return [{ info: snapshot(job) }, jobs]
+        const status: Exclude<Status, "running"> = Exit.isSuccess(exit)
+          ? "completed"
+          : Cause.hasInterruptsOnly(exit.cause)
+            ? "cancelled"
+            : "error"
+        const info: Info = {
           ...job.info,
           status,
           completed_at,
           ...(Exit.isSuccess(exit) ? { output: exit.value } : {}),
           ...(Exit.isFailure(exit) ? { error: errorText(Cause.squash(exit.cause)) } : {}),
-        },
-      }
-      return [{ info: snapshot(next), done: job.done, scope: job.scope }, new Map(jobs).set(id, next)]
-    })
+        }
+        const next = {
+          ...job,
+          blockingSessions: new Map<SessionSchema.ID, number>(),
+          info,
+          retainedBytes: estimateTerminalBytes(info),
+        }
+        if (status !== "cancelled") yield* persistBackground(next)
+        return [
+          { info: snapshot(next), done: job.done, scope: job.scope },
+          pruneTerminalJobs(setRecent(jobs, id, next)),
+        ]
+      }),
+    )
     if (result.info && result.done) yield* Deferred.succeed(result.done, result.info).pipe(Effect.ignore)
     if (result.scope) {
       yield* Scope.close(result.scope, Exit.void).pipe(Effect.forkIn(state.scope, { startImmediately: true }))
@@ -170,21 +289,7 @@ export const make = Effect.gen(function* () {
     return result.info
   })
 
-  const fork = Effect.fn("Job.fork")(function* (
-    scope: Scope.Scope,
-    id: string,
-    token: object,
-    run: Effect.Effect<string, unknown>,
-  ) {
-    return yield* run.pipe(
-      Effect.matchCauseEffect({
-        onSuccess: (output) => settle(id, token, Exit.succeed(output)),
-        onFailure: (cause) => settle(id, token, Exit.failCause(cause)),
-      }),
-      Effect.asVoid,
-      Effect.forkIn(scope, { startImmediately: true }),
-    )
-  })
+  const consume = (id: string) => SynchronizedRef.update(state.jobs, (jobs) => pruneTerminalJobs(jobs, id))
 
   const get: Interface["get"] = Effect.fn("Job.get")(function* (id) {
     const job = (yield* SynchronizedRef.get(state.jobs)).get(id)
@@ -192,7 +297,7 @@ export const make = Effect.gen(function* () {
     return snapshot(job)
   })
 
-  const start: Interface["start"] = Effect.fn("Job.start")(function* (input) {
+  const start: Interface["start"] = Effect.fnUntraced(function* (input) {
     return yield* Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
         const id = input.id ?? Identifier.ascending("job")
@@ -201,13 +306,12 @@ export const make = Effect.gen(function* () {
         const backgrounded = yield* Deferred.make<Info>()
         const result = yield* SynchronizedRef.modifyEffect(
           state.jobs,
-          Effect.fnUntraced(function* (jobs) {
+          Effect.fnUntraced(function* (jobs): Effect.fn.Return<readonly [StartResult, Map<string, Active>]> {
             const existing = jobs.get(id)
             if (existing?.info.status === "running") {
-              return [{ info: snapshot(existing) }, jobs] as readonly [StartResult, Map<string, Active>]
+              return [{ info: snapshot(existing) }, jobs]
             }
             const scope = yield* Scope.fork(state.scope, "parallel")
-            const token = {}
             const job = {
               info: {
                 id,
@@ -216,22 +320,80 @@ export const make = Effect.gen(function* () {
                 status: "running" as const,
                 started_at,
                 metadata: input.metadata,
+                ...(input.notificationID ? { notificationID: input.notificationID } : {}),
               },
               done,
               backgrounded,
               scope,
-              token,
               blockingSessions: new Map<SessionSchema.ID, number>(),
               isBackgrounded: false,
+              retainedBytes: 0,
+              recovery: input.recovery,
             }
-            return [{ info: snapshot(job), scope, token }, new Map(jobs).set(id, job)] as readonly [
-              StartResult,
-              Map<string, Active>,
-            ]
+            return [{ info: snapshot(job), scope }, new Map(jobs).set(id, job)]
           }),
         )
-        if ("scope" in result) yield* fork(result.scope, id, result.token, restore(input.run))
+        if ("scope" in result)
+          yield* restore(input.run).pipe(
+            Effect.exit,
+            Effect.flatMap((exit) => settle(id, result.scope, exit)),
+            Effect.asVoid,
+            Effect.forkIn(result.scope, { startImmediately: true }),
+          )
         return result.info
+      }),
+    )
+  })
+
+  const guardedStart: Interface["guardedStart"] = Effect.fnUntraced(function* (input) {
+    return yield* Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const id = input.id ?? Identifier.ascending("job")
+        const started_at = yield* Clock.currentTimeMillis
+        const done = yield* Deferred.make<Info>()
+        const backgrounded = yield* Deferred.make<Info>()
+        const result = yield* SynchronizedRef.modifyEffect(
+          state.jobs,
+          Effect.fnUntraced(function* (jobs): Effect.fn.Return<readonly [GuardedStartMutation, Map<string, Active>]> {
+            const existing = jobs.get(id)
+            if (existing?.info.status === "running")
+              return [{ type: "running" as const, info: snapshot(existing) }, jobs]
+            if (!(yield* input.guard))
+              return existing
+                ? [{ type: "existing-terminal" as const, info: snapshot(existing) }, jobs]
+                : [{ type: "skipped-terminal" as const }, jobs]
+            const scope = yield* Scope.fork(state.scope, "parallel")
+            const job = {
+              info: {
+                id,
+                type: input.type,
+                title: input.title,
+                status: "running" as const,
+                started_at,
+                metadata: input.metadata,
+                ...(input.notificationID ? { notificationID: input.notificationID } : {}),
+              },
+              done,
+              backgrounded,
+              scope,
+              blockingSessions: new Map<SessionSchema.ID, number>(),
+              isBackgrounded: false,
+              retainedBytes: 0,
+              recovery: input.recovery,
+            }
+            return [{ type: "started" as const, info: snapshot(job), scope }, new Map(jobs).set(id, job)]
+          }),
+        )
+        if (result.type === "started") {
+          yield* restore(input.run).pipe(
+            Effect.exit,
+            Effect.flatMap((exit) => settle(id, result.scope, exit)),
+            Effect.asVoid,
+            Effect.forkIn(result.scope, { startImmediately: true }),
+          )
+          return { type: "started" as const, info: result.info }
+        }
+        return result
       }),
     )
   })
@@ -239,15 +401,26 @@ export const make = Effect.gen(function* () {
   const wait: Interface["wait"] = Effect.fn("Job.wait")(function* (input) {
     const job = (yield* SynchronizedRef.get(state.jobs)).get(input.id)
     if (!job) return { timedOut: false }
-    if (job.info.status !== "running") return { info: snapshot(job), timedOut: false }
-    if (input.timeout === undefined) return { info: yield* Deferred.await(job.done), timedOut: false }
+    if (job.info.status !== "running") {
+      const info = snapshot(job)
+      yield* consume(input.id)
+      return { info, timedOut: false }
+    }
+    if (input.timeout === undefined) {
+      const info = yield* Deferred.await(job.done)
+      yield* consume(input.id)
+      return { info, timedOut: false }
+    }
     if (input.timeout <= 0) return { info: snapshot(job), timedOut: true }
     const info = yield* Deferred.await(job.done).pipe(Effect.timeoutOption(input.timeout))
-    if (info._tag === "Some") return { info: info.value, timedOut: false }
+    if (info._tag === "Some") {
+      yield* consume(input.id)
+      return { info: info.value, timedOut: false }
+    }
     return { info: snapshot(job), timedOut: true }
   })
 
-  const removeBlock = Effect.fn("Job.removeBlock")(function* (input: BlockInput) {
+  const removeBlock = Effect.fnUntraced(function* (input: BlockInput) {
     yield* SynchronizedRef.update(state.jobs, (jobs) => {
       const job = jobs.get(input.id)
       if (!job || job.info.status !== "running" || job.isBackgrounded) return jobs
@@ -258,7 +431,7 @@ export const make = Effect.gen(function* () {
     })
   })
 
-  const block: Interface["block"] = Effect.fn("Job.block")(function* (input) {
+  const block: Interface["block"] = Effect.fnUntraced(function* (input) {
     const result = yield* SynchronizedRef.modify(state.jobs, (jobs): readonly [BlockStart, Map<string, Active>] => {
       const job = jobs.get(input.id)
       if (!job) return [{ type: "missing" }, jobs]
@@ -273,28 +446,44 @@ export const make = Effect.gen(function* () {
       ]
     })
     if (result.type === "missing") return undefined
-    if (result.type === "finished") return { type: "finished", info: result.info }
+    if (result.type === "finished") {
+      yield* consume(input.id)
+      return { type: "finished", info: result.info }
+    }
     if (result.type === "backgrounded") return { type: "backgrounded", info: result.info }
     return yield* Effect.raceFirst(
-      Deferred.await(result.wait.done).pipe(Effect.map((info) => ({ type: "finished" as const, info }))),
+      Deferred.await(result.wait.done).pipe(
+        Effect.flatMap((info) => consume(input.id).pipe(Effect.as({ type: "finished" as const, info }))),
+      ),
       Deferred.await(result.wait.backgrounded).pipe(Effect.map((info) => ({ type: "backgrounded" as const, info }))),
     ).pipe(Effect.ensuring(removeBlock(input)))
   })
 
-  const background: Interface["background"] = Effect.fn("Job.background")(function* (id) {
-    const result = yield* SynchronizedRef.modify(
-      state.jobs,
-      (jobs): readonly [BackgroundResult, Map<string, Active>] => {
-        const job = jobs.get(id)
-        if (!job || job.info.status !== "running") return [{}, jobs]
-        if (job.isBackgrounded) return [{ info: snapshot(job) }, jobs]
-        const next = {
-          ...job,
-          isBackgrounded: true,
-          blockingSessions: new Map<SessionSchema.ID, number>(),
-        }
-        return [{ info: snapshot(next), backgrounded: job.backgrounded }, new Map(jobs).set(id, next)]
+  const markBackground = Effect.fnUntraced(function* (job: Active) {
+    const next = {
+      ...job,
+      isBackgrounded: true,
+      blockingSessions: new Map<SessionSchema.ID, number>(),
+      info: {
+        ...job.info,
+        ...(job.recovery ? { notificationID: job.info.notificationID ?? SessionMessage.ID.create() } : {}),
       },
+    }
+    yield* persistBackground(next)
+    return next
+  })
+
+  const background: Interface["background"] = Effect.fn("Job.background")(function* (id) {
+    const result = yield* SynchronizedRef.modifyEffect(
+      state.jobs,
+      Effect.fnUntraced(function* (jobs): Effect.fn.Return<readonly [BackgroundResult, Map<string, Active>]> {
+        const job = jobs.get(id)
+        // Recoverable work may finish before the caller backgrounds it.
+        if (!job || (job.info.status !== "running" && !job.recovery)) return [{}, jobs]
+        if (job.isBackgrounded) return [{ info: snapshot(job) }, jobs]
+        const next = yield* markBackground(job)
+        return [{ info: snapshot(next), backgrounded: job.backgrounded }, new Map(jobs).set(id, next)]
+      }),
     )
     if (result.info && result.backgrounded)
       yield* Deferred.succeed(result.backgrounded, result.info).pipe(Effect.ignore)
@@ -302,60 +491,89 @@ export const make = Effect.gen(function* () {
   })
 
   const backgroundAll: Interface["backgroundAll"] = Effect.fn("Job.backgroundAll")(function* (input) {
-    const result = yield* SynchronizedRef.modify(
+    const result = yield* SynchronizedRef.modifyEffect(
       state.jobs,
-      (jobs): readonly [BackgroundResult[], Map<string, Active>] => {
-        const results: BackgroundResult[] = []
+      Effect.fnUntraced(function* (jobs): Effect.fn.Return<
+        readonly [Required<BackgroundResult>[], Map<string, Active>]
+      > {
+        const results: Required<BackgroundResult>[] = []
         const next = new Map(jobs)
         for (const [id, job] of jobs) {
           if (job.info.status !== "running") continue
           if (job.isBackgrounded) continue
           if (input.type !== undefined && job.info.type !== input.type) continue
           if (!job.blockingSessions.has(input.sessionID)) continue
-          const updated = {
-            ...job,
-            isBackgrounded: true,
-            blockingSessions: new Map<SessionSchema.ID, number>(),
-          }
+          const updated = yield* markBackground(job)
           results.push({ info: snapshot(updated), backgrounded: job.backgrounded })
           next.set(id, updated)
         }
         return [results, next]
-      },
+      }),
     )
-    yield* Effect.forEach(
-      result,
-      (item) => (item.info && item.backgrounded ? Deferred.succeed(item.backgrounded, item.info) : Effect.void),
-      { discard: true },
-    )
-    return result.flatMap((item) => (item.info ? [item.info] : []))
+    yield* Effect.forEach(result, (item) => Deferred.succeed(item.backgrounded, item.info), { discard: true })
+    return result.map((item) => item.info)
   })
 
   const cancel: Interface["cancel"] = Effect.fn("Job.cancel")(function* (id) {
     const completed_at = yield* Clock.currentTimeMillis
-    const result = yield* SynchronizedRef.modify(state.jobs, (jobs): readonly [FinishResult, Map<string, Active>] => {
-      const job = jobs.get(id)
-      if (!job) return [{}, jobs]
-      if (job.info.status !== "running") return [{ info: snapshot(job) }, jobs]
-      const next = {
-        ...job,
-        blockingSessions: new Map<SessionSchema.ID, number>(),
-        info: {
+    const result = yield* SynchronizedRef.modifyEffect(
+      state.jobs,
+      Effect.fnUntraced(function* (jobs): Effect.fn.Return<readonly [FinishResult, Map<string, Active>]> {
+        const job = jobs.get(id)
+        if (!job) return [{}, jobs]
+        if (job.info.status !== "running") return [{ info: snapshot(job) }, jobs]
+        const info: Info = {
           ...job.info,
-          status: "cancelled" as const,
+          status: "cancelled",
           completed_at,
-        },
-      }
-      return [{ info: snapshot(next), done: job.done, scope: job.scope }, new Map(jobs).set(id, next)]
-    })
+        }
+        const next = {
+          ...job,
+          blockingSessions: new Map<SessionSchema.ID, number>(),
+          info,
+          retainedBytes: estimateTerminalBytes(info),
+        }
+        yield* persistBackground(next)
+        return [
+          { info: snapshot(next), done: job.done, scope: job.scope },
+          pruneTerminalJobs(setRecent(jobs, id, next)),
+        ]
+      }),
+    )
     if (result.info && result.done) yield* Deferred.succeed(result.done, result.info).pipe(Effect.ignore)
     if (result.scope) yield* Scope.close(result.scope, Exit.void)
     return result.info
   })
 
-  return Service.of({ get, start, wait, block, background, backgroundAll, cancel })
+  const pendingBackground: Interface["pendingBackground"] = Effect.gen(function* () {
+    const recovered: Background[] = []
+    let after: string | undefined
+    do {
+      const page = yield* kv.scan({ prefix: backgroundPrefix, after })
+      recovered.push(...Array.filterMap(page.entries, (entry) => decodeBackground(entry.value)))
+      after = page.next
+    } while (after)
+    return recovered
+  }).pipe(Effect.withSpan("Job.pendingBackground"))
+
+  const completeBackground: Interface["completeBackground"] = Effect.fn("Job.completeBackground")((notificationID) =>
+    kv.remove(`${backgroundPrefix}${notificationID}`),
+  )
+
+  return Service.of({
+    get,
+    start,
+    guardedStart,
+    wait,
+    block,
+    background,
+    backgroundAll,
+    cancel,
+    pendingBackground,
+    completeBackground,
+  })
 })
 
 const layer = Layer.effect(Service, make)
 
-export const node = makeGlobalNode({ service: Service, layer, deps: [] })
+export const node = makeGlobalNode({ service: Service, layer, deps: [KV.node] })

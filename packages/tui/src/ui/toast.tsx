@@ -8,9 +8,9 @@ import { TextAttributes } from "@opentui/core"
 export type ToastOptions = {
   title?: string
   message: string
-  fallback?: "unknown-error"
   variant: "info" | "success" | "warning" | "error"
   duration: number
+  fallback?: "unknown-error"
   action?: {
     label: string
     run: () => void
@@ -29,6 +29,7 @@ function ToastSurface(props: {
   const dimensions = useTerminalDimensions()
   const renderer = useRenderer()
   const [hovered, setHovered] = createSignal(false)
+  const message = () => (props.toast.fallback === "unknown-error" ? t("ui.toast.unknownError") : props.toast.message)
   const hover = (value: boolean) => {
     setHovered(value)
     props.onHover?.(value)
@@ -44,7 +45,6 @@ function ToastSurface(props: {
       {props.toast.action ? `› ${props.toast.action.label}` : "x"}
     </text>
   )
-  const message = () => (props.toast.fallback === "unknown-error" ? t("ui.toast.unknownError") : props.toast.message)
 
   return (
     <box

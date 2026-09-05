@@ -29,13 +29,13 @@ export const Output = Schema.Struct({
 })
 export type Output = typeof Output.Type
 
-export class CancelledError extends Schema.TaggedErrorClass<CancelledError>()("QuestionTool.CancelledError", {}) {
+export class CancelledError extends Schema.TaggedError<CancelledError>()("QuestionTool.CancelledError", {}) {
   override get message() {
     return "The user dismissed this question"
   }
 }
 
-export const toModelOutput = (questions: ReadonlyArray<Question.Prompt>, answers: ReadonlyArray<Question.Answer>) => {
+export const toModelContent = (questions: ReadonlyArray<Question.Prompt>, answers: ReadonlyArray<Question.Answer>) => {
   const formatted = questions
     .map(
       (question, index) =>
@@ -52,8 +52,8 @@ export const Plugin = {
     const permission = yield* Permission.Service
 
     yield* ctx.tool
-      .transform((draft) =>
-        draft.add({
+      .transform((editor) =>
+        editor.add({
           name,
           options: { codemode: false },
           description,
@@ -101,7 +101,7 @@ export const Plugin = {
                   }
                   return Effect.succeed({
                     output,
-                    content: toModelOutput(input.questions, output.answers),
+                    content: toModelContent(input.questions, output.answers),
                     metadata: { answers: output.answers },
                   })
                 }),

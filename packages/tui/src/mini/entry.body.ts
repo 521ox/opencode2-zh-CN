@@ -195,7 +195,8 @@ export function entryBody(commit: StreamCommit, options?: ScrollbackOptions): Ru
   const raw = cleanRunText(commit.text)
   const mono = options?.mono === true
   const locale = options?.locale ?? "en"
-  const t = (key: Parameters<typeof translate>[1], params?: Parameters<typeof translate>[2]) => translate(locale, key, params)
+  const t = (key: Parameters<typeof translate>[1], params?: Parameters<typeof translate>[2]) =>
+    translate(locale, key, params)
 
   if (commit.kind === "user") {
     return userBody(raw, mono)

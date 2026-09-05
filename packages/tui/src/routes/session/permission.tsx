@@ -154,9 +154,9 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               <For
                 each={
                   props.request.save?.length === 1 && props.request.save[0] === "*"
-                    ? [i18n.t("session.permission.allowActionUntilRestarted", { action: props.request.action })]
+                    ? [i18n.t("session.permission.alwaysAllowActionForProject", { action: props.request.action })]
                     : [
-                        i18n.t("session.permission.allowPatternsUntilRestarted"),
+                        i18n.t("session.permission.alwaysAllowPatternsForProject"),
                         ...(props.request.save ?? []).map((item) => `- ${item}`),
                       ]
                 }
@@ -322,7 +322,11 @@ function RejectPrompt(props: {
         id: "app.exit",
         title: i18n.t("session.permission.command.cancelRejection"),
         group: i18n.t("session.group.permission"),
-        run() {
+        run(_input, event) {
+          if (event?.ctrl && event.name === "c" && input.plainText) {
+            input.setText("")
+            return
+          }
           props.onCancel()
         },
       },
@@ -465,6 +469,13 @@ export function SessionQuestion<const T extends Record<string, string>>(props: {
   const shortcuts = Keymap.useShortcuts()
   const id = () => props.id ?? "session.permission"
   const group = () => props.group ?? i18n.t("session.group.permission")
+  const dismiss = () => {
+    if (store.expanded) {
+      setStore("expanded", false)
+      return
+    }
+    if (props.escapeKey) props.onSelect(props.escapeKey)
+  }
 
   Keymap.createLayer(() => ({
     mode: "base",
@@ -476,7 +487,7 @@ export function SessionQuestion<const T extends Record<string, string>>(props: {
               title: i18n.t("session.permission.command.reject"),
               group: group(),
               bind: false as const,
-              run: () => props.onSelect(props.escapeKey!),
+              run: dismiss,
             },
           ]
         : []),
@@ -520,14 +531,7 @@ export function SessionQuestion<const T extends Record<string, string>>(props: {
         run: () => props.onSelect(store.selected),
       },
       ...(props.escapeKey
-        ? [
-            {
-              bind: "escape",
-              title: i18n.t("session.permission.command.reject"),
-              group: group(),
-              run: () => props.onSelect(props.escapeKey!),
-            },
-          ]
+        ? [{ bind: "escape", title: i18n.t("session.permission.command.reject"), group: group(), run: dismiss }]
         : []),
     ],
     bindings: [...(props.escapeKey ? ["app.exit"] : []), ...(props.fullscreen ? ["permission.prompt.fullscreen"] : [])],

@@ -31,11 +31,11 @@ export function DialogWorkspaceFileChanges(props: {
   title?: string
   message?: string
 }) {
+  const { t } = useI18n()
   const dialog = useDialog()
   const theme = useTheme("elevated")
   const overlayTheme = useTheme("overlay")
   const config = useConfig().data
-  const { t } = useI18n()
   const dimensions = useTerminalDimensions()
   const scrollAcceleration = createMemo(() => getScrollAcceleration(config))
   const [store, setStore] = createStore({ active: "yes" as WorkspaceFileChangesChoice })

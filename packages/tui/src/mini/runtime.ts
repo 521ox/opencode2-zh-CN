@@ -116,7 +116,6 @@ type ResolvedSession = {
 type RuntimeState = {
   sdk: RunInput["sdk"]
   shown: boolean
-  aborting: boolean
   model: RunInput["model"]
   defaultModel: RunInput["model"]
   providers: RunProvider[]
@@ -219,7 +218,6 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
   const state: RuntimeState = {
     sdk: ctx.sdk,
     shown: !session.first,
-    aborting: false,
     model: ctx.model ?? session.model,
     defaultModel: undefined,
     providers: [],
@@ -307,9 +305,9 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
       state.activeVariant = cycleVariant(state.activeVariant, state.variants)
       void input.host.preferences.saveVariant(model, state.activeVariant)
       return {
-          status: state.activeVariant
-            ? t("mini.runtime.status.variant", { variant: state.activeVariant })
-            : t("mini.runtime.status.variantDefault"),
+        status: state.activeVariant
+          ? t("mini.runtime.status.variant", { variant: state.activeVariant })
+          : t("mini.runtime.status.variantDefault"),
         modelLabel: formatModelLabel(model, state.activeVariant, state.providers),
         variant: state.activeVariant,
       }
@@ -369,29 +367,26 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
       state.activeVariant = variant
       void input.host.preferences.saveVariant(model, state.activeVariant)
       return {
-          status: state.activeVariant
-            ? t("mini.runtime.status.variant", { variant: state.activeVariant })
-            : t("mini.runtime.status.variantDefault"),
+        status: state.activeVariant
+          ? t("mini.runtime.status.variant", { variant: state.activeVariant })
+          : t("mini.runtime.status.variantDefault"),
         modelLabel: formatModelLabel(model, state.activeVariant, state.providers),
         variant: state.activeVariant,
         variants: state.variants,
       }
     },
     onInterrupt: () => {
-      if (!state.sessionID || state.aborting) {
+      if (!state.sessionID) {
         return false
       }
 
-      state.aborting = true
+      // No in-flight guard: interruption acknowledges immediately server-side and repeating
+      // it is an idempotent no-op, so repeated presses are never swallowed.
       void (
         state.stream
           ? state.stream.then((item) => item.handle.interruptActiveTurn())
           : state.sdk.session.interrupt({ sessionID: state.sessionID, continue: true })
-      )
-        .catch(() => {})
-        .finally(() => {
-          state.aborting = false
-        })
+      ).catch(() => {})
       return true
     },
     onBackground: () => {

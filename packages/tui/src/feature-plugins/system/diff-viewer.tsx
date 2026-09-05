@@ -3,9 +3,8 @@ import type { FileDiffInfo } from "@opencode-ai/client"
 import { Plugin } from "@opencode-ai/plugin/tui"
 import type { KeymapCommand, Route } from "@opencode-ai/plugin/tui/context"
 import { TextAttributes, type BorderSides, type BoxRenderable, type ScrollBoxRenderable } from "@opentui/core"
-import { LANGUAGE_EXTENSIONS } from "../../util/filetype"
+import { filetype } from "../../util/filetype"
 import { useTerminalDimensions } from "@opentui/solid"
-import path from "path"
 import { createEffect, createMemo, createResource, createSignal, For, Match, onCleanup, Show, Switch } from "solid-js"
 import { DiffViewerFileTree } from "./diff-viewer-file-tree"
 import { Panel, PanelGroup, Separator } from "./diff-viewer-ui"
@@ -59,13 +58,6 @@ const normalizeDiffs = (diffs: readonly FileDiffInfo[]): DiffFile[] =>
     deletions: item.deletions,
     status: item.status,
   }))
-
-function filetype(input?: string) {
-  if (!input) return "none"
-  const language = LANGUAGE_EXTENSIONS[path.extname(input)]
-  if (["typescriptreact", "javascriptreact", "javascript"].includes(language)) return "typescript"
-  return language
-}
 
 function storedView(value: unknown): DiffView | undefined {
   if (value === "split" || value === "unified") return value
@@ -144,10 +136,7 @@ function DiffViewer(props: { context: Plugin.Context }) {
   const previousHunkShortcut = shortcut("diff.previous_hunk")
   const nextFileShortcut = shortcut("diff.next_file")
   const previousFileShortcut = shortcut("diff.previous_file")
-  const toggleFileTreeShortcut = shortcut("diff.toggle_file_tree")
-  const singlePatchShortcut = shortcut("diff.single_patch")
   const switchSourceShortcut = shortcut("diff.switch_source")
-  const toggleViewShortcut = shortcut("diff.toggle_view")
   const markReviewedShortcut = shortcut("diff.mark_reviewed")
   const helpShortcut = shortcut("diff.help")
   let scroll: ScrollBoxRenderable | undefined
@@ -297,7 +286,6 @@ function DiffViewer(props: { context: Plugin.Context }) {
     setSelectedHunk({ fileIndex: next.fileIndex, hunkIndex: next.hunkIndex, scrollTop: patchScroll.scrollTop })
   }
 
-  const highlightedPatchFileIndex = () => fileRows().find((row) => row.id === highlightedFileNode())?.fileIndex
   const firstPatchFileIndex = () => fileRows().find((row) => row.fileIndex !== undefined)?.fileIndex
   const visiblePatchFiles = createMemo(() => {
     if (!singlePatch()) {
@@ -422,6 +410,12 @@ function DiffViewer(props: { context: Plugin.Context }) {
   const commands: KeymapCommand[] = [
     {
       id: "diff.close",
+      title: i18n.t("feature.diff.command.close"),
+      group: i18n.t("feature.diff.group"),
+      run: close,
+    },
+    {
+      id: "app.exit",
       title: i18n.t("feature.diff.command.close"),
       group: i18n.t("feature.diff.group"),
       run: close,
@@ -678,8 +672,8 @@ function DiffViewer(props: { context: Plugin.Context }) {
     },
   ]
 
-  const switchDiffOptions = createMemo(() => {
-    return [
+  const openSwitchDiffDialog = () => {
+    const options = [
       {
         title: i18n.t("feature.diff.sourceOption.working.title"),
         value: "working" as const,
@@ -691,16 +685,13 @@ function DiffViewer(props: { context: Plugin.Context }) {
         description: i18n.t("feature.diff.sourceOption.branch.description"),
       },
     ]
-  })
-
-  const openSwitchDiffDialog = () => {
     dialog.show(() => (
       <DialogSelect
         title={i18n.t("feature.diff.sourceDialog.title")}
         skipFilter={true}
         renderFilter={false}
         current={mode()}
-        options={switchDiffOptions().map((option) => ({
+        options={options.map((option) => ({
           ...option,
           onSelect() {
             dialog.clear()
@@ -732,7 +723,9 @@ function DiffViewer(props: { context: Plugin.Context }) {
     <box position="absolute" zIndex={2500} left={0} top={0} width={dimensions().width} height={dimensions().height}>
       <PanelGroup axis="y" context={props.context} width="100%" height="100%">
         <Panel border="none" flexShrink={0} padding={0} paddingLeft={1}>
-          <text fg={theme.text.default}>{i18n.t("feature.diff.title", { source: diffSourceLabel(mode(), i18n.t) })}</text>
+          <text fg={theme.text.default}>
+            {i18n.t("feature.diff.title", { source: diffSourceLabel(mode(), i18n.t) })}
+          </text>
           <box flexGrow={1} />
           <Show when={!diff.loading && !diff.error}>
             <text fg={theme.text.subdued}>
@@ -754,9 +747,7 @@ function DiffViewer(props: { context: Plugin.Context }) {
             <Match when={!diff.loading && diff.error}>
               <Separator axis="x" />
               <box flexGrow={1} paddingLeft={1}>
-                <text fg={theme.text.feedback.error.default}>
-                  {i18n.t("feature.diff.loadError")}
-                </text>
+                <text fg={theme.text.feedback.error.default}>{i18n.t("feature.diff.loadError")}</text>
               </box>
             </Match>
             <Match when={!diff.loading && files().length === 0}>
@@ -1085,7 +1076,7 @@ function Commands(props: { context: Plugin.Context }) {
 }
 
 export default Plugin.define({
-  id: "diff-viewer",
+  id: "opencode.diffs",
   setup(context) {
     context.ui.router.register({
       name: ROUTE,

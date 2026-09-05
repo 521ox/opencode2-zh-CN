@@ -6,7 +6,6 @@ import { Database } from "@opencode-ai/core/database/database"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/util/effect/layer-node"
 import { Bus } from "@opencode-ai/core/bus"
-import { Job } from "@opencode-ai/core/job"
 import { Location } from "@opencode-ai/core/location"
 import { LocationServiceMap } from "@opencode-ai/core/location-service-map"
 import type { LocationServices } from "@opencode-ai/core/location-services"
@@ -20,7 +19,7 @@ import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { SessionRunnerModel } from "@opencode-ai/core/session/runner/model"
 import { SessionStore } from "@opencode-ai/core/session/store"
-import { DateTime, Effect, Layer, LayerMap, Stream } from "effect"
+import { Effect, Layer, LayerMap, Stream } from "effect"
 import { testEffect } from "./lib/effect"
 import { globalProjectLayer } from "./lib/project"
 
@@ -28,7 +27,7 @@ const location = Location.Ref.make({ directory: AbsolutePath.make("/project") })
 const model = LanguageModel.make({
   id: "summary-model",
   provider: "test",
-  route: OpenAIChat.route.with({ limits: { context: 10_000, output: 1_000 } }),
+  route: OpenAIChat.route,
 })
 let requests: LLMRequest[] = []
 const client = Layer.mock(LLMClient.Service)({
@@ -45,6 +44,7 @@ const models = Layer.mock(SessionRunnerModel.Service)({
       SessionRunnerModel.resolved(model, {
         capabilities: { tools: true, input: ["text", "image"], output: ["text"] },
         cost: [],
+        limit: { context: 10_000, output: 1_000 },
       }),
     ),
 })
@@ -73,7 +73,7 @@ const it = testEffect(
 )
 
 describe("Session.compact", () => {
-  it.effect("durably stacks manual compaction", () =>
+  it.effect("durably coalesces manual compaction", () =>
     Effect.gen(function* () {
       requests = []
       const session = yield* Session.Service
@@ -102,17 +102,32 @@ describe("Session.compact", () => {
       const first = yield* session.compact({ sessionID: created.id })
       const second = yield* session.compact({ sessionID: created.id })
 
-      expect(second.id).not.toBe(first.id)
+      expect(second.id).toBe(first.id)
       expect(requests).toHaveLength(0)
       expect(yield* session.inbox(created.id)).toEqual([
-        expect.objectContaining({ id: first.id, type: "compaction", delivery: "queue" }),
-        expect.objectContaining({ id: second.id, type: "compaction", delivery: "queue" }),
+        expect.objectContaining({ id: first.id, type: "compaction", delivery: "steer" }),
       ])
       expect((yield* session.context(created.id)).find((message) => message.id === first.id)).toBeUndefined()
 
-      const steered = yield* session.create({ location })
-      const steer = yield* session.compact({ sessionID: steered.id, delivery: "steer" })
-      expect(steer).toMatchObject({ type: "compaction", delivery: "steer" })
+      const queued = yield* session.create({ location })
+      const queue = yield* session.compact({ sessionID: queued.id, delivery: "queue" })
+      expect(queue).toMatchObject({ type: "compaction", delivery: "queue" })
+    }),
+  )
+
+  it.effect("coalesces concurrent manual compaction", () =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+      const created = yield* session.create({ location })
+      const admitted = yield* Effect.all(
+        [SessionMessage.ID.create(), SessionMessage.ID.create()].map((id) =>
+          session.compact({ id, sessionID: created.id }),
+        ),
+        { concurrency: "unbounded" },
+      )
+
+      expect(admitted[1]?.id).toBe(admitted[0]?.id)
+      expect(yield* session.inbox(created.id)).toHaveLength(1)
     }),
   )
 })

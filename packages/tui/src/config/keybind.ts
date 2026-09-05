@@ -30,7 +30,7 @@ export const BindingValueSchema = Schema.Union([
   Schema.Literal("none"),
   BindingItem,
   Schema.Array(BindingItem),
-])
+]).annotate({ identifier: "TuiKeybind.BindingValue" })
 export type BindingValueSchema = Schema.Schema.Type<typeof BindingValueSchema>
 
 type Definition = {
@@ -83,16 +83,22 @@ export const Definitions = {
   "diff.help": keybind("?", "Show more diff viewer shortcuts"),
 
   "prompt.editor": keybind("<leader>e", "Open external editor"),
-  "theme.switch": keybind("<leader>t", "List available themes"),
+  "theme.switch": keybind("none", "List available themes"),
   "theme.switch_mode": keybind("none", "Switch between light and dark theme mode"),
   "theme.mode.lock": keybind("none", "Lock or unlock theme mode"),
   "session.sidebar.toggle": keybind("<leader>b", "Toggle sidebar"),
+  "pane.focus.left": keybind("<leader>left", "Focus session pane"),
+  "pane.focus.right": keybind("<leader>right", "Focus terminal pane"),
+  "terminal.select": keybind("<leader>down", "Select terminal"),
+  "terminal.toggle": keybind("<leader>t", "Toggle terminal pane"),
+  "terminal.close": keybind("<leader>up", "Close terminal pane"),
   "session.toggle.scrollbar": keybind("none", "Toggle session scrollbar"),
   "opencode.status": keybind("<leader>s", "View status"),
   "opencode.debug": keybind("none", "View debug info"),
 
   "session.export": keybind("<leader>x", "Export session to editor"),
   "session.copy": keybind("none", "Copy session transcript"),
+  "session.copy.id": keybind("none", "Copy session ID"),
   "session.move": keybind("none", "Move session"),
   "session.new": keybind("<leader>n", "Create a new session"),
   "session.list": keybind("<leader>l", "List all sessions"),
@@ -178,7 +184,7 @@ export const Definitions = {
   "session.toggle.thinking": keybind("none", "Toggle thinking blocks visibility"),
 
   "prompt.submit": keybind("none", "Submit prompt"),
-  "prompt.queue": keybind("alt+return", "Queue prompt"),
+  "prompt.queue": keybind("<leader>return", "Queue prompt"),
   "prompt.editor_context.clear": keybind("none", "Clear editor context"),
   "prompt.images.view": keybind("<leader>i", "View image attachments"),
   "prompt.skills": keybind("none", "Open skill selector"),
@@ -189,7 +195,7 @@ export const Definitions = {
   "prompt.clear": keybind("ctrl+c", "Clear input field"),
   "prompt.paste": keybind({ key: "ctrl+v", preventDefault: false }, "Paste from clipboard"),
   "input.submit": keybind("return", "Submit input"),
-  "input.newline": keybind("shift+return,ctrl+return,ctrl+j", "Insert newline in input"),
+  "input.newline": keybind("shift+return,ctrl+return,alt+return,ctrl+j", "Insert newline in input"),
   "input.move.left": keybind("left,ctrl+b", "Move cursor left in input"),
   "input.move.right": keybind("right,ctrl+f", "Move cursor right in input"),
   "input.move.up": keybind("up", "Move cursor up in input"),
@@ -234,6 +240,9 @@ export const Definitions = {
   "composer.shell.up": keybind("up", "Previous shell"),
   "composer.shell.down": keybind("down", "Next shell"),
   "composer.shell.kill": keybind("ctrl+d", "Kill shell command"),
+  "composer.terminal.up": keybind("up,k", "Previous terminal"),
+  "composer.terminal.down": keybind("down,j", "Next terminal"),
+  "composer.terminal.select": keybind("return", "Select terminal"),
 
   "dialog.select.prev": keybind("up,ctrl+p", "Move to previous dialog item"),
   "dialog.select.next": keybind("down,ctrl+n", "Move to next dialog item"),
@@ -243,6 +252,8 @@ export const Definitions = {
   "dialog.select.end": keybind("end", "Move to last dialog item"),
   "dialog.select.submit": keybind("return", "Submit selected dialog item"),
   "dialog.prompt.submit": keybind("return", "Submit dialog prompt"),
+  "dialog.integration.rename": keybind("ctrl+r", "Rename integration account"),
+  "dialog.integration.delete": keybind("ctrl+d", "Delete integration account"),
   "dialog.worktree.generate": keybind("tab", "Generate worktree name"),
   "dialog.move_session.new": keybind("ctrl+m", "New worktree"),
   "dialog.move_session.delete": keybind("ctrl+d", "Delete worktree"),
@@ -253,9 +264,11 @@ export const Definitions = {
   "prompt.autocomplete.select": keybind("return", "Select autocomplete item"),
   "prompt.autocomplete.complete": keybind("tab", "Complete autocomplete item"),
   "permission.prompt.fullscreen": keybind("ctrl+f", "Toggle permission prompt fullscreen"),
-  "plugins.toggle": keybind("space", "Toggle plugin"),
+  "plugins.toggle": keybind("return", "Toggle plugin"),
   "dialog.mcp.toggle": keybind("space", "Toggle MCP server"),
   "dialog.plugins.install": keybind("shift+i", "Install plugin from plugin dialog"),
+  "dialog.plugins.update": keybind("ctrl+u", "Update plugin from plugin dialog"),
+  "dialog.plugins.check": keybind("ctrl+r", "Check for plugin updates from plugin dialog"),
 
   "terminal.suspend": keybind("ctrl+z", "Suspend terminal"),
   "terminal.title.toggle": keybind("none", "Toggle terminal title"),

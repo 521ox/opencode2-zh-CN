@@ -107,7 +107,8 @@ export function DialogPrompt(props: DialogPromptProps) {
         <Show when={!props.busy} fallback={<text fg={theme.text.subdued}>{t("ui.dialog.prompt.processing")}</text>}>
           <Show when={shortcuts.get("dialog.prompt.submit")}>
             <text fg={theme.text.default}>
-              {shortcuts.get("dialog.prompt.submit")} <span style={{ fg: theme.text.subdued }}>{t("ui.dialog.prompt.submitLabel")}</span>
+              {shortcuts.get("dialog.prompt.submit")}{" "}
+              <span style={{ fg: theme.text.subdued }}>{t("ui.dialog.prompt.submitLabel")}</span>
             </text>
           </Show>
         </Show>

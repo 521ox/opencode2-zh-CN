@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, index, primaryKey, real, uniqueIndex } from "drizzle-orm/sqlite-core"
+import { sqliteTable, text, integer, index, primaryKey, real, uniqueIndex, check } from "drizzle-orm/sqlite-core"
 import { sql } from "drizzle-orm"
 import { directoryColumn, pathColumn } from "../database/path.js"
 import { ProjectTable } from "../project/sql.js"
@@ -16,7 +16,12 @@ import type { CompactionPayload, MovePayload, SyntheticPayload, UserPayload } fr
 import type { RevertV1 } from "@opencode-ai/schema/session-revert"
 import type { Schema } from "effect"
 
-type SessionMessageData = Omit<(typeof SessionMessage.Info)["Encoded"], "type" | "id">
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never
+type SessionMessageData = DistributiveOmit<(typeof SessionMessage.Info)["Encoded"], "type" | "id">
+type SessionAssistantHeadData = Omit<(typeof SessionMessage.Assistant)["Encoded"], "id" | "type" | "content">
+type SessionAssistantPartType = SessionMessage.AssistantContentEncoded["type"]
+type SessionSubagentContinuationState = "requested" | "admitted" | "bound" | "completed" | "failed" | "cancelled"
+type SessionSubagentTurnState = "active" | "completed" | "failed" | "cancelled"
 
 export const SessionTable = sqliteTable(
   "session_v2",
@@ -41,7 +46,7 @@ export const SessionTable = sqliteTable(
     summary_deletions: integer(),
     summary_files: integer(),
     summary_diffs: text({ mode: "json" }).$type<FileDiff.LegacyInfo[]>(),
-    metadata: text({ mode: "json" }).$type<Record<string, unknown>>(),
+    metadata: text({ mode: "json" }).$type<Session.Metadata>(),
     cost: real().notNull().default(0),
     tokens_input: integer().notNull().default(0),
     tokens_output: integer().notNull().default(0),
@@ -57,9 +62,12 @@ export const SessionTable = sqliteTable(
       variant?: string
     }>(),
     ...Timestamps,
+    time_idle: integer(),
+    time_viewed: integer(),
+    idle_outcome: text().$type<NonNullable<Session.Info["outcome"]>>(),
     time_compacting: integer(),
     time_archived: integer(),
-    /** The execution claim timestamp retained for restart compatibility. */
+    /** The execution claim timestamp (historical column name; see SessionStore.claim). */
     time_suspended: integer(),
     resume_attempts: integer().notNull().default(0),
     claim_owner: text(),
@@ -99,6 +107,54 @@ export const SessionMessageTable = sqliteTable(
     index("session_message_session_type_seq_idx").on(table.session_id, table.type, table.seq),
     index("session_message_session_time_created_id_idx").on(table.session_id, table.time_created, table.id),
     index("session_message_time_created_idx").on(table.time_created),
+  ],
+)
+
+export const SessionAssistantActiveTable = sqliteTable(
+  "session_assistant_active",
+  {
+    message_id: text()
+      .$type<SessionMessage.ID>()
+      .primaryKey()
+      .references(() => SessionMessageTable.id, { onDelete: "cascade" }),
+    session_id: text()
+      .$type<SessionSchema.ID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    data: text({ mode: "json" }).$type<SessionAssistantHeadData>().notNull(),
+    ...Timestamps,
+  },
+  (table) => [uniqueIndex("session_assistant_active_session_idx").on(table.session_id)],
+)
+
+export const SessionAssistantPartTable = sqliteTable(
+  "session_assistant_part",
+  {
+    message_id: text()
+      .$type<SessionMessage.ID>()
+      .notNull()
+      .references(() => SessionAssistantActiveTable.message_id, { onDelete: "cascade" }),
+    position: integer().notNull(),
+    type: text().$type<SessionAssistantPartType>().notNull(),
+    type_ordinal: integer().notNull(),
+    tool_id: text(),
+    data: text({ mode: "json" }).$type<SessionMessage.AssistantContentEncoded>().notNull(),
+    ...Timestamps,
+  },
+  (table) => [
+    primaryKey({ columns: [table.message_id, table.position] }),
+    uniqueIndex("session_assistant_part_message_type_ordinal_idx").on(table.message_id, table.type, table.type_ordinal),
+    check("session_assistant_part_position_check", sql`${table.position} >= 0`),
+    check("session_assistant_part_type_ordinal_check", sql`${table.type_ordinal} >= 0`),
+    check("session_assistant_part_type_check", sql`${table.type} in ('text', 'reasoning', 'tool')`),
+    check(
+      "session_assistant_part_tool_id_check",
+      sql`(${table.type} = 'tool' and ${table.tool_id} is not null) or (${table.type} <> 'tool' and ${table.tool_id} is null)`,
+    ),
+    index("session_assistant_part_message_type_position_idx").on(table.message_id, table.type, table.position),
+    index("session_assistant_part_message_tool_position_idx")
+      .on(table.message_id, table.tool_id, table.position)
+      .where(sql`${table.type} = 'tool'`),
   ],
 )
 
@@ -146,6 +202,65 @@ export const SessionInboxTable = sqliteTable(
   (table) => [
     index("session_inbox_session_delivery_seq_idx").on(table.session_id, table.delivery, table.enqueued_seq),
     uniqueIndex("session_inbox_session_enqueued_seq_idx").on(table.session_id, table.enqueued_seq),
+  ],
+)
+
+/** Private request-to-turn correlation for subagent tool invocations. */
+export const SessionSubagentTurnTable = sqliteTable(
+  "session_subagent_turn",
+  {
+    id: text().primaryKey(),
+    child_session_id: text()
+      .$type<SessionSchema.ID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    state: text().$type<SessionSubagentTurnState>().notNull(),
+    assistant_message_id: text().$type<SessionMessage.ID>(),
+    output: text(),
+    error: text({ mode: "json" }).$type<{ readonly type: string; readonly message: string }>(),
+    time_terminal: integer(),
+    ...Timestamps,
+  },
+  (table) => [
+    uniqueIndex("session_subagent_turn_child_active_idx")
+      .on(table.child_session_id)
+      .where(sql`${table.state} = 'active'`),
+  ],
+)
+
+/** Private durable request, Inbox, turn, and terminal-outcome ownership. */
+export const SessionSubagentContinuationTable = sqliteTable(
+  "session_subagent_continuation",
+  {
+    id: text().primaryKey(),
+    parent_session_id: text()
+      .$type<SessionSchema.ID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    parent_message_id: text().$type<SessionMessage.ID>().notNull(),
+    parent_tool_call_id: text().notNull(),
+    child_session_id: text()
+      .$type<SessionSchema.ID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    agent: text().notNull(),
+    description: text().notNull(),
+    inbox_id: text().$type<SessionMessage.ID>().notNull(),
+    turn_id: text().references(() => SessionSubagentTurnTable.id, { onDelete: "set null" }),
+    state: text().$type<SessionSubagentContinuationState>().notNull(),
+    prompt_digest: text().notNull(),
+    time_terminal: integer(),
+    ...Timestamps,
+  },
+  (table) => [
+    uniqueIndex("session_subagent_continuation_parent_call_idx").on(
+      table.parent_session_id,
+      table.parent_message_id,
+      table.parent_tool_call_id,
+    ),
+    uniqueIndex("session_subagent_continuation_inbox_idx").on(table.inbox_id),
+    index("session_subagent_continuation_child_state_idx").on(table.child_session_id, table.state),
+    index("session_subagent_continuation_turn_state_idx").on(table.turn_id, table.state),
   ],
 )
 

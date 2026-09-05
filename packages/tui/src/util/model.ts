@@ -1,7 +1,3 @@
-import { translate, type Translator } from "../i18n"
-
-const englishTranslator: Translator = (key, params) => translate("en", key, params)
-
 export function parse(value: string) {
   const [providerID, ...modelID] = value.split("/")
   return { providerID, modelID: modelID.join("/") }
@@ -24,3 +20,6 @@ export function switchLabel(
   const variant = model.variant && model.variant !== "default" ? ` (${model.variant})` : ""
   return t("session.switch.modelTo", { model: `${display}${variant}` })
 }
+import { translate, type Translator } from "../i18n"
+
+const englishTranslator: Translator = (key, params) => translate("en", key, params)

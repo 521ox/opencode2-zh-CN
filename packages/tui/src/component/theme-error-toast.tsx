@@ -4,8 +4,8 @@ import { useThemes } from "../context/theme"
 import { useToast } from "../ui/toast"
 
 export function ThemeErrorToast() {
-  const themes = useThemes()
   const { t } = useI18n()
+  const themes = useThemes()
   const toast = useToast()
 
   onCleanup(

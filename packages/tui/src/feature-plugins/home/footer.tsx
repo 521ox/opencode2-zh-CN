@@ -22,12 +22,7 @@ function Mcp(props: { context: Plugin.Context }) {
 
   return (
     <Show when={list().length}>
-      <box
-        gap={1}
-        flexDirection="row"
-        flexShrink={0}
-        onMouseUp={() => props.context.keymap.dispatch("mcp.list")}
-      >
+      <box gap={1} flexDirection="row" flexShrink={0} onMouseUp={() => props.context.keymap.dispatch("mcp.list")}>
         <text fg={props.context.theme.text.default}>
           <Switch>
             <Match when={failed()}>
@@ -60,21 +55,23 @@ function Plugins(props: { context: Plugin.Context }) {
   const dimensions = useTerminalDimensions()
   const visibility = createMemo(() => homeFooterVisibility(dimensions().width))
   const plugins = usePlugin()
-  const failed = createMemo(() => plugins.list().filter((item) => item.status === "failed").length)
+  const failed = createMemo(
+    () =>
+      plugins.list().filter((item) => item.status === "failed").length +
+      plugins.server().filter((item) => item.status === "failed").length,
+  )
 
   return (
     <Show when={failed()}>
-      <box
-        gap={1}
-        flexDirection="row"
-        flexShrink={0}
-        onMouseUp={() => props.context.keymap.dispatch("plugins.list")}
-      >
+      <box gap={1} flexDirection="row" flexShrink={0} onMouseUp={() => props.context.keymap.dispatch("plugins.list")}>
         <text fg={props.context.theme.text.default}>
           <span style={{ fg: props.context.theme.text.feedback.error.default }}>⊙ </span>
-          {i18n.t(failed() === 1 ? "feature.homeFooter.plugins.failed.one" : "feature.homeFooter.plugins.failed.other", {
-            count: failed(),
-          })}
+          {i18n.t(
+            failed() === 1 ? "feature.homeFooter.plugins.failed.one" : "feature.homeFooter.plugins.failed.other",
+            {
+              count: failed(),
+            },
+          )}
         </text>
         <Show when={visibility().pluginCommand}>
           <text fg={props.context.theme.text.subdued}>/plugins</text>
@@ -114,7 +111,7 @@ function View(props: { context: Plugin.Context }) {
 }
 
 export default Plugin.define({
-  id: "opencode.home-footer",
+  id: "opencode.home.footer",
   setup(context) {
     // Root takeover: an external plugin replacing home.footer wins (last-
     // enabled) and this builtin shows as suppressed, not silently gone.

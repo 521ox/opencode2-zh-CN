@@ -227,6 +227,21 @@ describe("ReadToolFileSystem", () => {
     }),
   )
 
+  it.effect("checks skipped lines for null bytes", () =>
+    Effect.gen(function* () {
+      const { environment, files, directory } = yield* fixture
+      const file = path.join(directory, "nul-prefix.txt")
+      yield* files.writeFile(file, Uint8Array.from([...new TextEncoder().encode("one"), 0, 10, 116, 119, 111, 10]))
+
+      const error = yield* ReadToolFileSystem.read(environment, absolute(file), "nul-prefix.txt", {
+        offset: 2,
+        limit: 1,
+      }).pipe(Effect.flip)
+
+      expect(error).toBeInstanceOf(ReadToolFileSystem.BinaryFileError)
+    }),
+  )
+
   it.effect("reads page two after fetching more than the first 256KB range", () =>
     Effect.gen(function* () {
       const { environment, files, directory } = yield* fixture
@@ -234,6 +249,21 @@ describe("ReadToolFileSystem", () => {
       yield* files.writeFileString(file, `${"a".repeat(300 * 1024)}\nsecond\n`)
 
       const result = yield* ReadToolFileSystem.read(environment, absolute(file), "large.txt", {
+        offset: 2,
+        limit: 1,
+      })
+
+      expect(result).toMatchObject({ type: "text-page", content: "second", offset: 2, truncated: false })
+    }),
+  )
+
+  it.effect("reads after a newline at the first chunk boundary", () =>
+    Effect.gen(function* () {
+      const { environment, files, directory } = yield* fixture
+      const file = path.join(directory, "boundary.txt")
+      yield* files.writeFileString(file, `${"a".repeat(256 * 1024 - 1)}\nsecond\n`)
+
+      const result = yield* ReadToolFileSystem.read(environment, absolute(file), "boundary.txt", {
         offset: 2,
         limit: 1,
       })

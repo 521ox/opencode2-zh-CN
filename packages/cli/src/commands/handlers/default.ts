@@ -4,12 +4,13 @@ import { run } from "@opencode-ai/tui"
 import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
 import { Config } from "../../config"
-import { Context, Effect, FileSystem, Option } from "effect"
+import { Context, Effect, FileSystem, Option, Queue } from "effect"
 import { ServerConnection } from "../../services/server-connection"
 import { Updater } from "../../services/updater"
 import { UpdatePreflight } from "../../services/update-preflight"
 import { Npm } from "@opencode-ai/util/npm"
-import { OPENCODE_CHANNEL, OPENCODE_VERSION } from "../../version"
+import { OPENCODE_ARTIFACT, OPENCODE_CHANNEL, OPENCODE_VERSION } from "../../version"
+import { Env } from "../../env"
 
 export function interactiveServerArgs(input: {
   readonly server: Option.Option<string>
@@ -25,14 +26,25 @@ export function interactiveServerArgs(input: {
 export default Runtime.handler(Commands, (input) =>
   Effect.gen(function* () {
     const requestedDirectory = Option.getOrUndefined(input.directory)
+    const connection = interactiveServerArgs(input)
+    const requestedServer = connection.server
     if (requestedDirectory !== undefined) process.chdir(requestedDirectory)
     const preflight = UpdatePreflight.make()
     yield* Effect.addFinalizer(() => Effect.promise(() => preflight.close()))
-    const connection = interactiveServerArgs(input)
+    const serviceStarts = yield* Queue.unbounded<{
+      readonly reason: "missing" | "version-mismatch"
+      readonly previousVersion?: string
+    }>()
+    yield* Queue.take(serviceStarts).pipe(
+      Effect.flatMap((event) => Effect.logInfo("background service starting", event)),
+      Effect.forever,
+      Effect.forkScoped,
+    )
     const server = yield* ServerConnection.resolve({
       ...connection,
       mismatch: "replace",
       onStart: (reason, previousVersion) => {
+        Queue.offerUnsafe(serviceStarts, { reason, previousVersion })
         if (reason === "version-mismatch" && preflight.begin(previousVersion)) return
         process.stderr.write(
           reason === "version-mismatch"
@@ -46,7 +58,6 @@ export default Runtime.handler(Commands, (input) =>
       ),
     )
     const updater = yield* Updater.Service
-    yield* updater.check().pipe(Effect.forkScoped)
     preflight.loading()
     const config = yield* Config.Service
     const npm = yield* Npm.Service
@@ -58,7 +69,7 @@ export default Runtime.handler(Commands, (input) =>
     const service = server.service
     yield* run({
       app: {
-        name: process.env.OPENCODE_CLIENT ?? "cli",
+        name: process.env.OPENCODE_CLIENT ?? OPENCODE_ARTIFACT,
         version: OPENCODE_VERSION,
         channel: process.env.OPENCODE_TUI_CHANNEL ?? OPENCODE_CHANNEL,
       },
@@ -82,10 +93,18 @@ export default Runtime.handler(Commands, (input) =>
         get: () => runPromise(config.get()),
         update: (update) => runPromise(config.update(update)),
       },
-      packages: {
-        resolve: (spec) =>
-          runPromise(npm.add(spec, { subpaths: ["tui"] }).pipe(Effect.map((result) => result.entrypoint))),
+      updater: {
+        monitor: (notify, signal) =>
+          runPromise(
+            updater.monitor((version) => Effect.sync(() => notify(version))),
+            { signal },
+          ),
+        apply: (version) => runPromise(updater.apply(version)),
       },
+      packages: {
+        prepare: (spec, install = true) => runPromise(install ? npm.add(spec) : npm.resolve(spec)),
+      },
+      environment: requestedServer === undefined ? Env.session() : undefined,
       terminalHandoff: () => preflight.finish(),
       log: (level, message, tags) => {
         const effect =

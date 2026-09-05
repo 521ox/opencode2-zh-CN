@@ -1,8 +1,8 @@
 export * as Npm from "./npm.js"
 
 import path from "path"
-import { Effect, Schema, Context, Layer, Option, FileSystem } from "effect"
-import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem"
+import { createHash, randomUUID } from "node:crypto"
+import { Clock, Effect, Schema, Context, Layer, Option, FileSystem } from "effect"
 import { FSUtil } from "./fs-util.js"
 import { Global } from "./global.js"
 import { EffectFlock } from "./effect-flock.js"
@@ -13,7 +13,7 @@ import { makeRuntime } from "./effect/runtime.js"
 import { NpmConfig } from "./npm-config.js"
 import { resolveModule } from "#runtime-import"
 
-export class InstallFailedError extends Schema.TaggedErrorClass<InstallFailedError>()("NpmInstallFailedError", {
+export class InstallFailedError extends Schema.TaggedError<InstallFailedError>()("NpmInstallFailedError", {
   add: Schema.Array(Schema.String).pipe(Schema.optional),
   dir: Schema.String,
   cause: Schema.optional(Schema.Defect()),
@@ -22,10 +22,18 @@ export class InstallFailedError extends Schema.TaggedErrorClass<InstallFailedErr
 export interface EntryPoint {
   readonly directory: string
   readonly entrypoint?: string
+  readonly version?: string
+  readonly revision?: string
 }
 
 export interface Interface {
   readonly add: (
+    pkg: string,
+    options?: { readonly subpaths?: readonly string[] },
+  ) => Effect.Effect<EntryPoint, InstallFailedError | EffectFlock.LockError>
+  readonly resolve: (pkg: string, options?: { readonly subpaths?: readonly string[] }) => Effect.Effect<EntryPoint>
+  readonly check: (pkg: string) => Effect.Effect<boolean, InstallFailedError>
+  readonly update: (
     pkg: string,
     options?: { readonly subpaths?: readonly string[] },
   ) => Effect.Effect<EntryPoint, InstallFailedError | EffectFlock.LockError>
@@ -39,6 +47,70 @@ const illegal = process.platform === "win32" ? new Set(["<", ">", ":", '"', "|",
 export function sanitize(pkg: string) {
   if (!illegal) return pkg
   return Array.from(pkg, (char) => (illegal.has(char) || char.charCodeAt(0) < 32 ? "_" : char)).join("")
+}
+
+export async function isRegistryPackage(pkg: string) {
+  return (await parse(pkg))?.type === "registry"
+}
+
+export async function isInstallablePackage(pkg: string) {
+  return (await parse(pkg)) !== undefined
+}
+
+export async function cacheKey(pkg: string) {
+  return key(pkg, await parse(pkg))
+}
+
+type Target =
+  | { readonly type: "registry"; readonly name: string; readonly spec: string; readonly mutable: boolean }
+  | { readonly type: "git"; readonly name?: string; readonly slug: string; readonly mutable: boolean }
+
+async function parse(pkg: string): Promise<Target | undefined> {
+  const { default: npa } = await import("npm-package-arg")
+  try {
+    const result = npa(pkg)
+    if (result.type === "git") {
+      return {
+        type: "git",
+        ...(result.name ? { name: result.name } : {}),
+        slug: gitSlug(pkg),
+        mutable: !isCommit(result.gitCommittish),
+      }
+    }
+    if (!result.name || !["version", "range", "tag"].includes(result.type)) return undefined
+    return {
+      type: "registry",
+      name: result.name,
+      spec: result.raw === result.name ? "latest" : result.rawSpec,
+      mutable: result.type !== "version",
+    }
+  } catch {
+    return undefined
+  }
+}
+
+function key(pkg: string, target: Target | undefined) {
+  if (target?.type === "git") return `git-${target.slug}-${createHash("sha256").update(pkg).digest("hex").slice(0, 12)}`
+  if (target?.type === "registry") return sanitize(`${target.name}@${target.spec}`)
+  return sanitize(pkg)
+}
+
+function gitSlug(pkg: string) {
+  const target = (() => {
+    try {
+      return decodeURIComponent(pkg.split("#")[0])
+    } catch {
+      return pkg.split("#")[0]
+    }
+  })()
+  return (
+    target
+      .replace(/\.git$/i, "")
+      .split(/[/:\\]/)
+      .at(-1)
+      ?.replace(/[^a-zA-Z0-9._-]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "repository"
+  )
 }
 
 const resolveEntryPoint = (name: string, dir: string, subpaths: readonly string[] = [""]): EntryPoint => {
@@ -60,11 +132,26 @@ const resolveEntryPoint = (name: string, dir: string, subpaths: readonly string[
 interface ArboristNode {
   name: string
   path: string
+  realpath: string
+  isLink: boolean
 }
 
 interface ArboristTree {
   edgesOut: Map<string, { to?: ArboristNode }>
+  inventory: { values(): IterableIterator<ArboristNode> }
 }
+
+const PackageJson = Schema.Struct({
+  dependencies: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+  version: Schema.optional(Schema.String),
+})
+
+const PackageLock = Schema.Struct({
+  packages: Schema.optional(Schema.Record(Schema.String, Schema.Struct({ resolved: Schema.optional(Schema.String) }))),
+})
+
+const retention = 7 * 24 * 60 * 60 * 1_000
+const stagingRetention = 60 * 60 * 1_000
 
 const layer = Layer.effect(
   Service,
@@ -73,15 +160,89 @@ const layer = Layer.effect(
     const global = yield* Global.Service
     const fs = yield* FileSystem.FileSystem
     const flock = yield* EffectFlock.Service
-    const directory = (pkg: string) => path.join(global.cache, "packages", sanitize(pkg))
-    const reify = (input: { dir: string; add?: string[] }) =>
+    const directory = (pkg: string, target: Target | undefined) => path.join(global.cache, "npm", key(pkg, target))
+    const generations = Effect.fnUntraced(function* (dir: string) {
+      return yield* fs.readDirectory(dir).pipe(
+        Effect.orElseSucceed(() => [] as string[]),
+        Effect.map((entries) =>
+          entries.filter((entry) => /^\d+$/.test(entry)).toSorted((a, b) => Number(a) - Number(b)),
+        ),
+      )
+    })
+    const current = Effect.fnUntraced(function* (dir: string) {
+      const latest = (yield* generations(dir)).at(-1)
+      return latest ? path.join(dir, latest) : undefined
+    })
+    const mkdir = (dir: string) =>
+      fs
+        .makeDirectory(dir, { recursive: true })
+        .pipe(Effect.mapError((cause) => new InstallFailedError({ dir, cause })))
+    const remove = (target: string, dir: string) =>
+      fs
+        .remove(target, { recursive: true, force: true })
+        .pipe(Effect.mapError((cause) => new InstallFailedError({ dir, cause })))
+    const rename = (from: string, to: string, dir: string) =>
+      fs.rename(from, to).pipe(Effect.mapError((cause) => new InstallFailedError({ dir, cause })))
+    const installedName = Effect.fnUntraced(function* (pkg: string, dir: string, target?: Target) {
+      if (target?.name) return target.name
+      const manifest = yield* afs
+        .readJson(path.join(dir, "package.json"))
+        .pipe(Effect.flatMap(Schema.decodeUnknownEffect(PackageJson)), Effect.option)
+      if (Option.isSome(manifest)) {
+        const name = Object.keys(manifest.value.dependencies ?? {})[0]
+        if (name) return name
+      }
+      return pkg
+    })
+    const installedRevision = Effect.fnUntraced(function* (root: string, name: string, target: Target) {
+      const dir = path.join(root, "node_modules", name)
+      if (target.type === "registry") {
+        const manifest = yield* afs
+          .readJson(path.join(dir, "package.json"))
+          .pipe(Effect.flatMap(Schema.decodeUnknownEffect(PackageJson)), Effect.option)
+        return Option.isSome(manifest) ? manifest.value.version : undefined
+      }
+      for (const file of [
+        path.join(root, "package-lock.json"),
+        path.join(root, "node_modules", ".package-lock.json"),
+      ]) {
+        const lock = yield* afs
+          .readJson(file)
+          .pipe(Effect.flatMap(Schema.decodeUnknownEffect(PackageLock)), Effect.option)
+        const revision = gitRevision(
+          Option.isSome(lock) ? lock.value.packages?.[`node_modules/${name}`]?.resolved : undefined,
+        )
+        if (revision) return revision
+      }
+      return undefined
+    })
+    const entry = Effect.fnUntraced(function* (
+      root: string,
+      name: string,
+      dir: string,
+      target: Target | undefined,
+      subpaths?: readonly string[],
+    ) {
+      const manifest = yield* afs
+        .readJson(path.join(dir, "package.json"))
+        .pipe(Effect.flatMap(Schema.decodeUnknownEffect(PackageJson)), Effect.option)
+      const manifestVersion = Option.isSome(manifest) ? manifest.value.version : undefined
+      const revision = target ? ((yield* installedRevision(root, name, target)) ?? manifestVersion) : undefined
+      const version = target?.type === "git" ? revision : manifestVersion
+      return {
+        ...resolveEntryPoint(name, dir, subpaths),
+        ...(version ? { version } : {}),
+        ...(revision ? { revision } : {}),
+      }
+    })
+    const reify = (input: { dir: string; config?: string; add?: string[]; update?: boolean }) =>
       Effect.gen(function* () {
-        yield* flock.acquire(`npm-install:${input.dir}`)
         const { Arborist } = yield* Effect.promise(() => import("@npmcli/arborist"))
         const add = input.add ?? []
-        const npmOptions = yield* NpmConfig.load(input.dir)
+        const npmOptions = yield* NpmConfig.load(input.config ?? input.dir)
+        const options = input.update ? { ...npmOptions, preferOnline: true, noGitRevCache: true } : npmOptions
         const arborist = new Arborist({
-          ...npmOptions,
+          ...options,
           path: input.dir,
           binLinks: true,
           progress: false,
@@ -91,8 +252,9 @@ const layer = Layer.effect(
         return yield* Effect.tryPromise({
           try: () =>
             arborist.reify({
-              ...npmOptions,
+              ...options,
               add,
+              update: input.update,
               save: true,
               saveType: "prod",
             }),
@@ -109,75 +271,208 @@ const layer = Layer.effect(
         }),
       )
 
-    const add = Effect.fn("Npm.add")(function* (pkg: string, options?: { readonly subpaths?: readonly string[] }) {
-      const { default: npa } = yield* Effect.promise(() => import("npm-package-arg"))
-      const dir = directory(pkg)
-      const name = (() => {
-        try {
-          return npa(pkg).name ?? pkg
-        } catch {
-          return pkg
+    const install = Effect.fnUntraced(function* (
+      pkg: string,
+      target: Target | undefined,
+      dir: string,
+      subpaths: readonly string[] | undefined,
+      update: boolean,
+    ) {
+      yield* flock.acquire(`npm-install:${dir}`)
+      const active = yield* current(dir)
+      const name = yield* installedName(pkg, active ?? dir, target)
+      if (active && !update && (yield* afs.existsSafe(path.join(active, "node_modules", name)))) {
+        return yield* entry(active, name, path.join(active, "node_modules", name), target, subpaths)
+      }
+
+      yield* mkdir(dir)
+      const startedAt = yield* Clock.currentTimeMillis
+      // Arborist keys lockfile entries relative to the root's real path. Stage there so
+      // symlinked cache directories still produce revisions installedRevision can find.
+      const root = yield* fs.realPath(dir).pipe(Effect.mapError((cause) => new InstallFailedError({ dir, cause })))
+      const staging = path.join(root, `.staging-${startedAt}-${randomUUID()}`)
+      const staged = yield* Effect.gen(function* () {
+        const tree = yield* reify({ dir: staging, config: dir, add: [pkg], update })
+        const installed = tree.edgesOut.values().next().value?.to
+        const installedNameValue = installed?.name ?? (yield* installedName(pkg, staging, target))
+        const result = yield* entry(
+          staging,
+          installedNameValue,
+          installed?.path ?? path.join(staging, "node_modules", installedNameValue),
+          target,
+          // Resolve installed entrypoints after rename so Bun cannot hold the staging directory open on Windows.
+          installed ? [] : subpaths,
+        )
+        if (!installed && !result.entrypoint) return yield* new InstallFailedError({ add: [pkg], dir: staging })
+        const links =
+          process.platform === "win32"
+            ? Array.from(tree.inventory.values()).filter(
+                (node) => node.isLink && FSUtil.contains(staging, node.path) && FSUtil.contains(staging, node.realpath),
+              )
+            : []
+        return { name: installedNameValue, result, links }
+      }).pipe(Effect.onError(() => remove(staging, dir).pipe(Effect.ignore)))
+
+      if (active) {
+        const activeEntry = yield* entry(active, name, path.join(active, "node_modules", name), target, subpaths)
+        if (activeEntry.revision && activeEntry.revision === staged.result.revision) {
+          yield* remove(staging, dir)
+          return activeEntry
         }
-      })()
-
-      if (yield* afs.existsSafe(path.join(dir, "node_modules", name))) {
-        return resolveEntryPoint(name, path.join(dir, "node_modules", name), options?.subpaths)
       }
 
-      const tree = yield* reify({ dir, add: [pkg] })
-      const first = tree.edgesOut.values().next().value?.to
-      if (!first) {
-        const result = resolveEntryPoint(name, path.join(dir, "node_modules", name), options?.subpaths)
-        if (result.entrypoint) return result
-        return yield* new InstallFailedError({ add: [pkg], dir })
+      const completedAt = yield* Clock.currentTimeMillis
+      const newest = Number((yield* generations(dir)).at(-1) ?? 0)
+      const generation = path.join(dir, String(Math.max(completedAt, newest + 1)))
+      // Windows junctions use absolute targets, so rebase internal links before publishing the generation.
+      if (staged.links.length > 0) {
+        const { unlink, symlink } = yield* Effect.promise(() => import("node:fs/promises"))
+        yield* Effect.forEach(
+          staged.links,
+          (link) =>
+            Effect.tryPromise({
+              try: async () => {
+                await unlink(link.path)
+                await symlink(path.join(generation, path.relative(staging, link.realpath)), link.path, "junction")
+              },
+              catch: (cause) => new InstallFailedError({ dir, cause }),
+            }),
+          { discard: true },
+        ).pipe(Effect.onError(() => remove(staging, dir).pipe(Effect.ignore)))
       }
-      return resolveEntryPoint(first.name, first.path, options?.subpaths)
+      yield* rename(staging, generation, dir)
+      return yield* entry(generation, staged.name, path.join(generation, "node_modules", staged.name), target, subpaths)
+    })
+
+    const collect = Effect.fnUntraced(function* (dir: string) {
+      const now = yield* Clock.currentTimeMillis
+      const completed = yield* generations(dir)
+      const keep = new Set(completed.slice(-2))
+      const entries = yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => [] as string[]))
+      yield* Effect.forEach(
+        entries,
+        (name) => {
+          const timestamp = /^\d+$/.test(name)
+            ? Number(name)
+            : Number(name.match(/^\.staging-(\d+)-/)?.[1] ?? Number.NaN)
+          const maximumAge = name.startsWith(".staging-") ? stagingRetention : retention
+          if (!Number.isFinite(timestamp) || keep.has(name) || now - timestamp <= maximumAge) return Effect.void
+          return remove(path.join(dir, name), dir).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("failed to remove stale npm generation", { dir, name, cause }),
+            ),
+          )
+        },
+        { concurrency: 4, discard: true },
+      )
+    })
+
+    const add = Effect.fn("Npm.add")(function* (pkg: string, options?: { readonly subpaths?: readonly string[] }) {
+      const target = yield* Effect.promise(() => parse(pkg))
+      const dir = directory(pkg, target)
+      return yield* install(pkg, target, dir, options?.subpaths, false)
+    }, Effect.scoped)
+
+    const resolve = Effect.fn("Npm.resolve")(function* (
+      pkg: string,
+      options?: { readonly subpaths?: readonly string[] },
+    ) {
+      const target = yield* Effect.promise(() => parse(pkg))
+      const root = directory(pkg, target)
+      const generation = yield* current(root)
+      const name = yield* installedName(pkg, generation ?? root, target)
+      const dir = path.join(generation ?? root, "node_modules", name)
+      if (!(yield* afs.existsSafe(dir))) return { directory: dir }
+      return yield* entry(generation ?? root, name, dir, target, options?.subpaths)
+    })
+
+    const check = Effect.fn("Npm.check")(function* (pkg: string) {
+      const target = yield* Effect.promise(() => parse(pkg))
+      const root = directory(pkg, target)
+      if (!target)
+        return yield* new InstallFailedError({
+          dir: root,
+          cause: new Error("Package checks only support registry and Git package specs"),
+        })
+      if (!target.mutable) return false
+      const generation = yield* current(root)
+      const name = yield* installedName(pkg, generation ?? root, target)
+      const installed = generation ? yield* installedRevision(generation, name, target) : undefined
+      if (!installed)
+        return yield* new InstallFailedError({ dir: root, cause: new Error(`Package is not installed: ${pkg}`) })
+      const { manifest, resolve } = yield* Effect.promise(() => import("pacote"))
+      const options = { ...(yield* NpmConfig.load(root)), preferOnline: true, noGitRevCache: true, ignoreScripts: true }
+      const available = yield* Effect.tryPromise({
+        try: async (signal) => {
+          const request = { ...options, signal }
+          return target.type === "git"
+            ? gitRevision(await resolve(pkg, request))
+            : (await manifest(pkg, request)).version
+        },
+        catch: (cause) => new InstallFailedError({ dir: root, cause }),
+      })
+      if (!available)
+        return yield* new InstallFailedError({ dir: root, cause: new Error(`Package revision not found: ${pkg}`) })
+      return installed !== available
+    })
+
+    const update = Effect.fn("Npm.update")(function* (
+      pkg: string,
+      options?: { readonly subpaths?: readonly string[] },
+    ) {
+      const target = yield* Effect.promise(() => parse(pkg))
+      const dir = directory(pkg, target)
+      if (!target)
+        return yield* new InstallFailedError({
+          dir,
+          cause: new Error("Package updates only support registry and Git package specs"),
+        })
+      if (!target.mutable) return yield* add(pkg, options)
+      const installed = yield* install(pkg, target, dir, options?.subpaths, true)
+      yield* collect(dir)
+      return installed
     }, Effect.scoped)
 
     const which = Effect.fn("Npm.which")(function* (pkg: string, bin?: string) {
-      const dir = directory(pkg)
-      const binDir = path.join(dir, "node_modules", ".bin")
+      const target = yield* Effect.promise(() => parse(pkg))
+      const root = directory(pkg, target)
 
-      const pick = Effect.fnUntraced(function* () {
-        const files = yield* fs.readDirectory(binDir).pipe(Effect.catch(() => Effect.succeed([] as string[])))
-
+      const pick = Effect.fnUntraced(function* (dir: string) {
+        const binDir = path.join(dir, "node_modules", ".bin")
+        const files = yield* fs.readDirectory(binDir).pipe(Effect.orElseSucceed(() => [] as string[]))
         if (files.length === 0) return Option.none<string>()
         // Caller picked a specific bin (e.g. pyright exposes both `pyright` and
         // `pyright-langserver`); trust the hint if the package provides it.
-        if (bin) return files.includes(bin) ? Option.some(bin) : Option.none<string>()
-        if (files.length === 1) return Option.some(files[0])
+        if (bin) return files.includes(bin) ? Option.some(path.join(binDir, bin)) : Option.none<string>()
+        if (files.length === 1) return Option.some(path.join(binDir, files[0]))
 
-        const pkgJson = yield* afs.readJson(path.join(dir, "node_modules", pkg, "package.json")).pipe(Effect.option)
-
+        const packageName = target?.name ?? pkg
+        const pkgJson = yield* afs
+          .readJson(path.join(dir, "node_modules", packageName, "package.json"))
+          .pipe(Effect.option)
         if (Option.isSome(pkgJson)) {
           const parsed = pkgJson.value as { bin?: string | Record<string, string> }
           if (parsed?.bin) {
-            const unscoped = pkg.startsWith("@") ? pkg.split("/")[1] : pkg
+            const unscoped = packageName.startsWith("@") ? packageName.split("/")[1] : packageName
             const parsedBin = parsed.bin
-            if (typeof parsedBin === "string") return Option.some(unscoped)
+            if (typeof parsedBin === "string") return Option.some(path.join(binDir, unscoped))
             const keys = Object.keys(parsedBin)
-            if (keys.length === 1) return Option.some(keys[0])
-            return parsedBin[unscoped] ? Option.some(unscoped) : Option.some(keys[0])
+            const selected = parsedBin[unscoped] ? unscoped : keys[0]
+            return selected ? Option.some(path.join(binDir, selected)) : Option.none<string>()
           }
         }
-
-        return Option.some(files[0])
+        return Option.some(path.join(binDir, files[0]))
       })
 
       return Option.getOrUndefined(
         yield* Effect.gen(function* () {
-          const bin = yield* pick()
-          if (Option.isSome(bin)) {
-            return Option.some(path.join(binDir, bin.value))
-          }
-
-          yield* fs.remove(path.join(dir, "package-lock.json")).pipe(Effect.orElseSucceed(() => {}))
-
+          const generation = yield* current(root)
+          const selected = generation ? yield* pick(generation) : Option.none<string>()
+          if (Option.isSome(selected)) return selected
           yield* add(pkg)
-
-          const resolved = yield* pick()
-          if (Option.isNone(resolved)) return Option.none<string>()
-          return Option.some(path.join(binDir, resolved.value))
+          const installed = yield* current(root)
+          if (!installed) return Option.none<string>()
+          return yield* pick(installed)
         }).pipe(
           Effect.scoped,
           Effect.orElseSucceed(() => Option.none<string>()),
@@ -187,6 +482,9 @@ const layer = Layer.effect(
 
     return Service.of({
       add,
+      resolve,
+      check,
+      update,
       which,
     })
   }),
@@ -204,6 +502,26 @@ export async function add(...args: Parameters<Interface["add"]>) {
   return runPromise((svc) => svc.add(...args))
 }
 
+export async function resolve(...args: Parameters<Interface["resolve"]>) {
+  return runPromise((svc) => svc.resolve(...args))
+}
+
+export async function check(...args: Parameters<Interface["check"]>) {
+  return runPromise((svc) => svc.check(...args))
+}
+
+export async function update(...args: Parameters<Interface["update"]>) {
+  return runPromise((svc) => svc.update(...args))
+}
+
 export async function which(...args: Parameters<Interface["which"]>) {
   return runPromise((svc) => svc.which(...args))
+}
+
+function gitRevision(resolved: string | undefined) {
+  return resolved?.match(/#([a-f0-9]{40}|[a-f0-9]{64})(?=::|$)/i)?.[1]
+}
+
+function isCommit(value: string | null | undefined) {
+  return /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(value ?? "")
 }

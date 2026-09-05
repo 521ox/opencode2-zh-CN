@@ -1,5 +1,5 @@
 import { HttpRecorder } from "@opencode-ai/http-recorder"
-import * as OpenAIChat from "@opencode-ai/ai/protocols/openai-chat"
+import { OpenAIChat } from "@opencode-ai/ai/protocols/openai-chat"
 import { Auth, LLMClient, RequestExecutor } from "@opencode-ai/ai/route"
 import { Catalog } from "@opencode-ai/core/catalog"
 import { Database } from "@opencode-ai/core/database/database"
@@ -8,7 +8,6 @@ import { LayerNodePlatform } from "@opencode-ai/core/effect/app-node-platform"
 import { LayerNode } from "@opencode-ai/util/effect/layer-node"
 import { Bus } from "@opencode-ai/core/bus"
 import { EventTable } from "@opencode-ai/core/event/sql"
-import { Job } from "@opencode-ai/core/job"
 import { Permission } from "@opencode-ai/core/permission"
 import { Agent } from "@opencode-ai/core/agent"
 import { Config } from "@opencode-ai/core/config"
@@ -17,13 +16,11 @@ import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { Session } from "@opencode-ai/core/session"
 import { Snapshot } from "@opencode-ai/core/snapshot"
-import { SessionCompaction } from "@opencode-ai/core/session/compaction"
-import { SessionTitle } from "@opencode-ai/core/session/title"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { SessionRunCoordinator } from "@opencode-ai/core/session/run-coordinator"
 import { SessionRunner } from "@opencode-ai/core/session/runner/index"
-import * as SessionRunnerLLM from "@opencode-ai/core/session/runner/llm"
+import { SessionRunnerLLM } from "@opencode-ai/core/session/runner/llm"
 import { SessionRunnerModel } from "@opencode-ai/core/session/runner/model"
 import { Tool } from "@opencode-ai/core/tool"
 import { SessionTable } from "@opencode-ai/core/session/sql"
@@ -40,10 +37,12 @@ import { PluginHooks } from "@opencode-ai/core/plugin/hooks"
 import { SystemPromptPlugin } from "@opencode-ai/core/plugin/system-prompt"
 import { describe, expect } from "bun:test"
 import { eq } from "drizzle-orm"
-import { Effect, Layer, Stream } from "effect"
+import { Effect, Layer } from "effect"
 import { HttpClient, HttpClientResponse } from "effect/unstable/http"
 import path from "node:path"
 import { testEffect } from "./lib/effect"
+import { LocationServiceMap } from "@opencode-ai/core/location-service-map"
+import { promptLocationLayer } from "./fixture/prompt-location"
 import { permissionLayer } from "./lib/permission"
 import { agentHost, catalogHost, host } from "./plugin/host"
 
@@ -70,12 +69,14 @@ const models = Layer.mock(SessionRunnerModel.Service)({
       SessionRunnerModel.resolved(model, {
         capabilities: { tools: true, input: ["text", "image"], output: ["text"] },
         cost: [],
+        limit: { context: 200_000, output: 20 },
       }),
     ),
 })
 const systemContext = Layer.mock(InstructionBuiltIns.Service, { load: () => Effect.succeed(Instructions.empty) })
 const instructionContext = Layer.mock(InstructionDiscovery.Service, {
   project: true,
+  global: true,
   load: () => Effect.succeed(Instructions.empty),
 })
 const skillInstructions = Layer.mock(SkillInstructions.Service, { load: () => Effect.succeed(Instructions.empty) })
@@ -84,19 +85,22 @@ const referenceInstructions = Layer.mock(ReferenceInstructions.Service, {
 })
 const mcpInstructions = Layer.mock(McpInstructions.Service, { load: () => Effect.succeed(Instructions.empty) })
 const config = Config.testLayer()
-const pluginSupervisor = Layer.succeed(PluginSupervisor.Service, PluginSupervisor.Service.of({ flush: Effect.void }))
+const pluginSupervisor = Layer.succeed(
+  PluginSupervisor.Service,
+  PluginSupervisor.Service.of({ awaitActivation: Effect.void }),
+)
 const promptCatalog = Layer.mock(Catalog.Service, {
   provider: {
-    get: () => Effect.succeed(undefined),
+    get: () => Effect.undefined,
     all: () => Effect.succeed([]),
     available: () => Effect.succeed([]),
   },
   model: {
-    get: () => Effect.succeed(undefined),
+    get: () => Effect.undefined,
     all: () => Effect.succeed([]),
     available: () => Effect.succeed([]),
-    default: () => Effect.succeed(undefined),
-    small: () => Effect.succeed(undefined),
+    default: () => Effect.undefined,
+    small: () => Effect.undefined,
   },
 })
 const runnerLayer = (llmClient: Layer.Layer<typeof LLMClient.Service>) =>
@@ -123,13 +127,9 @@ const execution = (llmClient: Layer.Layer<typeof LLMClient.Service>) =>
         drain: (sessionID, force) => sessionRunner.drain({ sessionID, force }).pipe(Effect.asVoid),
       })
       return SessionExecution.Service.of({
-        owner: { id: "test-owner", pid: 0, hostname: "test", leaseMs: 30_000 },
         active: coordinator.active,
-        claim: () => Effect.succeed(true),
         resume: coordinator.run,
-        resumeClaimed: coordinator.run,
-        wake: coordinator.wake,
-        wakeActive: coordinator.wakeActive,
+        wake: (sessionID) => coordinator.wake(sessionID).pipe(Effect.as({ type: "owned" as const })),
         interrupt: (sessionID) => coordinator.interrupt(sessionID),
         awaitIdle: coordinator.awaitIdle,
       })
@@ -158,6 +158,7 @@ const testLayer = (llmClient: Layer.Layer<typeof LLMClient.Service>) =>
     ]),
     [
       [Bus.node, Bus.configured({ persist: true })],
+      [LocationServiceMap.node, promptLocationLayer],
       [LayerNodePlatform.llmClient, llmClient],
       [Permission.node, permission],
       [Catalog.node, promptCatalog],
@@ -182,8 +183,8 @@ describe("SessionRunnerLLM recorded", () => {
       const agents = yield* Agent.Service
       const catalog = yield* Catalog.Service
       const hooks = yield* PluginHooks.Service
-      yield* agents.transform((draft) =>
-        draft.update(Agent.ID.make("build"), (agent) => {
+      yield* agents.transform((editor) =>
+        editor.update(Agent.ID.make("build"), (agent) => {
           agent.mode = "primary"
           agent.permissions.push({ action: "execute", resource: "*", effect: "deny" })
         }),
@@ -244,6 +245,7 @@ describe("SessionRunnerLLM recorded", () => {
         "session.step.started.1",
         "session.text.started.1",
         "session.text.ended.1",
+        "session.step.streamed.1",
         "session.step.ended.1",
       ])
     }),
@@ -288,8 +290,8 @@ describe("SessionModelRequest HTTP bridge", () => {
       const agents = yield* Agent.Service
       const catalog = yield* Catalog.Service
       const hooks = yield* PluginHooks.Service
-      yield* agents.transform((draft) =>
-        draft.update(Agent.ID.make("build"), (agent) => {
+      yield* agents.transform((editor) =>
+        editor.update(Agent.ID.make("build"), (agent) => {
           agent.mode = "primary"
           agent.permissions.push({ action: "execute", resource: "*", effect: "deny" })
         }),
@@ -322,11 +324,11 @@ describe("SessionModelRequest HTTP bridge", () => {
         .onConflictDoNothing()
         .run()
         .pipe(Effect.orDie)
-      const retrySessionID = Session.ID.make("ses_model_request_http_retry")
+      const sessionID = Session.ID.make("ses_model_request_http")
       yield* db
         .insert(SessionTable)
         .values({
-          id: retrySessionID,
+          id: sessionID,
           project_id: Project.ID.global,
           slug: "test",
           directory: "/project",
@@ -336,16 +338,16 @@ describe("SessionModelRequest HTTP bridge", () => {
         .run()
         .pipe(Effect.orDie)
       const session = yield* Session.Service
-      yield* session.prompt({ sessionID: retrySessionID, text: "Say hello.", resume: false })
+      yield* session.prompt({ sessionID, text: "Say hello.", resume: false })
 
-      yield* session.resume(retrySessionID)
+      yield* session.resume(sessionID)
 
       expect(methods).toEqual(["POST"])
       expect(headers).toEqual(["effect"])
       expect(seen).toEqual(["request", "response:200:effect"])
       expect(bodies).toHaveLength(1)
       expect(bodies[0]?.byteLength).toBeGreaterThan(0)
-      expect((yield* session.context(retrySessionID))[1]).toMatchObject({
+      expect((yield* session.context(sessionID))[1]).toMatchObject({
         type: "assistant",
         content: [{ type: "text", text: "Hooked!" }],
       })

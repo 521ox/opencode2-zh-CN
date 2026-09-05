@@ -5,6 +5,7 @@ import type { OpenCodeEvent } from "@opencode-ai/client"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { Bus } from "@opencode-ai/core/bus"
 import { Event } from "@opencode-ai/schema/event"
+import { Expected } from "../../../../core/test/lib/session-message"
 import { createEffect, onMount, type ParentProps } from "solid-js"
 import { ConfigProvider } from "../../../src/config"
 import { ClientProvider, useClient } from "../../../src/context/client"
@@ -40,12 +41,12 @@ function emitEvent(events: ReturnType<typeof createEventStream>, event: OpenCode
   events.emit({ ...event, location: { directory } })
 }
 
-const config = createTuiResolvedConfig()
+const config = createTuiResolvedConfig({ session: { terminal: false } })
 
 function DataProvider(props: ParentProps) {
   return (
     <ConfigProvider config={config}>
-      <DataProviderBase>
+      <DataProviderBase directory={process.cwd()}>
         <LocationProvider>
           <SyncLocation />
           {props.children}
@@ -1128,6 +1129,10 @@ test("removes committed revert messages from local state", async () => {
     expect(data.session.message.list(sessionID).map((message) => message.id)).toEqual(["msg_001"])
     expect(data.session.message.get(sessionID, "msg_002")).toBeUndefined()
     expect(data.session.message.get(sessionID, "msg_003")).toBeUndefined()
+    // The projector also drops inbox items enqueued at or after the boundary, without a cancel event.
+    expect(data.session.pending.list(sessionID).map((item) => item.id)).toEqual(["msg_001"])
+    expect(data.session.input.list(sessionID)).toEqual(["msg_001"])
+    expect(data.session.input.has(sessionID, "msg_002")).toBe(false)
   } finally {
     app.renderer.destroy()
   }
@@ -1728,6 +1733,7 @@ test("refreshes integrations after integration updates", async () => {
                 id: "openai",
                 name: "OpenAI",
                 methods: [{ type: "key" }],
+                connections: [{ type: "credential", id: "cred_openai", label: "OpenAI" }],
               },
             ],
     })
@@ -1766,6 +1772,16 @@ test("refreshes integrations after integration updates", async () => {
     await wait(() => data.location.integration.list()?.length === 1)
     await wait(() => requests.model > before.model && requests.provider > before.provider)
     expect(data.location.integration.list()?.[0]).toMatchObject({ id: "openai", name: "OpenAI" })
+
+    const previous = { ...requests }
+    events.emit({
+      id: "evt_credential",
+      created: 0,
+      type: "credential.switched",
+      data: { credentialID: "cred_openai", integrationID: "openai" },
+    })
+    await wait(() => requests.model > previous.model && requests.provider > previous.provider)
+    expect(requests.integration).toBe(previous.integration)
   } finally {
     app.renderer.destroy()
   }
@@ -2814,7 +2830,7 @@ test("renders admitted prompts immediately and tracks them until promoted", asyn
     })
     await wait(() => sync.session.message.list(sessionID)?.length === 1)
     const admitted = sync.session.message.list(sessionID)?.[0]
-    expect(admitted).toMatchObject({ id: messageID, type: "user", text: "hello" })
+    expect(admitted).toMatchObject({ id: messageID, ...Expected.user("hello") })
     expect(admitted?.metadata).toBeUndefined()
     expect(sync.session.pending.list(sessionID)).toEqual([
       {
@@ -3090,6 +3106,346 @@ test("stops at the last non-repeating ancestor on a parent cycle", async () => {
     // Does not hang; walking up from "y" stops before re-entering "x".
     expect(data.session.root("y")).toBe("x")
     expect(data.session.family("y")).toEqual(["x", "y"])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("admits prompts optimistically and reconciles with the durable echo", async () => {
+  const events = createEventStream()
+  const sessionID = "session-1"
+  let release!: (response: Response) => void
+  const deferred = new Promise<Response>((resolve) => {
+    release = resolve
+  })
+  const calls = createFetch((url) => {
+    if (url.pathname === `/api/session/${sessionID}/prompt`) return deferred
+    // The server does not know about the in-flight admission yet.
+    if (url.pathname === `/api/session/${sessionID}/inbox`) return json({ data: [] })
+  }, events)
+  let sync!: ReturnType<typeof useData>
+  let ready!: () => void
+  const mounted = new Promise<void>((resolve) => {
+    ready = resolve
+  })
+
+  function Probe() {
+    sync = useData()
+    onMount(ready)
+    return <box />
+  }
+
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <ClientProvider api={createApi(calls.fetch)}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </ClientProvider>
+    </TestTuiContexts>
+  ))
+
+  try {
+    await mounted
+    const promise = sync.session.prompt({ sessionID, text: "hello" })
+    const settled = promise.then(
+      () => undefined,
+      (error) => error,
+    )
+
+    // Optimistic: the row renders before the server responds.
+    const optimistic = sync.session.pending.list(sessionID)[0]
+    expect(optimistic).toMatchObject({ sessionID, type: "user", payload: { text: "hello" }, delivery: "steer" })
+    const messageID = optimistic!.id
+    expect(messageID.startsWith("msg_")).toBe(true)
+    expect(sync.session.input.list(sessionID)).toEqual([messageID])
+    expect(sync.session.message.list(sessionID).map((message) => message.id)).toEqual([messageID])
+
+    // A pending re-fetch racing the in-flight admission cannot wipe the row.
+    await sync.session.pending.sync(sessionID)
+    expect(sync.session.pending.list(sessionID).map((item) => item.id)).toEqual([messageID])
+    expect(sync.session.input.list(sessionID)).toEqual([messageID])
+
+    // The durable echo upserts by ID instead of duplicating: server-loaded
+    // payload (files) and durable times replace the optimistic placeholder.
+    const received: string[] = []
+    const unsubscribe = sync.listen((event) => received.push(event.name))
+    const echoFile = { data: "aGVsbG8=", mime: "text/plain", source: { type: "uri" as const, uri: "file:///a.txt" } }
+    emitEvent(events, {
+      id: "evt_echo_1",
+      created: 5,
+      type: "session.inbox.enqueued",
+      durable: durable(sessionID),
+      data: {
+        sessionID,
+        inboxID: messageID,
+        item: { type: "user", payload: { text: "hello", files: [echoFile] }, delivery: "steer" },
+      },
+    })
+    await wait(() => received.includes("session.inbox.enqueued"))
+    unsubscribe()
+    expect(sync.session.pending.list(sessionID)).toEqual([
+      {
+        id: messageID,
+        sessionID,
+        timeCreated: 5,
+        type: "user",
+        payload: { text: "hello", files: [echoFile] },
+        delivery: "steer",
+      },
+    ])
+    const echoed = sync.session.message.list(sessionID)[0]
+    expect(echoed?.type).toBe("user")
+    if (echoed?.type !== "user") return
+    expect(echoed.time.created).toBe(5)
+    expect(echoed.files).toEqual([echoFile])
+
+    // A late transport failure after the echo must not delete acknowledged state.
+    release(json({ _tag: "UnknownError", message: "response lost" }, { status: 500 }))
+    expect(await settled).toBeDefined()
+    expect(sync.session.pending.list(sessionID).map((item) => item.id)).toEqual([messageID])
+    expect(sync.session.message.list(sessionID).map((message) => message.id)).toEqual([messageID])
+  } finally {
+    release(json({ _tag: "UnknownError", message: "cleanup" }, { status: 500 }))
+    app.renderer.destroy()
+  }
+})
+
+test("hydrates durable pending prompts into the visible transcript", async () => {
+  const sessionID = "session-1"
+  const item = {
+    id: "msg_pending_1",
+    sessionID,
+    timeCreated: 5,
+    type: "user" as const,
+    payload: { text: "waiting" },
+    delivery: "steer" as const,
+  }
+  const calls = createFetch((url) => {
+    if (url.pathname === `/api/session/${sessionID}/inbox`) return json({ data: [item] })
+    if (url.pathname === `/api/session/${sessionID}/message`) return json({ data: [], cursor: {} })
+  })
+  let sync!: ReturnType<typeof useData>
+  let ready!: () => void
+  const mounted = new Promise<void>((resolve) => {
+    ready = resolve
+  })
+
+  function Probe() {
+    sync = useData()
+    onMount(ready)
+    return <box />
+  }
+
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <ClientProvider api={createApi(calls.fetch)}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </ClientProvider>
+    </TestTuiContexts>
+  ))
+
+  try {
+    await mounted
+    await sync.session.pending.sync(sessionID)
+    expect(sync.session.message.list(sessionID)).toEqual([
+      { id: item.id, ...Expected.user("waiting"), time: { created: 5 } },
+    ])
+
+    await sync.session.message.sync(sessionID)
+    expect(sync.session.message.list(sessionID).map((message) => message.id)).toEqual([item.id])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("keeps the row when the response lands before the echo", async () => {
+  const events = createEventStream()
+  const sessionID = "session-1"
+  const messageID = "msg_early_1"
+  const admission = {
+    id: messageID,
+    sessionID,
+    timeCreated: 1,
+    type: "user",
+    payload: { text: "hello" },
+    delivery: "steer",
+  }
+  const calls = createFetch((url) => {
+    if (url.pathname === `/api/session/${sessionID}/prompt`) return json({ data: admission })
+    // The server's listings still miss the admission (projection lag).
+    if (url.pathname === `/api/session/${sessionID}/inbox`) return json({ data: [] })
+    if (url.pathname === `/api/session/${sessionID}/message`) return json({ data: [], cursor: {} })
+  }, events)
+  let sync!: ReturnType<typeof useData>
+  let ready!: () => void
+  const mounted = new Promise<void>((resolve) => {
+    ready = resolve
+  })
+
+  function Probe() {
+    sync = useData()
+    onMount(ready)
+    return <box />
+  }
+
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <ClientProvider api={createApi(calls.fetch)}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </ClientProvider>
+    </TestTuiContexts>
+  ))
+
+  try {
+    await mounted
+    await sync.session.prompt({ sessionID, id: messageID, text: "hello" })
+
+    // POST resolved but the echo has not arrived: racing pending and message
+    // re-fetches still cannot wipe the row.
+    await sync.session.pending.sync(sessionID)
+    sync.session.pending.invalidate(sessionID)
+    await sync.session.pending.sync(sessionID)
+    await sync.session.message.sync(sessionID)
+    sync.session.message.invalidate(sessionID)
+    await sync.session.message.sync(sessionID)
+    expect(sync.session.pending.list(sessionID).map((item) => item.id)).toEqual([messageID])
+    expect(sync.session.input.list(sessionID)).toEqual([messageID])
+    expect(sync.session.message.list(sessionID).map((message) => message.id)).toEqual([messageID])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("rolls back an optimistic prompt the server rejected", async () => {
+  const events = createEventStream()
+  const sessionID = "session-1"
+  const calls = createFetch((url) => {
+    if (url.pathname === `/api/session/${sessionID}/prompt`)
+      return json({ _tag: "InvalidRequestError", message: "invalid" }, { status: 400 })
+  }, events)
+  let sync!: ReturnType<typeof useData>
+  let ready!: () => void
+  const mounted = new Promise<void>((resolve) => {
+    ready = resolve
+  })
+
+  function Probe() {
+    sync = useData()
+    onMount(ready)
+    return <box />
+  }
+
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <ClientProvider api={createApi(calls.fetch)}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </ClientProvider>
+    </TestTuiContexts>
+  ))
+
+  try {
+    await mounted
+    const promise = sync.session.prompt({ sessionID, text: "rejected" })
+    expect(sync.session.message.list(sessionID)).toHaveLength(1)
+
+    await expect(promise).rejects.toThrow()
+    expect(sync.session.pending.list(sessionID)).toEqual([])
+    expect(sync.session.input.list(sessionID)).toEqual([])
+    expect(sync.session.message.list(sessionID)).toEqual([])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("a retry under the same client-minted ID cannot duplicate rows", async () => {
+  const events = createEventStream()
+  const sessionID = "session-1"
+  const messageID = "msg_retry_1"
+  const admission = {
+    id: messageID,
+    sessionID,
+    timeCreated: 1,
+    type: "user",
+    payload: { text: "hello" },
+    delivery: "steer",
+  }
+  const posts: string[] = []
+  let fail = false
+  const calls = createFetch(async (url, request) => {
+    if (url.pathname === `/api/session/${sessionID}/prompt`) {
+      posts.push(((await request.json()) as { id: string }).id)
+      if (fail) return json({ _tag: "UnknownError", message: "transient" }, { status: 500 })
+      return json({ data: admission })
+    }
+  }, events)
+  let sync!: ReturnType<typeof useData>
+  let ready!: () => void
+  const mounted = new Promise<void>((resolve) => {
+    ready = resolve
+  })
+
+  function Probe() {
+    sync = useData()
+    onMount(ready)
+    return <box />
+  }
+
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <ClientProvider api={createApi(calls.fetch)}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </ClientProvider>
+    </TestTuiContexts>
+  ))
+
+  try {
+    await mounted
+    await sync.session.prompt({ sessionID, id: messageID, text: "hello" })
+    // Retry with the identical payload: server admission is idempotent per ID,
+    // and the local dedupe keeps a single row.
+    await sync.session.prompt({ sessionID, id: messageID, text: "hello" })
+
+    expect(posts).toEqual([messageID, messageID])
+    expect(sync.session.pending.list(sessionID).map((item) => item.id)).toEqual([messageID])
+    expect(sync.session.input.list(sessionID)).toEqual([messageID])
+    expect(sync.session.message.list(sessionID).map((message) => message.id)).toEqual([messageID])
+
+    // The row is acknowledged (echo applied): a FAILED retry under the same
+    // ID must not roll back acknowledged state.
+    const received: string[] = []
+    const unsubscribe = sync.listen((event) => received.push(event.name))
+    emitEvent(events, {
+      id: "evt_ack_1",
+      created: 2,
+      type: "session.inbox.enqueued",
+      durable: durable(sessionID),
+      data: { sessionID, inboxID: messageID, item: { type: "user", payload: { text: "hello" }, delivery: "steer" } },
+    })
+    await wait(() => received.includes("session.inbox.enqueued"))
+    unsubscribe()
+    fail = true
+    await expect(sync.session.prompt({ sessionID, id: messageID, text: "hello" })).rejects.toThrow()
+    expect(sync.session.pending.list(sessionID).map((item) => item.id)).toEqual([messageID])
+    expect(sync.session.message.list(sessionID).map((message) => message.id)).toEqual([messageID])
   } finally {
     app.renderer.destroy()
   }

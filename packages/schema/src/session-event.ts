@@ -9,12 +9,14 @@ import { Model } from "./model.js"
 import { NonNegativeInt, PositiveInt, RelativePath } from "./schema.js"
 import { FileAttachment } from "./prompt.js"
 import { SessionID } from "./session-id.js"
+import { SessionMetadata } from "./session-metadata.js"
 import { Location } from "./location.js"
 import { SessionMessage } from "./session-message.js"
 import { Revert } from "./session-revert.js"
 import { Shell as ShellSchema } from "./shell.js"
 import { SessionError } from "./session-error.js"
 import { Instruction } from "./instruction.js"
+import { InstructionEntry } from "./instruction-entry.js"
 import { Agent } from "./agent.js"
 import { Skill as SkillSchema } from "./skill.js"
 import { Money } from "./money.js"
@@ -58,6 +60,8 @@ export const Created = Event.durable({
     title: Schema.String.pipe(optional),
     agent: Agent.ID.pipe(optional),
     model: Model.Ref.pipe(optional),
+    /** Host-supplied annotations resolved at creation, including any inherited from a parent. */
+    metadata: SessionMetadata.pipe(optional),
     version: Schema.String,
   },
 })
@@ -105,6 +109,29 @@ export const Renamed = Event.durable({
 })
 export type Renamed = typeof Renamed.Type
 
+export const Viewed = Event.durable({
+  type: "session.viewed",
+  ...options,
+  schema: {
+    ...Base,
+    /** Epoch-millisecond idle watermark the viewer observed; projection never marks a newer idle transition viewed. */
+    idle: Schema.Finite,
+  },
+})
+export type Viewed = typeof Viewed.Type
+
+export const MessageContentUpdated = Event.durable({
+  type: "session.message.content.updated",
+  ...options,
+  schema: {
+    ...Base,
+    messageID: SessionMessage.ID,
+    // Public events are framed directly, so timestamps must already be encoded.
+    content: Schema.Array(SessionMessage.AssistantContentEncoded),
+  },
+})
+export type MessageContentUpdated = typeof MessageContentUpdated.Type
+
 export const UsageRecorded = Event.durable({
   type: "session.usage.recorded",
   ...options,
@@ -148,6 +175,7 @@ export const Forked = Event.durable({
     parentID: SessionID,
     boundary: SessionFork.Boundary,
     instructions: Instruction.Values.pipe(optional),
+    instructionEntries: InstructionEntry.Snapshot.pipe(optional),
   },
 })
 export type Forked = typeof Forked.Type
@@ -291,6 +319,17 @@ export namespace Step {
   })
   export type Started = typeof Started.Type
 
+  /** Records the provider response-body boundary independently of tool settlement. */
+  export const Streamed = Event.durable({
+    type: "session.step.streamed",
+    ...options,
+    schema: {
+      ...Base,
+      assistantMessageID: SessionMessage.ID,
+    },
+  })
+  export type Streamed = typeof Streamed.Type
+
   export const Ended = Event.durable({
     type: "session.step.ended",
     ...options,
@@ -298,6 +337,8 @@ export namespace Step {
       ...Base,
       assistantMessageID: SessionMessage.ID,
       finish: FinishReason,
+      rawFinish: Schema.String.pipe(optional),
+      providerState: SessionMessage.ProviderState.pipe(optional),
       cost: Money.USD,
       tokens: TokenUsage.Info,
       snapshot: Snapshot.ID.pipe(optional),
@@ -313,6 +354,9 @@ export namespace Step {
       ...Base,
       assistantMessageID: SessionMessage.ID,
       error: SessionError.Error,
+      finish: Schema.Literals(["content-filter"]).pipe(optional),
+      rawFinish: Schema.String.pipe(optional),
+      providerState: SessionMessage.ProviderState.pipe(optional),
       cost: Money.USD.pipe(optional),
       tokens: TokenUsage.Info.pipe(optional),
       snapshot: Snapshot.ID.pipe(optional),
@@ -553,6 +597,8 @@ export namespace Compaction {
     schema: {
       ...Base,
       reason: Started.data.fields.reason,
+      model: SessionMessage.CompactionCompleted.fields.model,
+      providerState: SessionMessage.CompactionCompleted.fields.providerState,
       text: Schema.String,
       recent: Schema.String,
     },
@@ -592,6 +638,7 @@ export const Definitions = Event.inventory(
   ModelSelected,
   Moved,
   Renamed,
+  Viewed,
   UsageUpdated,
   Deleted,
   Forked,
@@ -609,6 +656,7 @@ export const Definitions = Event.inventory(
   Shell.Started,
   Shell.Ended,
   Step.Started,
+  Step.Streamed,
   Step.Ended,
   Step.Failed,
   Text.Started,
@@ -633,6 +681,7 @@ export const Definitions = Event.inventory(
   RevertEvent.Staged,
   RevertEvent.Cleared,
   RevertEvent.Committed,
+  MessageContentUpdated,
 )
 
 // UsageRecorded is durable but internal: excluded from Definitions so it never reaches the public manifest.

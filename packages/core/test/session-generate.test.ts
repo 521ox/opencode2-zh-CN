@@ -9,6 +9,7 @@ import {
   type LLMRequest,
 } from "@opencode-ai/ai"
 import { OpenAIChat } from "@opencode-ai/ai/protocols"
+import type { StreamOptions } from "@opencode-ai/ai/route"
 import { Agent } from "@opencode-ai/core/agent"
 import { Database } from "@opencode-ai/core/database/database"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
@@ -44,22 +45,27 @@ import {
 import { SessionStore } from "@opencode-ai/core/session/store"
 import { SkillInstructions } from "@opencode-ai/core/skill/instructions"
 import { PluginHooks } from "@opencode-ai/core/plugin/hooks"
+import { PlanPlugin } from "@opencode-ai/core/plugin/plan"
 import { PluginSupervisor } from "@opencode-ai/core/plugin/supervisor"
 import { Tool } from "@opencode-ai/core/tool"
+import { Global } from "@opencode-ai/util/global"
 import { asc, eq } from "drizzle-orm"
 import { Effect, Layer, Schema, Stream } from "effect"
 import { testEffect } from "./lib/effect"
+import { agentHost, host } from "./plugin/host"
 
 const requests: LLMRequest[] = []
+const options: Array<StreamOptions | undefined> = []
 let instruction: string | Instructions.Unavailable = "Initial context"
 const sessionID = SessionSchema.ID.make("ses_generate_test")
 
 const model = LanguageModel.make({ id: "generate-model", provider: "test", route: OpenAIChat.route })
 const client = Layer.mock(LLMClient.Service)({
   stream: () => Stream.die(new Error("unused")),
-  generate: (request) =>
+  generate: (request, requestOptions) =>
     Effect.sync(() => {
       requests.push(request)
+      options.push(requestOptions)
       const response = LLMResponse.fromEvents([
         LLMEvent.stepStart({ index: 0 }),
         LLMEvent.textStart({ id: "generate" }),
@@ -82,6 +88,7 @@ const models = Layer.mock(SessionRunnerModel.Service)({
       SessionRunnerModel.resolved(model, {
         capabilities: { tools: true, input: ["text", "image"], output: ["text"] },
         cost: [],
+        limit: { context: 200_000, output: 32_000 },
       }),
     ),
 })
@@ -101,22 +108,26 @@ const builtins = Layer.mock(InstructionBuiltIns.Service, {
 })
 const discovery = Layer.mock(InstructionDiscovery.Service, {
   project: true,
+  global: true,
   load: () => Effect.succeed(Instructions.empty),
 })
 const skills = Layer.mock(SkillInstructions.Service, { load: () => Effect.succeed(Instructions.empty) })
 const references = Layer.mock(ReferenceInstructions.Service, { load: () => Effect.succeed(Instructions.empty) })
 const mcp = Layer.mock(McpInstructions.Service, { load: () => Effect.succeed(Instructions.empty) })
-const plugins = Layer.mock(PluginSupervisor.Service, { flush: Effect.void })
+const plugins = Layer.mock(PluginSupervisor.Service, { awaitActivation: Effect.void })
 const tools = Layer.mock(Tool.Service, {
   snapshot: () =>
     Effect.succeed({
-      codeModeCatalog: [
-        {
-          path: "captured.lookup",
-          description: "Captured Code Mode catalog",
-          signature: "tools.captured.lookup(input: {}): Promise<string>",
-        },
-      ],
+      codeModeCatalog: {
+        tools: [
+          {
+            type: "tool",
+            name: "captured.lookup",
+            description: "Captured Code Mode catalog",
+            signature: "tools.captured.lookup(input: {}): Promise<string>",
+          },
+        ],
+      },
       definitions: [ToolDefinition.make({ name: "lookup", description: "Lookup", inputSchema: { type: "object" } })],
       execute: () => Effect.die(new Error("unused")),
     }),
@@ -128,6 +139,7 @@ const it = testEffect(
     LayerNode.group([
       Database.node,
       Bus.node,
+      Project.node,
       SessionProjector.node,
       SessionStore.node,
       Agent.node,
@@ -196,9 +208,10 @@ const setup = Effect.gen(function* () {
   const { db } = yield* Database.Service
   const bus = yield* Bus.Service
   const agents = yield* Agent.Service
+  const projects = yield* Project.Service
   const instructionBuiltIns = yield* InstructionBuiltIns.Service
-  yield* agents.transform((draft) =>
-    draft.update(Agent.ID.make("build"), (agent) => {
+  yield* agents.transform((editor) =>
+    editor.update(Agent.ID.make("build"), (agent) => {
       agent.mode = "primary"
     }),
   )
@@ -206,7 +219,7 @@ const setup = Effect.gen(function* () {
     .insert(SessionTable)
     .values({
       id: sessionID,
-      project_id: Project.ID.global,
+      project_id: (yield* projects.resolve(AbsolutePath.make("/project"))).id,
       slug: "generate-test",
       directory: "/project",
       title: "Generate test",
@@ -218,125 +231,179 @@ const setup = Effect.gen(function* () {
   return { db, bus, instructions: yield* instructionBuiltIns.load(sessionID) }
 })
 
-it.effect("generates from fresh settled Session context without durable mutation", () =>
-  Effect.gen(function* () {
-    requests.length = 0
-    instruction = "Initial context"
-    const { db, bus, instructions } = yield* setup
-    yield* InstructionState.prepare(db, bus, instructions, sessionID)
-    const existing = SessionMessage.ID.create()
-    yield* bus.publish(SessionEvent.InboxEnqueued, {
-      sessionID,
-      inboxID: existing,
-      item: { type: "user", payload: { text: "Existing durable context" }, delivery: "steer" },
-    })
-    yield* bus.publish(SessionEvent.InboxDelivered, {
-      sessionID,
-      inboxID: existing,
-    })
-    const settledAssistant = SessionMessage.ID.create()
-    yield* bus.publish(SessionEvent.Step.Started, {
-      sessionID,
-      assistantMessageID: settledAssistant,
-      agent: Agent.ID.make("build"),
-      model: { id: ID.make("generate-model"), providerID: Provider.ID.make("test") },
-    })
-    yield* bus.publish(SessionEvent.Text.Started, {
-      sessionID,
-      assistantMessageID: settledAssistant,
-      ordinal: 0,
-    })
-    yield* bus.publish(SessionEvent.Text.Ended, {
-      sessionID,
-      assistantMessageID: settledAssistant,
-      ordinal: 0,
-      text: "Settled partial answer",
-    })
-    const activeAssistant = SessionMessage.ID.create()
-    yield* bus.publish(SessionEvent.Step.Started, {
-      sessionID,
-      assistantMessageID: activeAssistant,
-      agent: Agent.ID.make("build"),
-      model: { id: ID.make("generate-model"), providerID: Provider.ID.make("test") },
-    })
-    yield* bus.publish(SessionEvent.Tool.Input.Started, {
-      sessionID,
-      assistantMessageID: activeAssistant,
-      id: "active-call",
-      name: "echo",
-    })
-    yield* bus.publish(SessionEvent.Tool.Input.Ended, {
-      sessionID,
-      assistantMessageID: activeAssistant,
-      id: "active-call",
-      text: "{}",
-    })
-    yield* bus.publish(SessionEvent.Tool.Called, {
-      sessionID,
-      assistantMessageID: activeAssistant,
-      id: "active-call",
-      input: {},
-      executed: false,
-    })
-    yield* bus.publish(SessionEvent.InboxEnqueued, {
-      sessionID,
-      inboxID: SessionMessage.ID.create(),
-      item: { type: "user", payload: { text: "Queued input must remain invisible" }, delivery: "queue" },
-    })
-    instruction = "Changed context"
-    const before = yield* durableState(db, sessionID)
-    const hooks = yield* PluginHooks.Service
-    yield* hooks.register("session", "context", (event) =>
-      Effect.sync(() => {
-        event.system = [SystemPart.make("Hooked system"), ...event.system]
-        if (event.tools.lookup) event.tools.lookup.description = "Hooked lookup"
-      }),
-    )
+it.effect(
+  "generates from fresh settled Session context without durable mutation",
+  () =>
+    Effect.gen(function* () {
+      requests.length = 0
+      options.length = 0
+      instruction = "Initial context"
+      const { db, bus, instructions } = yield* setup
+      yield* InstructionState.prepare(db, bus, instructions, sessionID)
+      const existing = SessionMessage.ID.create()
+      yield* bus.publish(SessionEvent.InboxEnqueued, {
+        sessionID,
+        inboxID: existing,
+        item: { type: "user", payload: { text: "Existing durable context" }, delivery: "steer" },
+      })
+      yield* bus.publish(SessionEvent.InboxDelivered, {
+        sessionID,
+        inboxID: existing,
+      })
+      const settledAssistant = SessionMessage.ID.create()
+      yield* bus.publish(SessionEvent.Step.Started, {
+        sessionID,
+        assistantMessageID: settledAssistant,
+        agent: Agent.ID.make("build"),
+        model: { id: ID.make("generate-model"), providerID: Provider.ID.make("test") },
+      })
+      yield* bus.publish(SessionEvent.Text.Started, {
+        sessionID,
+        assistantMessageID: settledAssistant,
+        ordinal: 0,
+      })
+      yield* bus.publish(SessionEvent.Text.Ended, {
+        sessionID,
+        assistantMessageID: settledAssistant,
+        ordinal: 0,
+        text: "Settled partial answer",
+      })
+      const activeAssistant = SessionMessage.ID.create()
+      yield* bus.publish(SessionEvent.Step.Started, {
+        sessionID,
+        assistantMessageID: activeAssistant,
+        agent: Agent.ID.make("build"),
+        model: { id: ID.make("generate-model"), providerID: Provider.ID.make("test") },
+      })
+      yield* bus.publish(SessionEvent.Tool.Input.Started, {
+        sessionID,
+        assistantMessageID: activeAssistant,
+        id: "active-call",
+        name: "echo",
+      })
+      yield* bus.publish(SessionEvent.Tool.Input.Ended, {
+        sessionID,
+        assistantMessageID: activeAssistant,
+        id: "active-call",
+        text: "{}",
+      })
+      yield* bus.publish(SessionEvent.Tool.Called, {
+        sessionID,
+        assistantMessageID: activeAssistant,
+        id: "active-call",
+        input: {},
+        executed: false,
+      })
+      yield* bus.publish(SessionEvent.InboxEnqueued, {
+        sessionID,
+        inboxID: SessionMessage.ID.create(),
+        item: { type: "user", payload: { text: "Queued input must remain invisible" }, delivery: "queue" },
+      })
+      instruction = "Changed context"
+      const before = yield* durableState(db, sessionID)
+      const hooks = yield* PluginHooks.Service
+      let modelRequestHook = false
+      yield* hooks.register("session", "context", (event) =>
+        Effect.sync(() => {
+          event.system = [SystemPart.make("Hooked system"), ...event.system]
+          if (event.tools.lookup) event.tools.lookup.description = "Hooked lookup"
+        }),
+      )
+      yield* hooks.register("session", "model.request", () =>
+        Effect.sync(() => {
+          modelRequestHook = true
+        }),
+      )
+      yield* hooks.register("session", "http.request", () => Effect.void)
 
-    const generate = yield* SessionGenerate.Service
-    const result = yield* generate.generate({ sessionID, prompt: "Summarize privately" })
+      const generate = yield* SessionGenerate.Service
+      const result = yield* generate.generate({ sessionID, prompt: "Summarize privately" })
 
-    expect(result).toBe("Transient answer")
-    expect(requests).toHaveLength(1)
-    expect(requests[0]?.model).toBe(model)
-    expect(requests[0]?.system[0]?.text).toBe("Hooked system")
-    expect(requests[0]?.system.map((part) => part.text)).toContain("Initial context")
-    expect(requests[0]?.http?.headers).toMatchObject({ "X-Session-Id": sessionID })
-    expect(requests[0]?.promptCacheKey).toBe(sessionID)
-    const instructionUpdates = requests[0]?.messages.flatMap((message) =>
-      message.role === "system"
-        ? message.content.flatMap((content) => (content.type === "text" ? [content.text] : []))
-        : [],
-    )
-    expect(instructionUpdates).toHaveLength(1)
-    expect(instructionUpdates?.[0]).toContain("Changed context")
-    expect(instructionUpdates?.[0]).toContain("tools.captured.lookup(input: {}): Promise<string>")
-    expect(userTexts(requests[0])).toEqual(["Existing durable context", "Summarize privately"])
-    expect(
-      requests[0]?.messages.flatMap((message) =>
-        message.role === "assistant"
+      expect(result).toBe("Transient answer")
+      expect(requests).toHaveLength(1)
+      expect(modelRequestHook).toBe(true)
+      expect(requests[0]?.model).toBe(model)
+      expect(requests[0]?.system[0]?.text).toBe("Hooked system")
+      expect(requests[0]?.system.map((part) => part.text)).toContain("Initial context")
+      expect(requests[0]?.http?.headers).toMatchObject({ "X-Session-Id": sessionID })
+      expect(requests[0]?.promptCacheKey).toBe(sessionID)
+      const instructionUpdates = requests[0]?.messages.flatMap((message) =>
+        message.role === "system"
           ? message.content.flatMap((content) => (content.type === "text" ? [content.text] : []))
           : [],
-      ),
-    ).toEqual(["Settled partial answer"])
-    expect(requests[0]?.tools).toMatchObject([{ name: "lookup", description: "Hooked lookup" }])
-    expect(requests[0]?.toolChoice).toBeUndefined()
+      )
+      expect(instructionUpdates).toHaveLength(1)
+      expect(instructionUpdates?.[0]).toContain("Changed context")
+      expect(instructionUpdates?.[0]).toContain("tools.captured.lookup(input: {}): Promise<string>")
+      expect(userTexts(requests[0])).toEqual(["Existing durable context", "Summarize privately"])
+      expect(
+        requests[0]?.messages.flatMap((message) =>
+          message.role === "assistant"
+            ? message.content.flatMap((content) => (content.type === "text" ? [content.text] : []))
+            : [],
+        ),
+      ).toEqual(["Settled partial answer"])
+      expect(requests[0]?.tools).toMatchObject([{ name: "lookup", description: "Hooked lookup" }])
+      expect(requests[0]?.toolChoice).toBeUndefined()
+      expect(options[0]?.http).toBeFunction()
+      expect(options[0]?.webSocket).toBeUndefined()
+      expect(yield* durableState(db, sessionID)).toEqual(before)
+    }),
+  { timeout: 15_000 },
+)
+
+it.effect("injects a Plan reminder during generation without durable mutation", () =>
+  Effect.gen(function* () {
+    requests.length = 0
+    options.length = 0
+    instruction = "Initial context"
+    const { db } = yield* setup
+    const agents = yield* Agent.Service
+    const hooks = yield* PluginHooks.Service
+    yield* PlanPlugin.Plugin.effect(
+      host({
+        agent: agentHost(agents),
+        tool: {
+          transform: () => Effect.die("unused tool.transform"),
+          reload: () => Effect.void,
+          hook: () => Effect.succeed({ dispose: Effect.void }),
+        },
+        session: { hook: (name, callback) => hooks.register("session", name, callback) },
+      }),
+    ).pipe(Effect.provideService(Global.Service, Global.Service.of({ ...Global.make(), home: "/plan" })))
+    yield* db
+      .update(SessionTable)
+      .set({ agent: Agent.ID.make("plan") })
+      .where(eq(SessionTable.id, sessionID))
+      .run()
+      .pipe(Effect.orDie)
+    const before = yield* durableState(db, sessionID)
+    const generate = yield* SessionGenerate.Service
+
+    expect(yield* generate.generate({ sessionID, prompt: "Summarize privately" })).toBe("Transient answer")
+    expect(requests).toHaveLength(1)
+    const user = userTexts(requests[0]!)
+    expect(user[0]).toContain("You are in Plan mode")
+    expect(user.at(-1)).toBe("Summarize privately")
     expect(yield* durableState(db, sessionID)).toEqual(before)
   }),
 )
 
-it.effect("blocks unavailable initial instructions before generation", () =>
-  Effect.gen(function* () {
-    requests.length = 0
-    instruction = Instructions.unavailable
-    const { db } = yield* setup
-    const before = yield* durableState(db, sessionID)
-    const generate = yield* SessionGenerate.Service
+it.effect(
+  "blocks unavailable initial instructions before generation",
+  () =>
+    Effect.gen(function* () {
+      requests.length = 0
+      instruction = Instructions.unavailable
+      const { db } = yield* setup
+      const before = yield* durableState(db, sessionID)
+      const generate = yield* SessionGenerate.Service
 
-    const error = yield* generate.generate({ sessionID, prompt: "Summarize privately" }).pipe(Effect.flip)
+      const error = yield* generate.generate({ sessionID, prompt: "Summarize privately" }).pipe(Effect.flip)
 
-    expect(error).toBeInstanceOf(Instructions.InitializationBlocked)
-    expect(requests).toEqual([])
-    expect(yield* durableState(db, sessionID)).toEqual(before)
-  }),
+      expect(error).toBeInstanceOf(Instructions.InitializationBlocked)
+      expect(requests).toEqual([])
+      expect(yield* durableState(db, sessionID)).toEqual(before)
+    }),
+  { timeout: 15_000 },
 )

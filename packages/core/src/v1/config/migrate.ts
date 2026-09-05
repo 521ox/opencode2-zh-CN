@@ -26,7 +26,12 @@ export function migrate(info: typeof ConfigV1.Info.Type) {
         shell: info.shell,
         model: modelSelection(info.model),
         default_agent: info.default_agent,
-        autoupdate: info.autoupdate,
+        update:
+          info.autoupdate === false
+            ? "disable"
+            : info.autoupdate === "notify" || info.autoupdate === true
+              ? "notify"
+              : undefined,
         share: info.share ?? (info.autoshare ? "auto" : undefined),
         enterprise: info.enterprise,
         username: info.username,
@@ -165,7 +170,7 @@ export function commands(info?: Readonly<Record<string, ConfigCommandV1.Info>>) 
         description: command.description,
         agent: command.agent,
         model: modelSelection(command.model, command.variant),
-        subtask: command.subtask,
+        subagent: command.subtask,
       },
     ]),
   )
@@ -239,17 +244,16 @@ export function migrateProvider(sourceID: string, info: ConfigProviderV1.Info) {
 
 function migrateStandardProvider(info: ConfigProviderV1.Info) {
   const options = ConfigProviderOptionsV1.provider(info.options ?? {})
-  const nativeOpenAI = info.sdk === "opencode-openai"
   return {
     name: info.name,
     env: info.env,
-    package: nativeOpenAI ? "@opencode-ai/ai/providers/openai" : info.npm ? Provider.aisdk(info.npm) : undefined,
+    package: info.npm ? Provider.aisdk(info.npm) : undefined,
     settings: info.api ? { ...options.settings, baseURL: info.api } : info.options ? options.settings : undefined,
     headers: info.options && options.headers,
     body: info.options && options.body,
     models:
       info.models &&
-      Object.fromEntries(Object.entries(info.models).map(([name, model]) => [name, migrateModel(model, nativeOpenAI)])),
+      Object.fromEntries(Object.entries(info.models).map(([name, model]) => [name, migrateModel(model)])),
   }
 }
 
@@ -295,9 +299,8 @@ export function providerID(input: string) {
   return input
 }
 
-function migrateModel(info: typeof ConfigProviderV1.Model.Type, nativeOpenAI = false) {
+function migrateModel(info: typeof ConfigProviderV1.Model.Type) {
   const settings = info.options && ConfigProviderOptionsV1.model(info.options)
-  const nativeModel = nativeOpenAI && (info.provider?.npm === undefined || info.provider.npm === "@ai-sdk/openai")
   const costs = info.cost && [
     {
       input: info.cost.input,
@@ -315,16 +318,21 @@ function migrateModel(info: typeof ConfigProviderV1.Model.Type, nativeOpenAI = f
         ]
       : []),
   ]
+  const defaults = Model.Capabilities.default()
   const capabilities =
     info.tool_call !== undefined || info.modalities?.input !== undefined || info.modalities?.output !== undefined
-      ? { tools: info.tool_call ?? false, input: info.modalities?.input ?? [], output: info.modalities?.output ?? [] }
+      ? {
+          tools: info.tool_call ?? defaults.tools,
+          input: info.modalities?.input ?? defaults.input,
+          output: info.modalities?.output ?? defaults.output,
+        }
       : undefined
   return {
     modelID: info.id,
     family: info.family,
     name: info.name,
     compatibility: Model.compatibility(info.interleaved),
-    package: info.provider?.npm && !nativeModel ? Provider.aisdk(info.provider.npm) : undefined,
+    package: info.provider?.npm ? Provider.aisdk(info.provider.npm) : undefined,
     settings: info.provider?.api ? { ...settings, baseURL: info.provider.api } : settings,
     capabilities,
     headers: info.headers,

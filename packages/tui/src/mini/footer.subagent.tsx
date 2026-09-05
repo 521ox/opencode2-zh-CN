@@ -158,6 +158,7 @@ export function RunFooterSubagentBody(props: {
                 <Show when={subtitle().length > 0}>
                   <span style={{ fg: footer().muted }}>{"  " + subtitle()}</span>
                 </Show>
+                <span style={{ fg: footer().muted }}>{` · ${current().sessionID}`}</span>
               </text>
               <Show when={interruptHint()}>
                 {(hint) => (

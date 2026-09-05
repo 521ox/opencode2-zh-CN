@@ -5,8 +5,8 @@
 // The default `"auto"` shape places breakpoints at the last tool definition,
 // the first and last distinct system parts, and the conversation tail. This
 // exposes reusable tool, base-agent, project, and session prefixes while
-// advancing the tail after each tool result keeps the previous cache entry
-// within Anthropic's 20-block lookback during long agent turns.
+// advancing the tail after each tool result keeps recent conversation prefixes
+// reusable during long agent runs.
 //
 // Manual `cache: CacheHint` placements on individual parts are preserved and
 // count against the four-breakpoint budget; auto only fills remaining slots.
@@ -23,9 +23,7 @@ const NONE: CachePolicyObject = {}
 const BREAKPOINT_CAP = 4
 
 // Resolution rules:
-//   - undefined   → "auto" — caching is on by default. The math favors it:
-//                   Anthropic 5m-cache write is 1.25x base, read is 0.1x,
-//                   so a single reuse within 5 minutes already wins.
+//   - undefined   → "auto" — caching is on by default.
 //   - "auto"      → tools + first/last system + final message boundary.
 //   - "none"      → no auto placement; manual `CacheHint`s still flow.
 //   - object form → exactly what the caller asked for.
@@ -38,7 +36,12 @@ const resolve = (policy: CachePolicy | undefined): CachePolicyObject => {
 // Protocols whose wire format ignores inline cache markers (OpenAI's implicit
 // prefix caching, Gemini's implicit + out-of-band CachedContent). Skip the
 // whole policy pass for these — emitting hints would be harmless but pointless.
-const RESPECTS_INLINE_HINTS = new Set(["anthropic-messages", "bedrock-converse", "openrouter"])
+const RESPECTS_INLINE_HINTS = new Set([
+  "anthropic-messages",
+  "google-vertex-messages",
+  "bedrock-converse",
+  "openrouter",
+])
 
 const makeHint = (ttlSeconds: number | undefined): CacheHint =>
   ttlSeconds !== undefined ? new CacheHint({ type: "ephemeral", ttlSeconds }) : new CacheHint({ type: "ephemeral" })

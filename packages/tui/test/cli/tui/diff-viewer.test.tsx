@@ -29,7 +29,7 @@ test("closing the diff viewer returns to the route it opened from", async () => 
   try {
     expect(viewer.current()).toEqual({
       type: "plugin",
-      id: "diff-viewer",
+      id: "opencode.diffs",
       name: "diff",
       data: { mode: "working", sessionID: "session-1", returnRoute: startRoute },
     })
@@ -43,6 +43,18 @@ test("closing the diff viewer returns to the route it opened from", async () => 
 
     expect(viewer.commands.has("diff.close")).toBe(true)
     viewer.commands.get("diff.close")!.run()
+    expect(viewer.current()).toEqual(startRoute)
+  } finally {
+    viewer.app.renderer.destroy()
+  }
+})
+
+test("ctrl+c closes the diff viewer without exiting the application", async () => {
+  const viewer = await renderDiffViewer([])
+
+  try {
+    viewer.app.mockInput.pressKey("c", { ctrl: true })
+    await viewer.app.waitFor(() => viewer.current().type !== "plugin")
     expect(viewer.current()).toEqual(startRoute)
   } finally {
     viewer.app.renderer.destroy()
@@ -207,7 +219,7 @@ async function renderDiffViewer(
             navigate(destination: Destination) {
               setCurrent(
                 destination.type === "plugin" && !("id" in destination)
-                  ? { ...destination, id: "diff-viewer" }
+                  ? { ...destination, id: "opencode.diffs" }
                   : destination,
               )
             },
@@ -334,7 +346,7 @@ test("branch diff source requests branch VCS diff", async () => {
   const viewer = await renderDiffViewer([], {
     initialRoute: {
       type: "plugin",
-      id: "diff-viewer",
+      id: "opencode.diffs",
       name: "diff",
       data: { mode: "branch", sessionID: "session-1", returnRoute: startRoute },
     },
@@ -342,7 +354,7 @@ test("branch diff source requests branch VCS diff", async () => {
   try {
     expect(viewer.current()).toEqual({
       type: "plugin",
-      id: "diff-viewer",
+      id: "opencode.diffs",
       name: "diff",
       data: { mode: "branch", sessionID: "session-1", returnRoute: startRoute },
     })

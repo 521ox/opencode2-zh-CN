@@ -50,6 +50,10 @@ test("resolution groups Effect-native lifecycle operations only for the managed 
     const explicit = await runPromise(ServerConnection.resolve({ server: server.url.toString() }))
     expect(explicit.endpoint.url).toBe(server.url.toString())
     expect(explicit.service).toBeUndefined()
+
+    await expect(runPromise(ServerConnection.resolve({ server: server.url.toString(), standalone: true }))).rejects.toThrow(
+      "--server and --standalone cannot be combined",
+    )
   } finally {
     await server.stop(true)
     await fs.rm(root, { recursive: true, force: true })

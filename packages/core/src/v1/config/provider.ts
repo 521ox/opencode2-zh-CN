@@ -80,9 +80,6 @@ export const Info = Schema.Struct({
   env: Schema.optional(Schema.mutable(Schema.Array(Schema.String))),
   id: Schema.optional(Schema.String),
   npm: Schema.optional(Schema.String),
-  sdk: Schema.optional(Schema.Literals(["ai-sdk", "opencode-openai"])).annotate({
-    description: "Model execution SDK. Defaults to ai-sdk when omitted.",
-  }),
   whitelist: Schema.optional(Schema.mutable(Schema.Array(Schema.String))),
   blacklist: Schema.optional(Schema.mutable(Schema.Array(Schema.String))),
   options: Schema.optional(

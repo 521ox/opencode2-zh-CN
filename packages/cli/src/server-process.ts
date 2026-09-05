@@ -1,18 +1,18 @@
 export * as ServerProcess from "./server-process"
 
 import { NodeServices } from "@effect/platform-node"
-import { Service, type DiscoverOptions, type Info } from "@opencode-ai/client/effect/service"
+import { Service, type DiscoverOptions } from "@opencode-ai/client/effect/service"
 import { LayerNode } from "@opencode-ai/util/effect/layer-node"
 import { Global } from "@opencode-ai/util/global"
-import { OPENCODE_CHANNEL, OPENCODE_VERSION } from "./version"
+import { OPENCODE_ARTIFACT, OPENCODE_CHANNEL, OPENCODE_VERSION } from "./version"
 import { AppProcess } from "@opencode-ai/util/process"
 import { randomBytes, randomUUID } from "node:crypto"
-import path from "node:path"
-import { Effect, FileSystem, Option, Redacted, Schedule, Schema } from "effect"
+import { Effect, Option, Redacted, Schedule, Schema } from "effect"
+import { PersistentPty } from "@opencode-ai/schema/persistent-pty"
 import { HttpServer } from "effect/unstable/http"
 import { Env } from "./env"
 import { ServiceConfig } from "./services/service-config"
-import { Updater } from "./services/updater"
+import { ServiceRegistration } from "./services/service-registration"
 import { WebUi } from "./services/web-ui"
 
 export type Mode = "default" | "service" | "stdio"
@@ -26,7 +26,6 @@ export type Options = {
 // The process effect lives until server shutdown; tracing it would parent every request to one process-lifetime trace.
 export const run = Effect.fnUntraced(function* (options: Options) {
   return yield* processEffect(options).pipe(
-    Effect.provide(Updater.layer),
     Effect.provide(
       LayerNode.compile(LayerNode.group([Global.node, AppProcess.node]), [
         [
@@ -40,6 +39,14 @@ export const run = Effect.fnUntraced(function* (options: Options) {
 })
 
 const processEffect = Effect.fnUntraced(function* (options: Options) {
+  const inherited = process.env.OPENCODE_PTY_HANDOFF
+  delete process.env.OPENCODE_PTY_HANDOFF
+  const handoff =
+    inherited === undefined
+      ? undefined
+      : yield* Schema.decodeUnknownEffect(Schema.fromJsonString(PersistentPty.Handoff))(inherited).pipe(
+          Effect.mapError(() => new Error("Invalid PTY restart handoff")),
+        )
   const global = yield* Global.Service
   if (options.mode === "service") yield* Effect.sync(() => process.chdir(global.home))
   return yield* Effect.scoped(
@@ -73,18 +80,19 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
       const server = yield* start(
         {
           app: {
-            name: process.env.OPENCODE_CLIENT ?? "cli",
+            name: process.env.OPENCODE_CLIENT ?? OPENCODE_ARTIFACT,
             version: OPENCODE_VERSION,
             channel: OPENCODE_CHANNEL,
           },
           hostname,
           port,
           password,
+          pty: { handoff },
           simulation: truthy(process.env.OPENCODE_SIMULATE),
           database: {
             path:
               process.env.OPENCODE_DB ??
-              (["latest", "beta", "next", "prod"].includes(OPENCODE_CHANNEL) ||
+              (["latest", "dev", "beta", "next", "prod"].includes(OPENCODE_CHANNEL) ||
               process.env.OPENCODE_DISABLE_CHANNEL_DB === "1" ||
               process.env.OPENCODE_DISABLE_CHANNEL_DB === "true"
                 ? "opencode.db"
@@ -117,11 +125,16 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
         serviceOptions === undefined
           ? undefined
           : {
-              instanceID,
               onListen: (address, shutdown) =>
                 Effect.gen(function* () {
                   if (!config.password) yield* ServiceConfig.password(password)
-                  return yield* register(address, password, instanceID, serviceOptions.file, shutdown)
+                  return yield* ServiceRegistration.register({
+                    address,
+                    password,
+                    id: instanceID,
+                    file: serviceOptions.file,
+                    shutdown,
+                  })
                 }),
             },
         transform,
@@ -147,60 +160,12 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
       const url = HttpServer.formatAddress(server.address)
       console.log(options.mode === "stdio" ? JSON.stringify({ url }) : `server listening on ${url}`)
       if (foreground && !environmentPassword) console.log(`server password ${password}`)
-      const updater = yield* Updater.Service
-      yield* updater.check().pipe(Effect.schedule(Schedule.spaced("10 minutes")), Effect.forkScoped)
       return yield* options.mode === "service"
         ? server.shutdown
         : options.mode === "stdio"
           ? waitForStdinClose()
           : Effect.never
     }).pipe(Effect.annotateLogs({ role: "server" })),
-  )
-})
-
-const infoJson = Schema.fromJsonString(Service.Info)
-const encodeInfo = Schema.encodeEffect(infoJson)
-const decodeInfo = Schema.decodeUnknownEffect(infoJson)
-
-const register = Effect.fnUntraced(function* (
-  address: HttpServer.Address,
-  password: string,
-  id: string,
-  file: string,
-  shutdown: Effect.Effect<void>,
-) {
-  const fs = yield* FileSystem.FileSystem
-  const temp = file + "." + id + ".tmp"
-  yield* fs.makeDirectory(path.dirname(file), { recursive: true })
-  const info = {
-    id,
-    version: OPENCODE_VERSION,
-    url: HttpServer.formatAddress(address),
-    pid: process.pid,
-    password,
-  }
-  const encoded = yield* encodeInfo(info)
-  const current = fs.readFileString(file).pipe(
-    Effect.flatMap(decodeInfo),
-    Effect.orElseSucceed(() => undefined),
-  )
-  const owns = (found: Info | undefined) =>
-    found?.id === info.id &&
-    found.version === info.version &&
-    found.url === info.url &&
-    found.pid === info.pid &&
-    found.password === info.password
-  yield* fs.writeFileString(temp, encoded, { mode: 0o600 }).pipe(Effect.andThen(fs.rename(temp, file)))
-  yield* current.pipe(
-    Effect.filterOrFail(owns),
-    Effect.repeat(Schedule.spaced("5 seconds")),
-    Effect.ignore,
-    Effect.andThen(shutdown),
-    Effect.forkScoped,
-  )
-  return current.pipe(
-    Effect.flatMap((found) => (owns(found) ? fs.remove(file) : Effect.void)),
-    Effect.ignore,
   )
 })
 

@@ -1,8 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
-import { DateTime, Effect, Layer, Stream } from "effect"
-import { Message } from "@opencode-ai/ai"
+import { DateTime, Effect, Layer } from "effect"
 import { Agent } from "@opencode-ai/core/agent"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/util/effect/layer-node"
@@ -69,7 +68,6 @@ const testLayer = AppNodeBuilder.build(
     ReadToolFileSystem.node,
     readToolNode,
     Tool.node,
-    Tool.node,
     PluginHooks.node,
     SessionInstructions.node,
     Global.node,
@@ -120,7 +118,7 @@ const seedSynthetic = (sessionID: Session.ID, paths: string[]) =>
   })
 
 describe("SessionInstructions", () => {
-  it.effect("injects AGENTS.md files above a read, excludes the Location root, and dedups across reads", () =>
+  it.live("injects AGENTS.md files above a read, excludes the Location root, and dedups across reads", () =>
     Effect.gen(function* () {
       const location = yield* Location.Service
       const dir = location.directory
@@ -170,7 +168,7 @@ describe("SessionInstructions", () => {
     }),
   )
 
-  it.effect("does not re-inject paths already recorded in durable session history", () =>
+  it.live("does not re-inject paths already recorded in durable session history", () =>
     Effect.gen(function* () {
       const location = yield* Location.Service
       const dir = location.directory
@@ -197,7 +195,7 @@ describe("SessionInstructions", () => {
     }),
   )
 
-  it.effect(
+  it.live(
     "discovers AGENTS.md on a directory listing, including the listed directory's own, and dedups with a later file read",
     () =>
       Effect.gen(function* () {
@@ -233,7 +231,38 @@ describe("SessionInstructions", () => {
       }),
   )
 
-  it.effect("listing the Location root directory injects no instructions", () =>
+  it.live("re-injects nested instructions dropped from history by compaction", () =>
+    Effect.gen(function* () {
+      const location = yield* Location.Service
+      const dir = location.directory
+      const subPath = path.resolve(dir, "sub", "AGENTS.md")
+      yield* mkdir(path.resolve(dir, "sub"))
+      yield* writeAgents(path.resolve(dir, "AGENTS.md"), "root-instructions")
+      yield* writeAgents(subPath, "sub-instructions")
+      yield* Effect.promise(() => fs.writeFile(path.resolve(dir, "sub", "file.txt"), "content"))
+
+      const session = yield* Session.Service
+      const registry = yield* Tool.Service
+      const bus = yield* Bus.Service
+      const sessionID = (yield* session.create({ location: Location.Ref.make({ directory: dir }) })).id
+
+      yield* executeTool(registry, readCall(sessionID, "call-before", "sub/file.txt"))
+      expect(yield* synthetics(sessionID)).toHaveLength(1)
+
+      // A completed compaction truncates model-visible history at its boundary, dropping
+      // the synthetic that carried sub's instructions.
+      yield* bus.publish(SessionEvent.Compaction.Started, { sessionID, reason: "manual", recent: "" })
+      yield* bus.publish(SessionEvent.Compaction.Ended, { sessionID, reason: "manual", text: "summary", recent: "" })
+      expect(yield* synthetics(sessionID)).toHaveLength(0)
+
+      // The model no longer has the rules, so the next read under the subtree must
+      // re-inject them rather than trusting a stale in-memory claim.
+      yield* executeTool(registry, readCall(sessionID, "call-after", "sub/file.txt"))
+      expect(yield* synthetics(sessionID)).toHaveLength(1)
+    }),
+  )
+
+  it.live("listing the Location root directory injects no instructions", () =>
     Effect.gen(function* () {
       const location = yield* Location.Service
       const dir = location.directory
@@ -255,7 +284,7 @@ describe("SessionInstructions", () => {
     }),
   )
 
-  it.effect("loads instructions directly without a read", () =>
+  it.live("loads instructions directly without a read", () =>
     Effect.gen(function* () {
       const location = yield* Location.Service
       const dir = location.directory

@@ -146,7 +146,7 @@ describe("session rules location", () => {
 
   it.effect("accepts persisted Windows and POSIX workspaces independent of the host platform", () =>
     Effect.gen(function* () {
-      const root = id("ses_00000000000000000000000000")
+      const root = id("ses_cross_platform_root")
       for (const startDirectory of ["C:relative", "\\project", "\\\\server", "//server", "\\\\server\\share"])
         expect(
           yield* SessionRulesLocation.resolve(fixture([entry(root, { startDirectory })]).input(root)),
@@ -160,7 +160,7 @@ describe("session rules location", () => {
         rulesDirectory: AbsolutePath.make(path.win32.join(networkWorkspace, ".opencode", "rules", root)),
       })
 
-      const startWorkspace = "C:\\Users\\Administrator\\Desktop\\smart-codebase-0.3.8"
+      const startWorkspace = "C:\\workspace\\project"
       expect(
         yield* SessionRulesLocation.resolve(fixture([entry(root, { startDirectory: startWorkspace })]).input(root)),
       ).toMatchObject({

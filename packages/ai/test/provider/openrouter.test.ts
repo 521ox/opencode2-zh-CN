@@ -141,7 +141,7 @@ describe("OpenRouter", () => {
         LLM.request({
           model: OpenRouter.configure({
             apiKey: "test-key",
-            providerOptions: { openrouter: { usage: false } },
+            providerOptions: { usage: false },
           }).model("openai/gpt-4o-mini"),
           cache: "none",
           prompt: "Hello",
@@ -159,17 +159,15 @@ describe("OpenRouter", () => {
           model: OpenRouter.configure({
             apiKey: "test-key",
             providerOptions: {
-              openrouter: {
-                usage: true,
-                reasoning: { effort: "high" },
-                models: ["anthropic/claude-sonnet-4.6", "google/gemini-3.1-pro"],
-                provider: { order: ["anthropic", "google"], require_parameters: true },
-                plugins: [{ id: "response-healing" }],
-                web_search_options: { engine: "native", max_results: 3 },
-                debug: { echo_upstream_body: true },
-                user: "user_123",
-                future_option: { enabled: true },
-              },
+              usage: true,
+              reasoning: { effort: "high" },
+              models: ["anthropic/claude-sonnet-4.6", "google/gemini-3.1-pro"],
+              provider: { order: ["anthropic", "google"], require_parameters: true },
+              plugins: [{ id: "response-healing" }],
+              web_search_options: { engine: "native", max_results: 3 },
+              debug: { echo_upstream_body: true },
+              user: "user_123",
+              future_option: { enabled: true },
             },
           }).model("anthropic/claude-3.7-sonnet:thinking"),
           prompt: "Think briefly.",
@@ -192,6 +190,21 @@ describe("OpenRouter", () => {
     }),
   )
 
+  it.effect("omits the prompt cache key when caching is disabled", () =>
+    Effect.gen(function* () {
+      const prepared = yield* compileRequest(
+        LLM.request({
+          model: OpenRouter.configure({ apiKey: "test-key" }).model("openai/gpt-4o-mini"),
+          prompt: "Hello",
+          promptCacheKey: "session_123",
+          cache: "none",
+        }),
+      )
+
+      expect(prepared.body).not.toHaveProperty("prompt_cache_key")
+    }),
+  )
+
   it.effect("filters invalid known OpenRouter options while preserving extensions", () =>
     Effect.gen(function* () {
       const invalid: Record<string, unknown> = {
@@ -210,7 +223,7 @@ describe("OpenRouter", () => {
         LLM.request({
           model: OpenRouter.configure({
             apiKey: "test-key",
-            providerOptions: { openrouter: invalid },
+            providerOptions: invalid,
           }).model("openai/gpt-4o-mini"),
           prompt: "Hello",
         }),
@@ -282,7 +295,7 @@ describe("OpenRouter", () => {
               {
                 type: "reasoning",
                 text: "Thinking",
-                providerMetadata: { openai: { reasoningField: "reasoning", reasoningDetails: details } },
+                providerMetadata: { openrouter: { reasoningField: "reasoning", reasoningDetails: details } },
               },
             ]),
           ],
@@ -315,7 +328,7 @@ describe("OpenRouter", () => {
             Message.assistant({
               type: "reasoning",
               text: "Thinking",
-              providerMetadata: { openai: { reasoningField: "reasoning", reasoningDetails: details } },
+              providerMetadata: { openrouter: { reasoningField: "reasoning", reasoningDetails: details } },
             }),
           ],
         }),
@@ -341,7 +354,7 @@ describe("OpenRouter", () => {
             Message.assistant({
               type: "reasoning",
               text: "AB",
-              providerMetadata: { openai: { reasoningField: "reasoning", reasoningDetails: details } },
+              providerMetadata: { openrouter: { reasoningField: "reasoning", reasoningDetails: details } },
             }),
           ],
         }),

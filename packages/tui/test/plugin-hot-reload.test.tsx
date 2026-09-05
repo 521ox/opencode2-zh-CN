@@ -2,14 +2,13 @@ import { expect, mock, test } from "bun:test"
 import { createTestRenderer } from "@opentui/core/testing"
 import { Effect, FileSystem } from "effect"
 import { Global } from "@opencode-ai/util/global"
-import { mkdir, readFile, symlink, writeFile } from "node:fs/promises"
+import { mkdir, readFile, symlink, utimes, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { createEventStream, createFetch, json } from "./fixture/tui-client"
 import { tmpdir } from "./fixture/fixture"
 
-function lifecycleSource(marker: string, id: string, version: string) {
+function lifecyclePluginSource(marker: string, id: string, version: string) {
   return `
-import { appendFile } from "node:fs/promises"
 export default {
   id: ${JSON.stringify(id)},
   setup: async () => {
@@ -17,6 +16,29 @@ export default {
     return () => appendFile(${JSON.stringify(marker)}, "${version}:cleanup\\n")
   },
 }
+`
+}
+
+function lifecycleSource(marker: string, id: string, version: string) {
+  return `
+import { appendFile } from "node:fs/promises"
+${lifecyclePluginSource(marker, id, version)}
+`
+}
+
+function gatedLifecycleSource(marker: string, ready: string, gate: string, id: string, version: string) {
+  return `
+import { access, appendFile } from "node:fs/promises"
+await appendFile(${JSON.stringify(ready)}, "ready\\n")
+while (true) {
+  try {
+    await access(${JSON.stringify(gate)})
+    break
+  } catch {
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+}
+${lifecyclePluginSource(marker, id, version)}
 `
 }
 
@@ -30,12 +52,26 @@ async function until(read: () => Promise<string>, expected: (value: string | und
   return value
 }
 
-async function bootApp(directory: string) {
+async function bootApp(
+  directory: string,
+  options?: {
+    plugins?: unknown[]
+    prepare?: (spec: string, install?: boolean) => Promise<{ directory: string; name?: string }>
+  },
+) {
   const setup = await createTestRenderer({ width: 80, height: 24, useThread: false })
   const core = await import("@opentui/core")
   mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
   const events = createEventStream()
   const calls = createFetch((url) => {
+    if (url.pathname === "/api/plugin")
+      return json({
+        location: {
+          directory,
+          project: { id: "proj_test", directory, canonical: directory },
+        },
+        data: options?.plugins ?? [],
+      })
     if (url.pathname !== "/api/fs/list") return
     return json({
       location: {
@@ -54,7 +90,7 @@ async function bootApp(directory: string) {
       app: { name: "test", version: "test", channel: "test" },
       server: { endpoint: { url: server.url.toString() } },
       config: { get: async () => ({}), update: async () => ({}) },
-      packages: { resolve: async () => undefined },
+      packages: { prepare: options?.prepare ?? (async () => ({ directory: "" })) },
       args: {},
       log: () => {},
     }).pipe(
@@ -73,6 +109,40 @@ async function bootApp(directory: string) {
   }
 }
 
+test("loads an advertised package TUI entrypoint only from the local cache", async () => {
+  await using tmp = await tmpdir()
+  const marker = path.join(tmp.path, "marker.txt")
+  const entrypoint = path.join(tmp.path, "tui.ts")
+  await writeFile(entrypoint, lifecycleSource(marker, "test.package", "package"))
+  const resolutions: Array<{ spec: string; install?: boolean }> = []
+
+  await using app = await bootApp(tmp.path, {
+    plugins: [
+      {
+        id: "test.server",
+        source: { type: "package", target: "test-plugin@1.0.0" },
+        status: "active",
+        tui: true,
+      },
+    ],
+    prepare: async (spec, install) => {
+      resolutions.push({ spec, install })
+      return { directory: path.dirname(entrypoint) }
+    },
+  })
+
+  expect(
+    await until(
+      () => readFile(marker, "utf8"),
+      (value) => value === "package:setup\n",
+    ),
+  ).toBe("package:setup\n")
+  expect(resolutions).toContainEqual({ spec: "test-plugin@1.0.0", install: false })
+
+  process.emit("SIGHUP")
+  await app.task
+})
+
 test("discovers an ancestor TUI plugin directory created after startup", async () => {
   await using tmp = await tmpdir()
   const cwd = path.join(tmp.path, "repo", "packages", "app")
@@ -80,9 +150,9 @@ test("discovers an ancestor TUI plugin directory created after startup", async (
   await mkdir(path.join(tmp.path, "repo", ".git"))
   const ready = path.join(tmp.path, "ready.txt")
   const marker = path.join(tmp.path, "marker.txt")
-  const initial = path.join(cwd, ".opencode", "plugins", "tui")
+  const initial = path.join(cwd, ".opencode", "plugins", "ready")
   await mkdir(initial, { recursive: true })
-  await writeFile(path.join(initial, "ready.ts"), lifecycleSource(ready, "test.ready", "ready"))
+  await writeFile(path.join(initial, "tui.ts"), lifecycleSource(ready, "test.ready", "ready"))
 
   await using app = await bootApp(cwd)
   expect(
@@ -91,9 +161,9 @@ test("discovers an ancestor TUI plugin directory created after startup", async (
       (value) => value === "ready:setup\n",
     ),
   ).toBe("ready:setup\n")
-  const directory = path.join(tmp.path, "repo", ".opencode", "plugins", "tui")
+  const directory = path.join(tmp.path, "repo", ".opencode", "plugins", "hot")
   await mkdir(directory, { recursive: true })
-  await writeFile(path.join(directory, "hot.ts"), lifecycleSource(marker, "test.hot", "v1"))
+  await writeFile(path.join(directory, "tui.ts"), lifecycleSource(marker, "test.hot", "v1"))
 
   expect(
     await until(
@@ -108,10 +178,10 @@ test("discovers an ancestor TUI plugin directory created after startup", async (
 
 test("editing a discovered TUI plugin hot-reloads its fresh module", async () => {
   await using tmp = await tmpdir()
-  const directory = path.join(tmp.path, ".opencode", "plugins", "tui")
+  const directory = path.join(tmp.path, ".opencode", "plugins", "hot")
   await mkdir(directory, { recursive: true })
   const marker = path.join(tmp.path, "marker.txt")
-  const source = path.join(directory, "hot.ts")
+  const source = path.join(directory, "tui.ts")
   await writeFile(source, lifecycleSource(marker, "test.hot", "v1"))
 
   await using app = await bootApp(tmp.path)
@@ -125,16 +195,53 @@ test("editing a discovered TUI plugin hot-reloads its fresh module", async () =>
   await app.task
 })
 
+test("does not activate a local plugin whose source changes during import", async () => {
+  await using tmp = await tmpdir()
+  const directory = path.join(tmp.path, ".opencode", "plugins", "hot")
+  await mkdir(directory, { recursive: true })
+  const marker = path.join(tmp.path, "marker.txt")
+  const ready = path.join(tmp.path, "ready.txt")
+  const gate = path.join(tmp.path, "gate.txt")
+  const source = path.join(directory, "tui.ts")
+  await writeFile(source, lifecycleSource(marker, "test.hot", "v1"))
+
+  await using app = await bootApp(tmp.path)
+  const read = () => readFile(marker, "utf8")
+  expect(await until(read, (value) => value === "v1:setup\n")).toBe("v1:setup\n")
+
+  await writeFile(source, gatedLifecycleSource(marker, ready, gate, "test.hot", "v2"))
+  try {
+    expect(
+      await until(
+        () => readFile(ready, "utf8"),
+        (value) => value === "ready\n",
+      ),
+    ).toBe("ready\n")
+    await writeFile(source, lifecycleSource(marker, "test.hot", "v3"))
+    await writeFile(gate, "open")
+
+    expect(await until(read, (value) => value?.includes("v3:setup") ?? false)).toBe("v1:setup\nv1:cleanup\nv3:setup\n")
+  } finally {
+    await writeFile(gate, "open")
+  }
+
+  process.emit("SIGHUP")
+  await app.task
+})
+
 test("a plugin whose slot render throws does not take down the TUI", async () => {
   await using tmp = await tmpdir()
-  const directory = path.join(tmp.path, ".opencode", "plugins", "tui")
-  await mkdir(directory, { recursive: true })
+  const directory = path.join(tmp.path, ".opencode", "plugins")
+  await Promise.all([
+    mkdir(path.join(directory, "a"), { recursive: true }),
+    mkdir(path.join(directory, "crash"), { recursive: true }),
+  ])
   const markerA = path.join(tmp.path, "a.txt")
   const markerCrash = path.join(tmp.path, "crash.txt")
-  const sourceA = path.join(directory, "a.ts")
+  const sourceA = path.join(directory, "a", "tui.ts")
   await writeFile(sourceA, lifecycleSource(markerA, "test.a", "a1"))
   await writeFile(
-    path.join(directory, "crash.ts"),
+    path.join(directory, "crash", "tui.ts"),
     `
 import { appendFile } from "node:fs/promises"
 export default {
@@ -178,12 +285,15 @@ export default {
 
 test("editing one plugin leaves others untouched and a broken save keeps the last good version", async () => {
   await using tmp = await tmpdir()
-  const directory = path.join(tmp.path, ".opencode", "plugins", "tui")
-  await mkdir(directory, { recursive: true })
+  const directory = path.join(tmp.path, ".opencode", "plugins")
+  await Promise.all([
+    mkdir(path.join(directory, "a"), { recursive: true }),
+    mkdir(path.join(directory, "b"), { recursive: true }),
+  ])
   const markerA = path.join(tmp.path, "a.txt")
   const markerB = path.join(tmp.path, "b.txt")
-  const sourceA = path.join(directory, "a.ts")
-  const sourceB = path.join(directory, "b.ts")
+  const sourceA = path.join(directory, "a", "tui.ts")
+  const sourceB = path.join(directory, "b", "tui.ts")
   await writeFile(sourceA, lifecycleSource(markerA, "test.a", "a1"))
   await writeFile(sourceB, lifecycleSource(markerB, "test.b", "b1"))
 
@@ -219,32 +329,47 @@ test("editing one plugin leaves others untouched and a broken save keeps the las
 
 test("a save whose setup throws restores the previous version", async () => {
   await using tmp = await tmpdir()
-  const directory = path.join(tmp.path, ".opencode", "plugins", "tui")
-  await mkdir(directory, { recursive: true })
+  const directory = path.join(tmp.path, ".opencode", "plugins")
+  await Promise.all([
+    mkdir(path.join(directory, "a"), { recursive: true }),
+    mkdir(path.join(directory, "b"), { recursive: true }),
+  ])
   const marker = path.join(tmp.path, "a.txt")
-  const source = path.join(directory, "a.ts")
+  const markerB = path.join(tmp.path, "b.txt")
+  const source = path.join(directory, "a", "tui.ts")
+  const sourceB = path.join(directory, "b", "tui.ts")
   await writeFile(source, lifecycleSource(marker, "test.a", "a1"))
+  await writeFile(sourceB, lifecycleSource(markerB, "test.b", "b1"))
 
   await using app = await bootApp(tmp.path)
   const read = () => readFile(marker, "utf8")
+  const readB = () => readFile(markerB, "utf8")
   expect(await until(read, (value) => value === "a1:setup\n")).toBe("a1:setup\n")
+  expect(await until(readB, (value) => value === "b1:setup\n")).toBe("b1:setup\n")
 
   // The module imports fine but its setup throws — unlike an import failure,
   // the swap has already torn down a1, so keep-last-good means restoring it.
-  await writeFile(
-    source,
-    `
+  const broken = `
 export default {
   id: "test.a",
   setup: async () => {
     throw new Error("setup boom")
   },
 }
-`,
-  )
+`
+  await writeFile(source, broken)
   expect(await until(read, (value) => value === "a1:setup\na1:cleanup\na1:setup\n")).toBe(
     "a1:setup\na1:cleanup\na1:setup\n",
   )
+
+  // Duplicate notifications for unchanged contents must not retry the broken
+  // generation and cycle the restored plugin again. Rewriting the file can
+  // expose truncated contents to the watcher, so change only its metadata.
+  const touched = new Date(Date.now() + 1000)
+  await utimes(source, touched, touched)
+  await writeFile(sourceB, lifecycleSource(markerB, "test.b", "b2"))
+  expect(await until(readB, (value) => value?.includes("b2:setup") ?? false)).toBe("b1:setup\nb1:cleanup\nb2:setup\n")
+  expect(await read()).toBe("a1:setup\na1:cleanup\na1:setup\n")
 
   // Fixing the file swaps out the restored version normally.
   await writeFile(source, lifecycleSource(marker, "test.a", "a2"))
@@ -258,22 +383,22 @@ export default {
 
 test("editing a symlinked plugin's target hot-reloads it", async () => {
   await using tmp = await tmpdir()
-  const directory = path.join(tmp.path, ".opencode", "plugins", "tui")
+  const directory = path.join(tmp.path, ".opencode", "plugins")
   await mkdir(directory, { recursive: true })
   const marker = path.join(tmp.path, "a.txt")
   // The real source lives outside the discovery directory; only a symlink
   // is discovered. Edits land at the target, which emits no event in the
   // plugin directory itself.
-  const target = path.join(tmp.path, "elsewhere", "a.ts")
-  await mkdir(path.dirname(target), { recursive: true })
-  await writeFile(target, lifecycleSource(marker, "test.a", "a1"))
-  await symlink(target, path.join(directory, "a.ts"))
+  const target = path.join(tmp.path, "elsewhere", "a")
+  await mkdir(target, { recursive: true })
+  await writeFile(path.join(target, "tui.ts"), lifecycleSource(marker, "test.a", "a1"))
+  await symlink(target, path.join(directory, "a"), "junction")
 
   await using app = await bootApp(tmp.path)
   const read = () => readFile(marker, "utf8")
   expect(await until(read, (value) => value === "a1:setup\n")).toBe("a1:setup\n")
 
-  await writeFile(target, lifecycleSource(marker, "test.a", "a2"))
+  await writeFile(path.join(target, "tui.ts"), lifecycleSource(marker, "test.a", "a2"))
   expect(await until(read, (value) => value?.includes("a2:setup") ?? false)).toBe("a1:setup\na1:cleanup\na2:setup\n")
 
   process.emit("SIGHUP")
@@ -282,10 +407,10 @@ test("editing a symlinked plugin's target hot-reloads it", async () => {
 
 test("memory storage survives hot reload while disk storage persists", async () => {
   await using tmp = await tmpdir()
-  const directory = path.join(tmp.path, ".opencode", "plugins", "tui")
+  const directory = path.join(tmp.path, ".opencode", "plugins", "counter")
   await mkdir(directory, { recursive: true })
   const marker = path.join(tmp.path, "counter.txt")
-  const source = path.join(directory, "counter.ts")
+  const source = path.join(directory, "tui.ts")
   const counterSource = (note: string) => `
 import { appendFile } from "node:fs/promises"
 // ${note}

@@ -24,6 +24,7 @@ import { SessionSchema } from "./schema.js"
 import { SessionInboxTable, SessionMessageTable } from "./sql.js"
 
 type DatabaseService = Database.Interface["db"]
+export type PromotableEntry = User | Synthetic
 
 export {
   Compaction,
@@ -45,6 +46,8 @@ export {
  * waiting (the idle boundary, where the Session picks up fresh work).
  */
 export type Promotable = "input" | "steer"
+type Commit = (seq: number) => Effect.Effect<void>
+type DeliveryCommit = (entry: Info, seq: number) => Effect.Effect<void>
 
 const decodeUser = Schema.decodeUnknownSync(UserPayload)
 const encodeUser = Schema.encodeSync(UserPayload)
@@ -58,10 +61,34 @@ const decodeMessage = Schema.decodeUnknownSync(SessionMessage.Info)
 const inboxLocks = KeyedMutex.makeUnsafe<SessionSchema.ID>()
 type PendingRef = { readonly id: SessionMessage.ID; readonly sessionID: SessionSchema.ID }
 
+export const toMessage = (
+  entry: PromotableEntry,
+  created: SessionMessage.User["time"]["created"],
+): SessionMessage.User | SessionMessage.Synthetic =>
+  entry.type === "user"
+    ? SessionMessage.User.make({
+        id: entry.id,
+        type: "user",
+        metadata: entry.payload.metadata,
+        text: entry.payload.text,
+        files: entry.payload.files,
+        agents: entry.payload.agents,
+        skills: entry.payload.skills,
+        time: { created },
+      })
+    : SessionMessage.Synthetic.make({
+        id: entry.id,
+        type: "synthetic",
+        text: entry.payload.text,
+        description: entry.payload.description,
+        metadata: entry.payload.metadata,
+        time: { created },
+      })
+
 export const serialized = <A, E, R>(sessionID: SessionSchema.ID, effect: Effect.Effect<A, E, R>) =>
   inboxLocks.withLock(sessionID)(effect)
 
-export class LifecycleConflict extends Schema.TaggedErrorClass<LifecycleConflict>()("SessionInbox.LifecycleConflict", {
+export class LifecycleConflict extends Schema.TaggedError<LifecycleConflict>()("SessionInbox.LifecycleConflict", {
   id: SessionMessage.ID,
 }) {}
 
@@ -134,13 +161,13 @@ const promotedFromMessage = Effect.fn("SessionInbox.promotedFromMessage")(functi
   return yield* Effect.die(new LifecycleConflict({ id }))
 })
 
-export const admit = Effect.fn("SessionInbox.admit")(function* (
+/** Reconciles pending or delivered work without preparing a new admission payload. */
+export const reconcile = Effect.fn("SessionInbox.reconcile")(function* (
   db: DatabaseService,
-  bus: Bus.Interface,
   request: {
     readonly id: SessionMessage.ID
     readonly sessionID: SessionSchema.ID
-    readonly item: Item
+    readonly delivery: Delivery
   },
 ) {
   const existing = yield* find(db, request.id)
@@ -148,27 +175,55 @@ export const admit = Effect.fn("SessionInbox.admit")(function* (
     if (existing.type === "compaction") return yield* Effect.die(new LifecycleConflict({ id: request.id }))
     return existing
   }
-  const promoted = yield* promotedFromMessage(db, request.sessionID, request.id, request.item.delivery)
-  if (promoted !== undefined) return promoted
+  return yield* promotedFromMessage(db, request.sessionID, request.id, request.delivery)
+})
+
+export const admit = Effect.fn("SessionInbox.admit")(function* (
+  db: DatabaseService,
+  bus: Bus.Interface,
+  request: {
+    readonly id: SessionMessage.ID
+    readonly sessionID: SessionSchema.ID
+    readonly item: Item
+    /** Core-private state committed with InboxEnqueued after its projector. */
+    readonly commit?: Commit
+  },
+) {
+  const existing = yield* reconcile(db, { ...request, delivery: request.item.delivery })
+  if (existing !== undefined) {
+    // A deterministic caller may replay an already-admitted Inbox ID. There is no
+    // new durable event to commit, but its private correlation still must reject a
+    // changed logical request before the caller can join a waiter.
+    if (request.commit) yield* request.commit(0)
+    return existing
+  }
   return yield* bus
-    .publish(SessionEvent.InboxEnqueued, {
-      inboxID: request.id,
-      sessionID: request.sessionID,
-      item: request.item,
-    })
+    .publish(
+      SessionEvent.InboxEnqueued,
+      {
+        inboxID: request.id,
+        sessionID: request.sessionID,
+        item: request.item,
+      },
+      request.commit ? { commit: request.commit } : undefined,
+    )
     .pipe(
-      Effect.flatMap((event) => {
-        const base = {
+      Effect.map((event) =>
+        Info.make({
           id: request.id,
           sessionID: request.sessionID,
           timeCreated: DateTime.makeUnsafe(event.created),
-        }
-        return Effect.succeed(Info.make({ ...base, ...request.item }))
-      }),
+          ...request.item,
+        }),
+      ),
       Effect.catchDefect((defect) =>
         find(db, request.id).pipe(
           Effect.flatMap((stored) =>
-            stored?.type === request.item.type ? Effect.succeed(stored) : Effect.die(defect),
+            stored?.type === request.item.type
+              ? request.commit
+                ? request.commit(0).pipe(Effect.as(stored))
+                : Effect.succeed(stored)
+              : Effect.die(defect),
           ),
         ),
       ),
@@ -180,13 +235,27 @@ export const admitCompaction = Effect.fn("SessionInbox.admitCompaction")(functio
   bus: Bus.Interface,
   input: { readonly id: SessionMessage.ID; readonly sessionID: SessionSchema.ID; readonly delivery: Delivery },
 ) {
-  const admitted = yield* admit(db, bus, {
-    id: input.id,
-    sessionID: input.sessionID,
-    item: Item.make({ type: "compaction", payload: {}, delivery: input.delivery }),
-  })
-  if (admitted.type === "compaction") return admitted
-  return yield* Effect.die(new LifecycleConflict({ id: input.id }))
+  return yield* serialized(
+    input.sessionID,
+    Effect.gen(function* () {
+      const exact = yield* find(db, input.id)
+      if (exact) {
+        if (exact.type === "compaction" && exact.sessionID === input.sessionID) return exact
+        return yield* Effect.die(new LifecycleConflict({ id: input.id }))
+      }
+      if (yield* promotedFromMessage(db, input.sessionID, input.id, input.delivery))
+        return yield* Effect.die(new LifecycleConflict({ id: input.id }))
+      const pending = (yield* list(db, input.sessionID)).find((item) => item.type === "compaction")
+      if (pending) return pending
+      const admitted = yield* admit(db, bus, {
+        id: input.id,
+        sessionID: input.sessionID,
+        item: Item.make({ type: "compaction", payload: {}, delivery: input.delivery }),
+      })
+      if (admitted.type === "compaction") return admitted
+      return yield* Effect.die(new LifecycleConflict({ id: input.id }))
+    }),
+  )
 })
 
 export const projectAdmitted = Effect.fn("SessionInbox.projectAdmitted")(function* (
@@ -319,49 +388,29 @@ export const moveIDs = Effect.fn("SessionInbox.moveIDs")(function* (db: Database
     .pipe(Effect.orDie)
 })
 
-export const nextQueued = Effect.fn("SessionInbox.nextQueued")(function* (
-  db: DatabaseService,
-  sessionID: SessionSchema.ID,
-) {
-  const row = yield* db
-    .select()
-    .from(SessionInboxTable)
-    .where(and(eq(SessionInboxTable.session_id, sessionID), eq(SessionInboxTable.delivery, "queue")))
-    .orderBy(asc(SessionInboxTable.enqueued_seq))
-    .limit(1)
-    .get()
-    .pipe(Effect.orDie)
-  return row ? fromRow(row) : undefined
-})
-
-export const nextSteer = Effect.fn("SessionInbox.nextSteer")(function* (
-  db: DatabaseService,
-  sessionID: SessionSchema.ID,
-) {
-  const row = yield* db
-    .select()
-    .from(SessionInboxTable)
-    .where(and(eq(SessionInboxTable.session_id, sessionID), eq(SessionInboxTable.delivery, "steer")))
-    .orderBy(asc(SessionInboxTable.enqueued_seq))
-    .limit(1)
-    .get()
-    .pipe(Effect.orDie)
-  return row ? fromRow(row) : undefined
-})
-
 export const nextPromotable = Effect.fn("SessionInbox.nextPromotable")(function* (
   db: DatabaseService,
   sessionID: SessionSchema.ID,
   promotable: Promotable,
 ) {
-  return (yield* nextSteer(db, sessionID)) ?? (promotable === "input" ? yield* nextQueued(db, sessionID) : undefined)
+  const next = (delivery: Delivery) =>
+    db
+      .select()
+      .from(SessionInboxTable)
+      .where(and(eq(SessionInboxTable.session_id, sessionID), eq(SessionInboxTable.delivery, delivery)))
+      .orderBy(asc(SessionInboxTable.enqueued_seq))
+      .limit(1)
+      .get()
+      .pipe(Effect.orDie)
+  const steer = yield* next("steer")
+  if (steer) return fromRow(steer)
+  if (promotable !== "input") return undefined
+  const queued = yield* next("queue")
+  return queued ? fromRow(queued) : undefined
 })
 
-/**
- * Which pending rows count: "any" counts every row, while "input" means any
- * item in either delivery mode.
- */
-export type Scope = "any" | "input" | Delivery
+/** Which pending rows count: "input" means any item in either delivery mode. */
+export type Scope = "input" | Delivery
 
 export const has = Effect.fn("SessionInbox.has")(function* (
   db: DatabaseService,
@@ -374,11 +423,9 @@ export const has = Effect.fn("SessionInbox.has")(function* (
     .where(
       and(
         eq(SessionInboxTable.session_id, sessionID),
-        scope === "any"
-          ? undefined
-          : scope === "input"
-            ? or(eq(SessionInboxTable.delivery, "steer"), eq(SessionInboxTable.delivery, "queue"))
-            : eq(SessionInboxTable.delivery, scope),
+        scope === "input"
+          ? or(eq(SessionInboxTable.delivery, "steer"), eq(SessionInboxTable.delivery, "queue"))
+          : eq(SessionInboxTable.delivery, scope),
       ),
     )
     .limit(1)
@@ -387,34 +434,22 @@ export const has = Effect.fn("SessionInbox.has")(function* (
   return row !== undefined
 })
 
-export const equivalent = (input: Info, expected: { readonly sessionID: SessionSchema.ID; readonly item: Item }) => {
-  if (
-    input.type !== expected.item.type ||
-    input.delivery !== expected.item.delivery ||
-    input.sessionID !== expected.sessionID
-  )
-    return false
-  if (input.type === "user" && expected.item.type === "user")
-    return JSON.stringify(encodeUser(input.payload)) === JSON.stringify(encodeUser(expected.item.payload))
-  if (input.type === "synthetic" && expected.item.type === "synthetic")
-    return JSON.stringify(encodeSynthetic(input.payload)) === JSON.stringify(encodeSynthetic(expected.item.payload))
-  if (input.type === "compaction" && expected.item.type === "compaction") return true
-  if (input.type === "move" && expected.item.type === "move")
-    return JSON.stringify(encodeMove(input.payload)) === JSON.stringify(encodeMove(expected.item.payload))
-  return false
-}
-
 const publishMutation = <A, E, R>(input: PendingRef, effect: Effect.Effect<A, E, R>) =>
   serialized(input.sessionID, effect).pipe(Effect.asVoid)
 
-export const cancel = Effect.fn("SessionInbox.cancel")((bus: Bus.Interface, input: PendingRef) =>
-  publishMutation(
-    input,
-    bus.publish(SessionEvent.InboxCancelled, {
-      sessionID: input.sessionID,
-      inboxID: input.id,
-    }),
-  ),
+export const cancel = Effect.fn("SessionInbox.cancel")(
+  (bus: Bus.Interface, input: PendingRef, options?: { readonly commit?: Commit }) =>
+    publishMutation(
+      input,
+      bus.publish(
+        SessionEvent.InboxCancelled,
+        {
+          sessionID: input.sessionID,
+          inboxID: input.id,
+        },
+        options,
+      ),
+    ),
 )
 
 export const steer = Effect.fn("SessionInbox.steer")((bus: Bus.Interface, input: PendingRef) =>
@@ -444,17 +479,22 @@ const publish = Effect.fn("SessionInbox.publish")(function* (
   bus: Bus.Interface,
   sessionID: SessionSchema.ID,
   rows: ReadonlyArray<typeof SessionInboxTable.$inferSelect>,
+  commit?: DeliveryCommit,
 ) {
-  yield* Effect.forEach(
+  return yield* Effect.forEach(
     rows,
     (row) => {
       const entry = fromRow(row)
       if (entry.type === "compaction") return Effect.die(new LifecycleConflict({ id: entry.id }))
       return bus
-        .publish(SessionEvent.InboxDelivered, {
-          sessionID,
-          inboxID: entry.id,
-        })
+        .publish(
+          SessionEvent.InboxDelivered,
+          {
+            sessionID,
+            inboxID: entry.id,
+          },
+          commit ? { commit: (seq) => commit(entry, seq) } : undefined,
+        )
         .pipe(
           Effect.catchDefect((defect) =>
             defect instanceof LifecycleConflict
@@ -463,11 +503,76 @@ const publish = Effect.fn("SessionInbox.publish")(function* (
                 )
               : Effect.die(defect),
           ),
+          Effect.as(entry),
         )
     },
-    { discard: true },
+    { concurrency: 1 },
   )
-  return rows.length
+})
+
+const selectPromotable = Effect.fn("SessionInbox.selectPromotable")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  scope: Promotable,
+) {
+  const steers = yield* pendingSteers(db, sessionID)
+  if (steers.length > 0 || scope === "steer") {
+    const control = steers.findIndex((row) => row.type === "compaction" || row.type === "move")
+    return { rows: control === -1 ? steers : steers.slice(0, control), queued: false }
+  }
+  const queued = yield* db
+    .select()
+    .from(SessionInboxTable)
+    .where(and(eq(SessionInboxTable.session_id, sessionID), eq(SessionInboxTable.delivery, "queue")))
+    .orderBy(asc(SessionInboxTable.enqueued_seq))
+    .limit(1)
+    .get()
+    .pipe(Effect.orDie)
+  return { rows: queued ? [queued] : [], queued: queued !== undefined }
+})
+
+const entriesFromSelection = (rows: ReadonlyArray<typeof SessionInboxTable.$inferSelect>) =>
+  rows.flatMap((row) => {
+    const entry = fromRow(row)
+    return entry.type === "user" || entry.type === "synthetic" ? [entry] : []
+  })
+
+/** Returns the exact currently eligible model-input batch without mutating Inbox state. */
+export const previewPromotable = Effect.fn("SessionInbox.previewPromotable")(
+  (db: DatabaseService, sessionID: SessionSchema.ID, scope: Promotable) =>
+    serialized(
+      sessionID,
+      selectPromotable(db, sessionID, scope).pipe(Effect.map((selection) => entriesFromSelection(selection.rows))),
+    ),
+)
+
+export type PromotePreviewedResult =
+  | { readonly status: "promoted"; readonly entries: ReadonlyArray<PromotableEntry> }
+  | { readonly status: "mismatch" }
+
+/** Publishes a preview only while its complete ordered eligibility remains unchanged. */
+export const promotePreviewed = Effect.fn("SessionInbox.promotePreviewed")(function* (
+  db: DatabaseService,
+  bus: Bus.Interface,
+  sessionID: SessionSchema.ID,
+  scope: Promotable,
+  preview: ReadonlyArray<PromotableEntry>,
+  options?: { readonly commit?: DeliveryCommit },
+) {
+  return yield* serialized(
+    sessionID,
+    Effect.gen(function* () {
+      const selected = yield* selectPromotable(db, sessionID, scope)
+      const entries = entriesFromSelection(selected.rows)
+      const matches =
+        entries.length === selected.rows.length &&
+        entries.length === preview.length &&
+        entries.every((entry, index) => entry.id === preview[index]?.id)
+      if (!matches) return { status: "mismatch" } satisfies PromotePreviewedResult
+      yield* publish(db, bus, sessionID, selected.rows, options?.commit)
+      return { status: "promoted", entries } satisfies PromotePreviewedResult
+    }),
+  )
 })
 
 /**
@@ -475,49 +580,46 @@ const publish = Effect.fn("SessionInbox.publish")(function* (
  * Steers always go first; only the "input" scope may fall through to one queued
  * input, and it then collects steers that arrived during promotion.
  */
-export const promote = Effect.fn("SessionInbox.promote")(function* (
+export const promoteDetailed = Effect.fn("SessionInbox.promoteDetailed")(function* (
   db: DatabaseService,
   bus: Bus.Interface,
   sessionID: SessionSchema.ID,
   scope: Promotable,
+  options?: { readonly commit?: DeliveryCommit },
 ) {
   return yield* serialized(
     sessionID,
     Effect.gen(function* () {
-      const steers = yield* db
-        .select()
-        .from(SessionInboxTable)
-        .where(and(eq(SessionInboxTable.session_id, sessionID), eq(SessionInboxTable.delivery, "steer")))
-        .orderBy(asc(SessionInboxTable.enqueued_seq))
-        .all()
-        .pipe(Effect.orDie)
-      if (steers.length > 0 || scope === "steer") {
-        const control = steers.findIndex((row) => row.type === "compaction" || row.type === "move")
-        return yield* publish(db, bus, sessionID, control === -1 ? steers : steers.slice(0, control))
-      }
-
-      const queued = yield* db
-        .select()
-        .from(SessionInboxTable)
-        .where(and(eq(SessionInboxTable.session_id, sessionID), eq(SessionInboxTable.delivery, "queue")))
-        .orderBy(asc(SessionInboxTable.enqueued_seq))
-        .limit(1)
-        .get()
-        .pipe(Effect.orDie)
-      if (!queued) return 0
-      const promoted = yield* publish(db, bus, sessionID, [queued])
-      const arrivedSteers = yield* db
-        .select()
-        .from(SessionInboxTable)
-        .where(and(eq(SessionInboxTable.session_id, sessionID), eq(SessionInboxTable.delivery, "steer")))
-        .orderBy(asc(SessionInboxTable.enqueued_seq))
-        .all()
-        .pipe(Effect.orDie)
+      const selected = yield* selectPromotable(db, sessionID, scope)
+      if (!selected.queued) return yield* publish(db, bus, sessionID, selected.rows, options?.commit)
+      const promoted = yield* publish(db, bus, sessionID, selected.rows, options?.commit)
+      const arrivedSteers = yield* pendingSteers(db, sessionID)
       const control = arrivedSteers.findIndex((row) => row.type === "compaction" || row.type === "move")
-      return (
-        promoted +
-        (yield* publish(db, bus, sessionID, control === -1 ? arrivedSteers : arrivedSteers.slice(0, control)))
-      )
+      return [
+        ...promoted,
+        ...(yield* publish(
+          db,
+          bus,
+          sessionID,
+          control === -1 ? arrivedSteers : arrivedSteers.slice(0, control),
+          options?.commit,
+        )),
+      ]
     }),
   )
 })
+
+/** Existing numeric internal API retained while private callers need exact delivered entries. */
+export const promote = Effect.fn("SessionInbox.promote")(
+  (db: DatabaseService, bus: Bus.Interface, sessionID: SessionSchema.ID, scope: Promotable) =>
+    promoteDetailed(db, bus, sessionID, scope).pipe(Effect.map((entries) => entries.length)),
+)
+
+const pendingSteers = (db: DatabaseService, sessionID: SessionSchema.ID) =>
+  db
+    .select()
+    .from(SessionInboxTable)
+    .where(and(eq(SessionInboxTable.session_id, sessionID), eq(SessionInboxTable.delivery, "steer")))
+    .orderBy(asc(SessionInboxTable.enqueued_seq))
+    .all()
+    .pipe(Effect.orDie)

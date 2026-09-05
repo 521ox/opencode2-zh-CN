@@ -1,7 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Money } from "@opencode-ai/schema/money"
 import { Effect, Fiber, Layer, Stream } from "effect"
-import { TestClock } from "effect/testing"
 import { Catalog } from "@opencode-ai/core/catalog"
 import { Integration } from "@opencode-ai/core/integration"
 import { Credential } from "@opencode-ai/core/credential"
@@ -43,6 +41,30 @@ describe("Catalog", () => {
       yield* catalog.transform((editor) => editor.provider.update(Provider.ID.make("test"), () => {}))
 
       expect((yield* Fiber.join(updated)).length).toBe(1)
+    }),
+  )
+
+  it.effect("preserves the catalog-key provider identity across updates and reload", () =>
+    Effect.gen(function* () {
+      const catalog = yield* Catalog.Service
+      const providerID = Provider.ID.make("original")
+      const renamed = Provider.ID.make("renamed")
+      yield* catalog.transform((editor) => {
+        editor.provider.update(providerID, (provider) => {
+          provider.id = renamed
+          provider.name = "Created"
+        })
+        expect(editor.provider.get(providerID)?.provider.id).toBe(providerID)
+        editor.provider.update(providerID, (provider) => {
+          provider.id = renamed
+          provider.name = "Updated"
+        })
+      })
+
+      expect(yield* catalog.provider.get(providerID)).toMatchObject({ id: providerID, name: "Updated" })
+      expect(yield* catalog.provider.get(renamed)).toBeUndefined()
+      yield* catalog.reload()
+      expect(yield* catalog.provider.get(providerID)).toMatchObject({ id: providerID, name: "Updated" })
     }),
   )
 
@@ -273,7 +295,7 @@ describe("Catalog", () => {
       const providerID = Provider.ID.make("test")
       const old = Model.ID.make("old")
       const newest = Model.ID.make("new")
-      const models = (catalog: Catalog.Draft) => {
+      const models = (catalog: Catalog.Editor) => {
         catalog.provider.update(providerID, () => {})
         catalog.model.update(providerID, old, (model) => {
           model.time.released = 1000
@@ -291,9 +313,7 @@ describe("Catalog", () => {
       expect((yield* catalog.model.default())?.id).toBe(old)
 
       configured = false
-      const reload = yield* catalog.reload().pipe(Effect.forkChild({ startImmediately: true }))
-      yield* TestClock.adjust("500 millis")
-      yield* Fiber.join(reload)
+      yield* catalog.reload()
       expect((yield* catalog.model.default())?.id).toBe(newest)
     }),
   )
@@ -322,45 +342,50 @@ describe("Catalog", () => {
     }),
   )
 
-  it.effect("small model prefers small keyword candidates before cost scoring", () =>
+  it.effect("small model uses the newest release in the first matching family", () =>
     Effect.gen(function* () {
       const catalog = yield* Catalog.Service
       const providerID = Provider.ID.make("test")
       yield* catalog.transform((catalog) => {
         catalog.provider.update(providerID, () => {})
-        catalog.model.update(providerID, Model.ID.make("cheap-large"), (model) => {
+        catalog.model.update(providerID, Model.ID.make("newer-flash"), (model) => {
+          model.family = Model.Family.make("gemini-flash")
           model.capabilities.input = ["text"]
           model.capabilities.output = ["text"]
-          model.cost = [
-            {
-              input: Money.USDPerMillionTokens.make(1),
-              output: Money.USDPerMillionTokens.make(1),
-              cache: {
-                read: Money.USDPerMillionTokens.zero,
-                write: Money.USDPerMillionTokens.zero,
-              },
-            },
-          ]
-          model.time.released = Date.now()
+          model.time.released = 3000
         })
-        catalog.model.update(providerID, Model.ID.make("expensive-mini"), (model) => {
+        catalog.model.update(providerID, Model.ID.make("older-luna"), (model) => {
+          model.family = Model.Family.make("gpt-luna")
           model.capabilities.input = ["text"]
           model.capabilities.output = ["text"]
-          model.cost = [
-            {
-              input: Money.USDPerMillionTokens.make(10),
-              output: Money.USDPerMillionTokens.make(10),
-              cache: {
-                read: Money.USDPerMillionTokens.zero,
-                write: Money.USDPerMillionTokens.zero,
-              },
-            },
-          ]
-          model.time.released = Date.now()
+          model.time.released = 1000
+        })
+        catalog.model.update(providerID, Model.ID.make("newer-luna"), (model) => {
+          model.family = Model.Family.make("gpt-luna")
+          model.capabilities.input = ["text"]
+          model.capabilities.output = ["text"]
+          model.time.released = 2000
         })
       })
 
-      expect((yield* catalog.model.small(providerID))?.id).toMatch("expensive-mini")
+      expect((yield* catalog.model.small(providerID))?.id).toBe(Model.ID.make("newer-luna"))
+    }),
+  )
+
+  it.effect("small model returns undefined without a matching family", () =>
+    Effect.gen(function* () {
+      const catalog = yield* Catalog.Service
+      const providerID = Provider.ID.make("test")
+      yield* catalog.transform((catalog) => {
+        catalog.provider.update(providerID, () => {})
+        catalog.model.update(providerID, Model.ID.make("large"), (model) => {
+          model.family = Model.Family.make("gpt")
+          model.capabilities.input = ["text"]
+          model.capabilities.output = ["text"]
+        })
+      })
+
+      expect(yield* catalog.model.small(providerID)).toBeUndefined()
     }),
   )
 })

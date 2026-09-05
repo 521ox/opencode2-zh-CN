@@ -14,11 +14,11 @@ export type DialogPairCredentials = {
 }
 
 export function DialogPair(props: { credentials?: DialogPairCredentials }) {
+  const { t } = useI18n()
   const client = useClient()
   const dialog = useDialog()
   const dimensions = useTerminalDimensions()
   const theme = useTheme("elevated")
-  const { t } = useI18n()
   const [loadError, setLoadError] = createSignal<unknown>()
   const [showPassword, setShowPassword] = createSignal(false)
   const [passwordHover, setPasswordHover] = createSignal(false)

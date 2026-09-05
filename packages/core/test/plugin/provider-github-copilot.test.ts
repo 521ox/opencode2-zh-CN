@@ -6,10 +6,16 @@ import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
 import { Catalog } from "@opencode-ai/core/catalog"
 import { Model } from "@opencode-ai/core/model"
+import { ModelResolver } from "@opencode-ai/core/model-resolver"
 import { Plugin } from "@opencode-ai/core/plugin"
 import { PluginHost } from "@opencode-ai/core/plugin/host"
 import { PluginHooks } from "@opencode-ai/core/plugin/hooks"
-import { copilotBaseURL, copilotFetch, GithubCopilotPlugin } from "@opencode-ai/core/plugin/provider/github-copilot"
+import {
+  copilotBaseURL,
+  copilotEntitlementError,
+  copilotFetch,
+  GithubCopilotPlugin,
+} from "@opencode-ai/core/plugin/provider/github-copilot"
 import { Provider } from "@opencode-ai/core/provider"
 import { Integration } from "@opencode-ai/core/integration"
 import type { LanguageModelV3 } from "@ai-sdk/provider"
@@ -53,6 +59,20 @@ describe("GithubCopilotPlugin", () => {
     ).toBe("https://api.business.githubcopilot.com")
   })
 
+  test("rejects accounts without Copilot chat access", () => {
+    expect(copilotEntitlementError({ chat_enabled: false, can_signup_for_limited: true })).toContain("Copilot Free")
+    expect(copilotEntitlementError({ chat_enabled: false, can_signup_for_limited: false })).toContain(
+      "subscription or a seat",
+    )
+    expect(copilotEntitlementError({ chat_enabled: false })).toContain("subscription or a seat")
+  })
+
+  test("only blocks on an explicit entitlement denial", () => {
+    expect(copilotEntitlementError({ chat_enabled: true })).toBeUndefined()
+    expect(copilotEntitlementError({ chat_enabled: true, can_signup_for_limited: true })).toBeUndefined()
+    expect(copilotEntitlementError({})).toBeUndefined()
+  })
+
   it.effect("registers GitHub Copilot device OAuth", () =>
     Effect.gen(function* () {
       yield* addPlugin()
@@ -68,12 +88,12 @@ describe("GithubCopilotPlugin", () => {
   it.effect("removes the generic key method", () =>
     Effect.gen(function* () {
       const integrations = yield* Integration.Service
-      yield* integrations.transform((draft) => {
-        draft.method.update({
+      yield* integrations.transform((editor) => {
+        editor.method.update({
           integrationID: Integration.ID.make("github-copilot"),
           method: { type: "key" },
         })
-        draft.method.update({
+        editor.method.update({
           integrationID: Integration.ID.make("github-copilot"),
           method: { type: "env", names: ["GITHUB_TOKEN"] },
         })
@@ -115,7 +135,7 @@ describe("GithubCopilotPlugin", () => {
       expect(requests[0]?.has("x-api-key")).toBe(false)
       expect(requests[0]?.get("x-initiator")).toBe("user")
       expect(requests[0]?.get("copilot-vision-request")).toBe("true")
-      expect(requests[0]?.get("x-github-api-version")).toBe("2026-06-01")
+      expect(requests[0]?.get("x-github-api-version")).toBe("2026-08-01")
       expect(requests[0]?.get("user-agent")).toBe("opencode/beta/1.2.3/test")
     }),
   )
@@ -137,7 +157,7 @@ describe("GithubCopilotPlugin", () => {
       expect(event.request.headers.has("x-api-key")).toBe(false)
       expect(event.request.headers.get("x-initiator")).toBe("user")
       expect(event.request.headers.get("anthropic-beta")).toBe("interleaved-thinking-2025-05-14")
-      expect(event.request.headers.get("x-github-api-version")).toBe("2026-06-01")
+      expect(event.request.headers.get("x-github-api-version")).toBe("2026-08-01")
     }),
   )
 
@@ -198,16 +218,23 @@ describe("GithubCopilotPlugin", () => {
   it.effect("rewrites models.dev fallback models to the GitHub Copilot package", () =>
     Effect.gen(function* () {
       const catalog = yield* Catalog.Service
+      const aisdk = yield* AISDK.Service
       yield* catalog.transform((catalog) => {
         catalog.provider.update(Provider.ID.githubCopilot, () => {})
         catalog.model.update(Provider.ID.githubCopilot, Model.ID.make("gpt-5.6-sol"), (model) => {
-          model.package = "@ai-sdk/openai-compatible"
+          model.package = Provider.aisdk("@ai-sdk/openai-compatible")
         })
       })
       yield* addPlugin()
-      expect(required(yield* catalog.model.get(Provider.ID.githubCopilot, Model.ID.make("gpt-5.6-sol"))).package).toBe(
-        "@ai-sdk/github-copilot",
-      )
+      const fallback = required(yield* catalog.model.get(Provider.ID.githubCopilot, Model.ID.make("gpt-5.6-sol")))
+      expect(fallback.package).toBe(Provider.aisdk("@ai-sdk/github-copilot"))
+
+      const resolved = yield* ModelResolver.fromCatalogModel(fallback, undefined, {
+        loadPackage: () => Effect.die("Copilot must not load a native provider package"),
+        loadAISDK: (model) => aisdk.model(model),
+      })
+      expect(resolved.route.id).toBe("ai-sdk:@ai-sdk/github-copilot")
+      expect(resolved.route.providerMetadataKey).toBe("copilot")
     }),
   )
 

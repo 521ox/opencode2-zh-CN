@@ -1,4 +1,4 @@
-import { base64Encode } from "@opencode-ai/core/util/encode"
+import { base64Encode } from "@opencode-ai/util/encode"
 import { expect, test, type Page } from "@playwright/test"
 import { mockOpenCodeServer } from "../utils/mock-server"
 import { expectSessionTitle } from "../utils/waits"
@@ -123,8 +123,7 @@ async function setup(page: Page) {
   })
 
   await page.addInitScript(
-    ({ directory, server, sessionID }) => {
-      localStorage.setItem("settings.v3", JSON.stringify({ general: { newLayoutDesigns: true } }))
+    ({ directory, server, sessionID, tabKey }) => {
       localStorage.setItem(
         "opencode.global.dat:server",
         JSON.stringify({
@@ -132,10 +131,8 @@ async function setup(page: Page) {
           lastProject: { local: directory },
         }),
       )
-      localStorage.setItem(
-        "opencode.global.dat:layout",
-        JSON.stringify({ review: { diffStyle: "split", panelOpened: true } }),
-      )
+      localStorage.setItem("opencode.global.dat:layout", JSON.stringify({ review: { diffStyle: "split" } }))
+      localStorage.setItem("opencode.window.browser.dat:tabs.panes", JSON.stringify({ [tabKey]: { review: true } }))
       localStorage.setItem(
         "opencode.global.dat:review-panel-v2",
         JSON.stringify({ sidebarOpened: true, sidebarWidth: 240, expandMode: "collapse" }),
@@ -145,6 +142,6 @@ async function setup(page: Page) {
         JSON.stringify([{ type: "session", server, sessionId: sessionID }]),
       )
     },
-    { directory, server, sessionID },
+    { directory, server, sessionID, tabKey: `${server}\n/server/${base64Encode(server)}/session/${sessionID}` },
   )
 }

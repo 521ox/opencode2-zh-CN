@@ -40,5 +40,11 @@ export function DialogTimeline(props: {
     return result
   })
 
-  return <DialogSelect onMove={(option) => props.onMove(option.value)} title={i18n.t("session.dialog.timeline")} options={options()} />
+  return (
+    <DialogSelect
+      onMove={(option) => props.onMove(option.value)}
+      title={i18n.t("session.dialog.timeline")}
+      options={options()}
+    />
+  )
 }

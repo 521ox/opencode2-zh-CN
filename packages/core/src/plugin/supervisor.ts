@@ -1,51 +1,40 @@
 export * as PluginSupervisor from "./supervisor.js"
+export { Service, type Interface } from "./supervisor-service.js"
 
-import type { Plugin as PluginDefinition } from "@opencode-ai/plugin/effect/plugin"
 import { Event } from "@opencode-ai/schema/config"
-import { Context, Deferred, Effect, Layer, Schema, Stream } from "effect"
+import { Cause, Effect, Latch, Layer, PubSub, Stream } from "effect"
 import path from "path"
-import { pathToFileURL } from "url"
 import { ConfigPluginSource } from "../config/plugin/source.js"
 import { makeLocationNode } from "@opencode-ai/util/effect/app-node"
 import { Bus } from "../bus.js"
 import { Npm } from "@opencode-ai/util/npm"
 import { Plugin } from "../plugin.js"
-import { PluginPromise } from "../plugin/promise.js"
+import { InstancePlugins } from "./instance.js"
 import { PluginInternal } from "./internal.js"
+import { PluginModule } from "./module.js"
 import { SdkPlugins } from "./sdk.js"
-import { importModule } from "@opencode-ai/util/runtime-import"
-
-const PluginModule = Schema.Struct({
-  default: Schema.Union([
-    Schema.Struct({
-      id: Schema.String,
-      effect: Schema.declare<PluginDefinition["effect"]>(
-        (input): input is PluginDefinition["effect"] => typeof input === "function",
-      ),
-    }),
-    Schema.Struct({
-      id: Schema.String,
-      setup: Schema.declare<Parameters<typeof PluginPromise.fromPromise>[0]["setup"]>(
-        (input): input is Parameters<typeof PluginPromise.fromPromise>[0]["setup"] => typeof input === "function",
-      ),
-    }),
-  ]),
-})
+import { Service } from "./supervisor-service.js"
+import { PluginUpdate } from "./update.js"
 
 const resolve = Effect.fn("PluginSupervisor.resolve")(function* (
-  pre: readonly Plugin.Versioned[],
-  post: readonly Plugin.Versioned[],
+  pre: readonly Plugin.Generation[],
+  post: readonly Plugin.Generation[],
   operations: readonly ConfigPluginSource.Operation[],
+  install: boolean,
+  running: ReadonlyMap<string, Plugin.Generation>,
 ) {
   const matches = (selector: string, target: string) =>
     selector === "*" || (selector.endsWith(".*") ? target.startsWith(selector.slice(0, -1)) : selector === target)
   const definitions = [...pre, ...post]
   const enabled = new Set(definitions.map((plugin) => plugin.id))
-  const packages = new Map<string, Plugin.Versioned>()
+  const packages = new Map<string, Plugin.Generation>()
+  const pending = new Set<string>()
+  const failures = new Map<string, Extract<Plugin.Info, { readonly status: "failed" }>>()
   const plugins = () => [...definitions, ...packages.values()]
 
   for (const operation of operations) {
     if (operation.type === "remove") {
+      if (operation.target === "*") failures.clear()
       plugins()
         .filter((plugin) => matches(operation.target, plugin.id))
         .forEach((plugin) => enabled.delete(plugin.id))
@@ -63,113 +52,202 @@ const resolve = Effect.fn("PluginSupervisor.resolve")(function* (
       continue
     }
 
-    const plugin = yield* load(operation).pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning("failed to load plugin", { target: operation.target, cause }).pipe(Effect.as(undefined)),
-      ),
+    const plugin = yield* PluginModule.load(operation, { install }).pipe(
+      Effect.catchCause((cause) => {
+        const ref = `err_${crypto.randomUUID().slice(0, 8)}`
+        const error = Cause.squash(cause)
+        return Effect.logWarning("failed to load plugin", { target: operation.target, ref, cause }).pipe(
+          Effect.as({ error: error instanceof PluginModule.LoadError ? error.message : "Plugin failed to load", ref }),
+        )
+      }),
     )
-    if (!plugin) continue
+    if ("pending" in plugin) {
+      pending.add(operation.target)
+      continue
+    }
+    if ("error" in plugin) {
+      failures.set(operation.target, {
+        source: pluginSource(operation.target),
+        status: "failed",
+        error: plugin.error,
+        ref: plugin.ref,
+        tui: false,
+      })
+      // A revision that failed before producing a generation must not displace the one already running.
+      const retained = packages.get(operation.target) ?? running.get(operation.target)
+      if (retained) {
+        packages.set(operation.target, retained)
+        enabled.add(retained.id)
+      }
+      continue
+    }
+    failures.delete(operation.target)
     const previous = packages.get(operation.target)
     if (previous) enabled.delete(previous.id)
     packages.set(operation.target, plugin)
     enabled.add(plugin.id)
   }
 
-  return [
+  const ordered = [
     ...pre.filter((plugin) => enabled.has(plugin.id)),
-    ...Array.from(packages.values()).filter((plugin) => enabled.has(plugin.id)),
+    ...[...packages.values()].filter((plugin) => enabled.has(plugin.id)),
     ...post.filter((plugin) => enabled.has(plugin.id)),
   ]
-})
-
-const load = Effect.fn("PluginSupervisor.load")(function* (
-  operation: Extract<ConfigPluginSource.Operation, { type: "add" }>,
-) {
-  const npm = yield* Npm.Service
-  const entrypoint = path.isAbsolute(operation.target)
-    ? pathToFileURL(operation.target).href
-    : (yield* npm.add(operation.target, { subpaths: ["server", ""] })).entrypoint
-  if (!entrypoint) return
-  // Bun currently ignores query parameters when caching file:// imports.
-  const source =
-    operation.mtime === undefined
-      ? entrypoint
-      : typeof Bun !== "undefined"
-        ? `${operation.target.replaceAll("\\", "/")}?mtime=${operation.mtime}`
-        : `${entrypoint}?mtime=${operation.mtime}`
-  yield* Effect.log({ msg: "loading plugin", id: operation.target, entrypoint: source })
-  const mod = yield* Effect.promise(() => importModule(source))
-  const value = (yield* Schema.decodeUnknownEffect(PluginModule)(mod)).default
-  const plugin = "effect" in value ? value : PluginPromise.fromPromise(value)
+  const duplicate = (plugin: Plugin.Generation, index: number) =>
+    ordered.findIndex((other) => other.id === plugin.id) !== index
   return {
-    id: plugin.id,
-    version: JSON.stringify(operation),
-    effect: (host) => plugin.effect({ ...host, options: operation.options }),
-  } satisfies Plugin.Versioned
+    plugins: ordered.filter((plugin, index) => !duplicate(plugin, index)),
+    packages: new Map([...packages].filter(([, plugin]) => enabled.has(plugin.id))),
+    failures: [
+      ...failures.values(),
+      ...ordered.filter(duplicate).map((plugin) => ({
+        id: Plugin.ID.make(plugin.id),
+        source: plugin.source ?? { type: "builtin" as const },
+        status: "failed" as const,
+        error: `Duplicate plugin ID: ${plugin.id}`,
+        tui: plugin.tui ?? false,
+      })),
+    ],
+    pending: [...pending],
+  }
 })
-
-export interface Interface {
-  /** Wait for the initial plugin generation and startup updates to settle. */
-  readonly flush: Effect.Effect<void>
-}
-
-export class Service extends Context.Service<Service, Interface>()("@opencode/PluginSupervisor") {}
 
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const registry = yield* Plugin.Service
     const sdk = yield* SdkPlugins.Service
+    const instance = yield* InstancePlugins.Service
     const sources = yield* ConfigPluginSource.Service
     const bus = yield* Bus.Service
-    const ready = { current: yield* Deferred.make<void>() }
+    const updates = yield* PluginUpdate.Service
+    const ready = yield* Latch.make()
+    let packages = new Set<string>()
+    let running = new Map<string, Plugin.Generation>()
+    let outdated = new Set<string>()
+    const updating = new Set<string>()
+    let generation = 0
     let observed = 0
+    const refresh = yield* PubSub.unbounded<void>()
 
     const activate = Effect.fn("PluginSupervisor.activate")(function* () {
+      const current = ++generation
       // Resolve OpenCode's internal plugins with their privileged Location services.
       const internal = yield* PluginInternal.list()
-      // Combine internal plugins with host-contributed SDK plugins in boot order.
-      const pre = [...internal.pre.map((plugin) => ({ ...plugin, version: "internal" })), ...sdk.all()]
-      const post = internal.post.map((plugin) => ({ ...plugin, version: "internal" }))
+      // Combine internal plugins with host-contributed plugins in boot order.
+      // Instance-bound plugins come last: later activation can override earlier
+      // container writes, so the instance's explicit choices win over globals.
+      const pre = [
+        ...internal.pre.map((plugin) => ({ ...plugin, revision: "internal", source: { type: "builtin" as const } })),
+        ...sdk.all(),
+        ...instance.all(),
+      ]
+      const post = internal.post.map((plugin) => ({
+        ...plugin,
+        revision: "internal",
+        source: { type: "builtin" as const },
+      }))
       const operations = yield* sources.operations()
-      // Apply config operations and load enabled package plugins into one ordered generation.
-      const plugins = yield* resolve(pre, post, operations)
-      // Replace the active generation in one scoped, batched activation.
-      yield* registry.activate(plugins)
+      // Activate everything available locally before waiting on missing package installs.
+      const immediate = yield* resolve(pre, post, operations, false, running)
+      const source = (source: Plugin.Source) =>
+        source.type === "package"
+          ? {
+              ...source,
+              ...(outdated.has(source.target) ? { outdated: true as const } : {}),
+              ...(updating.has(source.target) ? { updating: true as const } : {}),
+            }
+          : source
+      const apply = (resolved: typeof immediate) =>
+        registry.activate(
+          resolved.plugins.map((plugin) => (plugin.source ? { ...plugin, source: source(plugin.source) } : plugin)),
+          resolved.failures.map((failure) => ({ ...failure, source: source(failure.source) })),
+        )
+      yield* apply(immediate)
+      const resolved = immediate.pending.length ? yield* resolve(pre, post, operations, true, running) : immediate
+      if (resolved !== immediate) yield* apply(resolved)
+      running = resolved.packages
+      const loaded = new Set(
+        [...resolved.plugins, ...resolved.failures].flatMap((plugin) =>
+          plugin.source?.type === "package" ? [plugin.source.target] : [],
+        ),
+      )
+      packages = loaded
+      yield* Effect.forEach(
+        loaded,
+        (target) => updates.check(target).pipe(Effect.map((available) => [target, available] as const)),
+        { concurrency: 4 },
+      ).pipe(
+        Effect.flatMap((checked) => {
+          if (current !== generation) return Effect.void
+          const next = new Set(checked.flatMap(([target, available]) => (available ? [target] : [])))
+          if (next.size === outdated.size && [...next].every((target) => outdated.has(target))) return Effect.void
+          outdated = next
+          return apply(resolved)
+        }),
+        Effect.forkScoped({ startImmediately: true }),
+      )
     })
-    const updates = Stream.merge(sources.changes(), bus.subscribe([Event.Updated, SdkPlugins.Updated])).pipe(
-      // Make accepted work visible to flush before coalescing the burst.
+    const reloads = Stream.merge(
+      Stream.merge(
+        Stream.merge(sources.changes(), Stream.fromPubSub(refresh)),
+        bus.subscribe([Event.Updated, SdkPlugins.Updated]),
+      ),
+      updates.changes().pipe(
+        Stream.filter((update) => packages.has(update.target)),
+        Stream.tap((update) =>
+          Effect.sync(() => {
+            update.outdated ? outdated.add(update.target) : outdated.delete(update.target)
+            update.updating ? updating.add(update.target) : updating.delete(update.target)
+          }),
+        ),
+        Stream.map(() => undefined),
+      ),
+    ).pipe(
+      // Make accepted work visible to awaitActivation before coalescing the burst.
       Stream.mapEffect(() =>
         Effect.gen(function* () {
           observed++
-          if (yield* Deferred.isDone(ready.current)) ready.current = yield* Deferred.make<void>()
+          yield* ready.close
           return observed
         }),
       ),
     )
-    yield* Stream.concat(Stream.succeed(0), updates).pipe(
+    yield* Stream.concat(Stream.succeed(0), reloads.pipe(Stream.debounce("100 millis"))).pipe(
       // Keep observing updates while activation runs, retaining only the latest generation request.
       Stream.buffer({ capacity: 1, strategy: "sliding" }),
-      Stream.debounce("100 millis"),
       Stream.runForEach((target) =>
         Effect.gen(function* () {
-          yield* activate()
-          if (observed === target) yield* Deferred.succeed(ready.current, undefined)
-        }).pipe(Effect.catchCause((cause) => Effect.logError("failed to reload plugins", { cause }))),
+          yield* activate().pipe(Effect.catchCause((cause) => Effect.logError("failed to reload plugins", { cause })))
+          if (observed === target) yield* ready.open
+        }),
       ),
       Effect.forkScoped({ startImmediately: true }),
     )
-    return Service.of({ flush: Effect.suspend(() => Deferred.await(ready.current)) })
+    // Periodic refreshes share the reload feed so they cannot activate concurrently with source changes.
+    yield* Effect.sleep("24 hours").pipe(
+      Effect.andThen(PubSub.publish(refresh, undefined)),
+      Effect.forever,
+      Effect.forkScoped,
+    )
+    return Service.of({ awaitActivation: ready.await })
   }),
 )
 
 const nodeDeps = [
   Plugin.node,
   SdkPlugins.node,
+  InstancePlugins.node,
   ConfigPluginSource.node,
+  PluginUpdate.node,
   Bus.node,
   Npm.node,
   PluginInternal.requirements,
 ] as const
+
+function pluginSource(target: string): Plugin.Source {
+  if (path.isAbsolute(target)) return { type: "local", path: target }
+  return { type: "package", target }
+}
 
 export const node = makeLocationNode({ service: Service, layer, deps: nodeDeps })

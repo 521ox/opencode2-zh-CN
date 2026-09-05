@@ -63,6 +63,15 @@ export const settings: Setting[] = [
     keywords: ["side panel"],
   },
   {
+    title: "Terminal",
+    category: "Session",
+    path: ["session", "terminal"],
+    default: process.platform !== "win32",
+    values: [false, true],
+    labels: ["off", "on"],
+    keywords: ["pty", "shell", "terminal pane"],
+  },
+  {
     title: "Scrollbar",
     category: "Session",
     path: ["session", "scrollbar"],
@@ -88,12 +97,12 @@ export const settings: Setting[] = [
     keywords: ["syntax", "concealment", "rendering"],
   },
   {
-    title: "Grouping",
+    title: "Tool grouping",
     category: "Session",
     path: ["session", "grouping"],
     default: "auto",
     values: ["none", "auto"],
-    keywords: ["transcript", "messages"],
+    keywords: ["transcript", "messages", "reads", "searches"],
   },
   {
     title: "Transcript images",
@@ -103,6 +112,15 @@ export const settings: Setting[] = [
     values: [false, true],
     labels: ["off", "on"],
     keywords: ["attachments", "images", "tool output"],
+  },
+  {
+    title: "TPS",
+    category: "Session",
+    path: ["session", "tps"],
+    default: true,
+    values: [false, true],
+    labels: ["off", "on"],
+    keywords: ["tokens per second", "throughput"],
   },
   {
     title: "New session location",
@@ -136,6 +154,15 @@ export const settings: Setting[] = [
     default: "horizontal",
     values: ["horizontal", "vertical"],
     keywords: ["sidebar", "orientation", "left"],
+  },
+  {
+    title: "Indicators",
+    category: "Tabs",
+    path: ["tabs", "indicators"],
+    default: "status",
+    values: ["status", "numbers"],
+    labels: ["status icons", "always show numbers"],
+    keywords: ["tab numbers", "number mode", "status icons"],
   },
   {
     title: "Layout",
@@ -285,12 +312,11 @@ export const settings: Setting[] = [
     keywords: ["terminal title", "tab title"],
   },
   {
-    title: "Copy on select",
+    title: "Copy behavior",
     category: "Terminal",
-    path: ["terminal", "copy_on_select"],
-    default: process.platform !== "win32",
-    values: [false, true],
-    labels: ["off", "on"],
+    path: ["terminal", "copy"],
+    default: process.platform === "win32" ? "manual" : "select",
+    values: ["manual", "select"],
     keywords: ["selection", "clipboard"],
   },
   {
@@ -315,15 +341,18 @@ export function localizeSettings(t: Translator): Setting[] {
     "theme.mode": t("dialog.config.setting.colorMode"),
     animations: t("dialog.config.setting.animations"),
     "session.sidebar": t("dialog.config.setting.sidebar"),
+    "session.terminal": t("dialog.config.setting.terminal"),
     "session.scrollbar": t("dialog.config.setting.scrollbar"),
     "session.thinking": t("dialog.config.setting.thinking"),
     "session.markdown": t("dialog.config.setting.markdown"),
     "session.grouping": t("dialog.config.setting.grouping"),
     "session.image_preview": t("dialog.config.setting.transcriptImages"),
+    "session.tps": t("dialog.config.setting.tokensPerSecond"),
     "session.new_location": t("dialog.config.setting.newSessionLocation"),
     "tabs.enabled": t("dialog.config.setting.tabsEnabled"),
     "tabs.scope": t("dialog.config.setting.tabsScope"),
     "tabs.layout": t("dialog.config.setting.tabsLayout"),
+    "tabs.indicators": t("dialog.config.setting.tabIndicators"),
     "diffs.view": t("dialog.config.setting.diffsLayout"),
     "diffs.wrap": t("dialog.config.setting.diffsWrapping"),
     "diffs.tree": t("dialog.config.setting.diffsFileTree"),
@@ -340,7 +369,7 @@ export function localizeSettings(t: Translator): Setting[] {
     "attention.sound": t("dialog.config.setting.sounds"),
     "attention.volume": t("dialog.config.setting.volume"),
     "terminal.title": t("dialog.config.setting.windowTitle"),
-    "terminal.copy_on_select": t("dialog.config.setting.copyOnSelect"),
+    "terminal.copy": t("dialog.config.setting.copyBehavior"),
     "debug.devtools": t("dialog.config.setting.developerTools"),
   }
   const categories: Record<string, string> = {
@@ -362,20 +391,24 @@ export function localizeSettings(t: Translator): Setting[] {
     "active session": t("dialog.config.value.activeSession"),
     "current directory": t("dialog.config.value.currentDirectory"),
     global: t("dialog.config.value.global"),
+    manual: t("dialog.config.value.manual"),
+    select: t("dialog.config.value.select"),
+    "status icons": t("dialog.config.value.statusIcons"),
+    "always show numbers": t("dialog.config.value.alwaysShowNumbers"),
   }
   return settings.map((setting) => ({
     ...setting,
-    title: titles[settingID(setting)],
-    category: categories[setting.category],
+    title: titles[settingID(setting)] ?? setting.title,
+    category: categories[setting.category] ?? setting.category,
     labels: setting.labels?.map((label) => labels[label] ?? label),
   }))
 }
 
 export function DialogConfig(props: { current?: string }) {
   const config = useConfig()
+  const { t } = useI18n()
   const toast = useToast()
   const themes = useThemes()
-  const { t } = useI18n()
   const current = Math.max(
     0,
     settings.findIndex((setting) => settingID(setting) === props.current),

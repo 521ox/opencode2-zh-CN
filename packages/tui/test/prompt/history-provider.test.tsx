@@ -29,9 +29,16 @@ test("down rejects at the newest history item with an empty prompt", async () =>
     await app.renderOnce()
     history!.append({ text: "previous", files: [], agents: [], pasted: [] })
 
+    expect(history!.state("")).toBe("idle")
     expect(history!.move(1, "")).toBeUndefined()
     expect(history!.move(-1, "")?.text).toBe("previous")
+    expect(history!.state("previous")).toBe("selected")
+    expect(history!.state("edited")).toBe("edited")
+    history!.reset()
+    expect(history!.state("edited")).toBe("idle")
+    expect(history!.move(-1, "")?.text).toBe("previous")
     expect(history!.move(1, "previous")?.text).toBe("")
+    expect(history!.state("")).toBe("idle")
   } finally {
     app.renderer.destroy()
   }

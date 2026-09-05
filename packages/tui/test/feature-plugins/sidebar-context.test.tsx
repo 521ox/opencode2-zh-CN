@@ -41,14 +41,17 @@ function context(options?: { cost?: number; tokens?: number }) {
 }
 
 test("sidebar omits context before usage is available", async () => {
-  const app = await testRender(() => (
-    <I18nProvider locale="en">
-      <SidebarContext context={context()} sessionID="session" />
-    </I18nProvider>
-  ), {
-    width: 42,
-    height: 8,
-  })
+  const app = await testRender(
+    () => (
+      <I18nProvider locale="en">
+        <SidebarContext context={context()} sessionID="session" />
+      </I18nProvider>
+    ),
+    {
+      width: 42,
+      height: 8,
+    },
+  )
 
   try {
     await app.renderOnce()
@@ -60,14 +63,17 @@ test("sidebar omits context before usage is available", async () => {
 })
 
 test("sidebar shows available context usage", async () => {
-  const app = await testRender(() => (
-    <I18nProvider locale="en">
-      <SidebarContext context={context({ tokens: 1234 })} sessionID="session" />
-    </I18nProvider>
-  ), {
-    width: 42,
-    height: 8,
-  })
+  const app = await testRender(
+    () => (
+      <I18nProvider locale="en">
+        <SidebarContext context={context({ tokens: 1234 })} sessionID="session" />
+      </I18nProvider>
+    ),
+    {
+      width: 42,
+      height: 8,
+    },
+  )
 
   try {
     await app.renderOnce()

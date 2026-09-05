@@ -712,7 +712,12 @@ export function RunSettingsBody(props: {
     {
       category: t("mini.command.category.terminal"),
       display: t("mini.command.setting.monochrome"),
-      footer: saving() === "mono" ? t("mini.command.setting.saving") : props.settings().mono ? t("mini.command.setting.on") : t("mini.command.setting.off"),
+      footer:
+        saving() === "mono"
+          ? t("mini.command.setting.saving")
+          : props.settings().mono
+            ? t("mini.command.setting.on")
+            : t("mini.command.setting.off"),
       keywords: `mono monochrome ascii legacy compat terminal ${props.settings().mono ? "on" : "off"}`,
       key: "mono",
     },
@@ -795,7 +800,7 @@ export function RunSubagentSelectBody(props: {
         const title = item.description || item.title || item.label
         return {
           category: "",
-          display: title,
+          display: `${item.label}: ${title} · ${item.sessionID}`,
           description: title === item.label ? undefined : item.label,
           footer: subagentStatusLabel(item.status, t),
           keywords: `${item.label} ${item.description} ${item.title ?? ""} ${item.status}`,
@@ -1075,7 +1080,7 @@ export function RunModelSelectBody(props: {
             const title = model.name ?? modelID
             const current = props.current()?.providerID === provider.id && props.current()?.modelID === modelID
             const footer = current
-                ? t("mini.command.current")
+              ? t("mini.command.current")
               : model.cost?.input === 0 && provider.id === "opencode"
                 ? t("mini.command.free")
                 : title !== modelID

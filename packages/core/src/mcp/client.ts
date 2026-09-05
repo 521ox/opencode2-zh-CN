@@ -1,9 +1,9 @@
-export * as MCPClient from "./client.js"
+export * as McpClient from "./client.js"
 
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
+import { StreamableHTTPClientTransport, StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js"
 import { UnauthorizedError, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js"
 import {
@@ -29,11 +29,12 @@ import {
 } from "@modelcontextprotocol/sdk/types.js"
 import { Cause, Effect, Exit, Schema } from "effect"
 import { ConfigMCP } from "@opencode-ai/schema/config/mcp"
-import { MCPStdio } from "./stdio.js"
+import { McpStdio } from "./stdio.js"
 
 const DEFAULT_STARTUP_TIMEOUT = 30_000
 const DEFAULT_CATALOG_TIMEOUT = 30_000
 const DEFAULT_EXECUTION_TIMEOUT = 12 * 60 * 60 * 1_000 // 12 hours
+const toError = (error: unknown) => (error instanceof Error ? error : new Error(String(error)))
 
 // Some servers advertise tool outputSchemas the SDK's strict validator can't resolve; this drops
 // only that field so a single bad schema doesn't blank out the whole tool list.
@@ -44,7 +45,7 @@ const TolerantListPromptsResult = ListPromptsResultSchema.extend({
   prompts: PromptSchema.array(),
 })
 
-export class NeedsAuthError extends Schema.TaggedErrorClass<NeedsAuthError>()("MCP.NeedsAuthError", {
+export class NeedsAuthError extends Schema.TaggedError<NeedsAuthError>()("MCP.NeedsAuthError", {
   server: Schema.String,
 }) {
   override get message() {
@@ -52,7 +53,7 @@ export class NeedsAuthError extends Schema.TaggedErrorClass<NeedsAuthError>()("M
   }
 }
 
-export class ConnectError extends Schema.TaggedErrorClass<ConnectError>()("MCP.ConnectError", {
+export class ConnectError extends Schema.TaggedError<ConnectError>()("MCP.ConnectError", {
   server: Schema.String,
   message: Schema.String,
 }) {}
@@ -190,10 +191,38 @@ export const connect = Effect.fnUntraced(function* (
   elicitation?: ElicitationHandler,
   clientInfo: Implementation = { name: "opencode", version: "unknown" },
 ) {
-  const transport: Transport = yield* Effect.gen(function* () {
+  const initialize = Effect.fnUntraced(function* (transport: Transport) {
+    const client = new Client(clientInfo, {
+      capabilities: {
+        ...(elicitation ? { elicitation: { form: { applyDefaults: true }, url: {} } } : {}),
+        // https://github.com/anomalyco/opencode/issues/2308
+        roots: {},
+      },
+    })
+    client.setRequestHandler(ListRootsRequestSchema, () =>
+      Promise.resolve({ roots: [{ uri: pathToFileURL(directory).href }] }),
+    )
+    if (elicitation) {
+      client.setRequestHandler(ElicitRequestSchema, (request, extra) =>
+        Effect.runPromise(elicitation.create({ server, params: request.params, signal: extra.signal })),
+      )
+      client.setNotificationHandler(ElicitationCompleteNotificationSchema, (notification) =>
+        Effect.runPromise(elicitation.complete({ server, elicitationID: notification.params.elicitationId })),
+      )
+    }
+
+    yield* Effect.tryPromise({
+      try: (signal) =>
+        client.connect(transport, { timeout: config.timeout?.startup ?? DEFAULT_STARTUP_TIMEOUT, signal }),
+      catch: (error) => error,
+    }).pipe(Effect.onError(() => Effect.promise(() => transport.close()).pipe(Effect.ignore)))
+    return client
+  })
+
+  const exit = yield* Effect.gen(function* () {
     if (config.type === "local") {
       const [command, ...args] = config.command
-      return yield* MCPStdio.make({
+      const transport = yield* McpStdio.make({
         server,
         command,
         args,
@@ -203,41 +232,41 @@ export const connect = Effect.fnUntraced(function* (
           ...config.environment,
         },
       })
+      return yield* initialize(transport)
     }
     if (!URL.canParse(config.url))
       return yield* new ConnectError({ server, message: `Invalid MCP URL for "${server}"` })
-    return new StreamableHTTPClientTransport(new URL(config.url), {
-      requestInit: config.headers ? { headers: config.headers } : undefined,
-      authProvider,
-    })
-  })
-  const client = new Client(clientInfo, {
-    capabilities: {
-      ...(elicitation ? { elicitation: { form: { applyDefaults: true }, url: {} } } : {}),
-      // https://github.com/anomalyco/opencode/issues/2308
-      roots: {},
-    },
-  })
-  client.setRequestHandler(ListRootsRequestSchema, () =>
-    Promise.resolve({ roots: [{ uri: pathToFileURL(directory).href }] }),
-  )
-  if (elicitation) {
-    client.setRequestHandler(ElicitRequestSchema, (request, extra) =>
-      Effect.runPromise(elicitation.create({ server, params: request.params, signal: extra.signal })),
-    )
-    client.setNotificationHandler(ElicitationCompleteNotificationSchema, (notification) =>
-      Effect.runPromise(elicitation.complete({ server, elicitationID: notification.params.elicitationId })),
-    )
-  }
+    // Prefer raw tools for our Code Mode without changing the configured URL used for OAuth identity.
+    const url = new URL(config.url)
+    const addedCodemode = config.codemode !== false && !url.searchParams.has("codemode")
+    if (addedCodemode) url.searchParams.set("codemode", "false")
+    const open = (url: URL) =>
+      initialize(
+        new StreamableHTTPClientTransport(url, {
+          requestInit: config.headers ? { headers: config.headers } : undefined,
+          authProvider,
+        }),
+      )
 
-  const exit = yield* Effect.tryPromise({
-    try: (signal) => client.connect(transport, { timeout: config.timeout?.startup ?? DEFAULT_STARTUP_TIMEOUT, signal }),
-    catch: (error) => error,
+    return yield* open(url).pipe(
+      Effect.catch((error) => {
+        if (!addedCodemode || !(error instanceof StreamableHTTPError) || error.code !== 404) return Effect.fail(error)
+        // Some servers reject unknown query params. Retry once with the user's original URL.
+        return open(new URL(config.url))
+      }),
+    )
   }).pipe(Effect.exit)
   if (Exit.isSuccess(exit)) {
+    const client = exit.value
+    let closing = false
     // Closing the client closes the transport, which ends stdin and then kills through the spawner
     // handle if the server does not exit cleanly. The process scope remains a final backstop.
-    yield* Effect.addFinalizer(() => Effect.promise(() => client.close()).pipe(Effect.ignore))
+    yield* Effect.addFinalizer(() =>
+      Effect.gen(function* () {
+        closing = true
+        yield* Effect.promise(() => client.close()).pipe(Effect.ignore)
+      }),
+    )
     const catalogTimeout = config.timeout?.catalog ?? DEFAULT_CATALOG_TIMEOUT
     const executionTimeout = config.timeout?.execution ?? DEFAULT_EXECUTION_TIMEOUT
     return {
@@ -261,7 +290,7 @@ export const connect = Effect.fnUntraced(function* (
                 },
                 (result) => result.tools,
               ),
-            catch: (error) => (error instanceof Error ? error : new Error(String(error))),
+            catch: toError,
           }).pipe(
             Effect.tapError((error) => Effect.logWarning("failed to list MCP tools", { server, error: error.message })),
           )
@@ -286,7 +315,7 @@ export const connect = Effect.fnUntraced(function* (
                 },
                 (result) => result.prompts,
               ),
-            catch: (error) => (error instanceof Error ? error : new Error(String(error))),
+            catch: toError,
           }).pipe(
             Effect.tapError((error) =>
               Effect.logWarning("failed to list MCP prompts", { server, error: error.message }),
@@ -312,7 +341,7 @@ export const connect = Effect.fnUntraced(function* (
                   client.listResources(cursor === undefined ? undefined : { cursor }, { timeout: catalogTimeout }),
                 (result) => result.resources,
               ),
-            catch: (error) => (error instanceof Error ? error : new Error(String(error))),
+            catch: toError,
           }).pipe(
             Effect.tapError((error) =>
               Effect.logWarning("failed to list MCP resources", { server, error: error.message }),
@@ -337,7 +366,7 @@ export const connect = Effect.fnUntraced(function* (
                   }),
                 (result) => result.resourceTemplates,
               ),
-            catch: (error) => (error instanceof Error ? error : new Error(String(error))),
+            catch: toError,
           }).pipe(
             Effect.tapError((error) =>
               Effect.logWarning("failed to list MCP resource templates", { server, error: error.message }),
@@ -355,7 +384,7 @@ export const connect = Effect.fnUntraced(function* (
           if (!client.getServerCapabilities()?.resources) return undefined
           const result = yield* Effect.tryPromise({
             try: (signal) => client.readResource({ uri: input.uri }, { signal, timeout: executionTimeout }),
-            catch: (error) => (error instanceof Error ? error : new Error(String(error))),
+            catch: toError,
           }).pipe(
             Effect.tapError((error) =>
               Effect.logWarning("failed to read MCP resource", { server, uri: input.uri, error: error.message }),
@@ -378,7 +407,7 @@ export const connect = Effect.fnUntraced(function* (
               GetPromptResultSchema,
               { signal, timeout: executionTimeout },
             ),
-          catch: (error) => (error instanceof Error ? error : new Error(String(error))),
+          catch: toError,
         }).pipe(
           Effect.map((result) => ({
             messages: result.messages.map((message) => ({ role: message.role, content: message.content })),
@@ -393,7 +422,7 @@ export const connect = Effect.fnUntraced(function* (
               // Keep progress tokens available while enforcing a hard wall-clock execution timeout.
               { signal, timeout: executionTimeout, onprogress: () => {} },
             ),
-          catch: (error) => (error instanceof Error ? error : new Error(String(error))),
+          catch: toError,
         }).pipe(
           Effect.map((result) => ({
             isError: result.isError === true,
@@ -416,7 +445,9 @@ export const connect = Effect.fnUntraced(function* (
           })),
         ),
       onClose: (callback) => {
-        client.onclose = callback
+        client.onclose = () => {
+          if (!closing) callback()
+        }
       },
       onLog: (callback) => {
         client.setNotificationHandler(LoggingMessageNotificationSchema, (notification) => callback(notification.params))
@@ -436,7 +467,6 @@ export const connect = Effect.fnUntraced(function* (
     } satisfies Connection
   }
 
-  yield* Effect.promise(() => transport.close()).pipe(Effect.ignore)
   const error = Cause.squash(exit.cause)
   if (error instanceof UnauthorizedError) return yield* new NeedsAuthError({ server })
   return yield* new ConnectError({ server, message: error instanceof Error ? error.message : String(error) })

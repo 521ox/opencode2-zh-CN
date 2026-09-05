@@ -51,7 +51,8 @@ export function formSync(state: FormBodyState, form: FormInfo): FormBodyState {
 export function formUnsupported(form: FormInfo, t: Translator): string | undefined {
   if (!Array.isArray(form.fields) || form.fields.length === 0) return t("mini.form.unsupported.noFields")
   for (const field of form.fields as ReadonlyArray<FormField | Record<string, unknown>>) {
-    if (!field || typeof field !== "object" || typeof field.type !== "string") return t("mini.form.unsupported.unknownField")
+    if (!field || typeof field !== "object" || typeof field.type !== "string")
+      return t("mini.form.unsupported.unknownField")
     if (!("key" in field) || typeof field.key !== "string") return t("mini.form.unsupported.invalidField")
     if ("when" in field && Array.isArray(field.when) && field.when.length > 0)
       return t("mini.form.unsupported.conditional")

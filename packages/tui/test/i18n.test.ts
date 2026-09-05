@@ -19,10 +19,12 @@ describe("TUI i18n", () => {
     expect(DEFAULT_LOCALE).toBe("zh")
     expect(resolveLocale(undefined)).toBe("zh")
     expect(resolveLocale("zh-CN")).toBe("zh")
+    expect(resolveLocale("zh-Hans-CN")).toBe("zh")
   })
 
-  test("supports an explicit English locale", () => {
+  test("supports an explicit English locale and falls back to English", () => {
     expect(resolveLocale("en-US")).toBe("en")
+    expect(resolveLocale("fr-FR")).toBe("en")
     expect(translate("en", "common.action.close")).toBe("Close")
     expect(translate("zh", "common.action.close")).toBe("关闭")
     expect(translate("en", "app.command.session.new")).toBe("New session")

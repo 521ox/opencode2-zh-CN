@@ -1,18 +1,17 @@
 import { Option, Schema } from "effect"
 import {
-  AuthenticationReason,
-  ContentPolicyReason,
-  InvalidRequestReason,
-  InvalidProviderOutputReason,
+  AuthenticationError,
+  ContentPolicyError,
+  InvalidRequestError,
+  InvalidProviderOutputError,
   AIError,
   ProviderErrorEvent,
-  ProviderInternalReason,
-  QuotaExceededReason,
-  RateLimitReason,
-  UnknownProviderReason,
+  ProviderInternalError,
+  QuotaExceededError,
+  RateLimitError,
+  UnknownProviderError,
   type HttpContext,
   type HttpRateLimitDetails,
-  type ProviderMetadata,
 } from "./schema/index.js"
 
 const patterns = [
@@ -41,16 +40,16 @@ const patterns = [
   /model_context_window_exceeded/i,
   /too many tokens/i,
   /token limit exceeded/i,
-  /invalid ['"]?input['"]?: array too long/i,
+  /request_too_large/i,
 ]
 
-const payloadPatterns = [/request_too_large/i, /request entity too large/i, /payload too large/i, /request too large/i]
+const payloadPatterns = [/request entity too large/i, /payload too large/i, /request too large/i]
 
 const exclusions = [/^(throttling error|service unavailable):/i, /rate limit/i, /too many requests/i]
 
 export const isContextOverflow = (message: string) =>
   !exclusions.some((pattern) => pattern.test(message)) &&
-  (patterns.some((pattern) => pattern.test(message)) || /^400\s*(status code)?\s*\(no body\)/i.test(message))
+  (patterns.some((pattern) => pattern.test(message)) || /^4(?:00|13)\s*(status code)?\s*\(no body\)/i.test(message))
 
 export const isPayloadTooLarge = (message: string) => payloadPatterns.some((pattern) => pattern.test(message))
 
@@ -59,7 +58,7 @@ export const isContextOverflowFailure = (failure: unknown) =>
     ? failure.reason._tag === "InvalidRequest" && failure.reason.classification === "context-overflow"
     : Schema.is(ProviderErrorEvent)(failure) && failure.classification === "context-overflow"
 
-const decodeJson = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)
+const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))
 const QUOTA_CODES = new Set(["insufficient_quota", "usage_not_included", "billing_error"])
 const SERVER_CODES = new Set([
   "api_error",
@@ -69,6 +68,7 @@ const SERVER_CODES = new Set([
   "overloaded_error",
   "server_error",
   "server_is_overloaded",
+  "slow_down",
   "serviceunavailableexception",
 ])
 const INVALID_REQUEST_CODES = new Set(["invalid_prompt", "invalid_request_error", "validationexception"])
@@ -76,95 +76,103 @@ const INCOMPLETE_STREAM_CODES = new Set(["stream_read_error"])
 const RATE_LIMIT_TEXT = /rate increased too quickly|rate[-_\s]?limit|too[_\s]?many[_\s]?requests/i
 const QUOTA_TEXT = /insufficient[-_\s]?quota|quota[-_\s]?exceeded/i
 const CONTENT_POLICY_TEXT = /content[-_\s]?policy|content_filter|safety/i
+const NETWORK_ERROR_TEXT = /network[-_\s]error/i
 
 export interface ProviderFailure {
   readonly message: string
   readonly status?: number | undefined
-  readonly code?: string | undefined
+  // Raw wire payload, scanned for failure signals (codes, overflow phrases)
+  // that the summary message does not carry. Not shown to users.
+  readonly rawBody?: string | undefined
+  // Some SDKs supply parsed error data separately from the original response text.
+  readonly data?: unknown
+  readonly http?: HttpContext | undefined
+  readonly cause?: unknown
   readonly retryAfterMs?: number | undefined
   readonly rateLimit?: HttpRateLimitDetails | undefined
-  readonly http?: HttpContext | undefined
-  readonly providerMetadata?: ProviderMetadata | undefined
 }
 
 // Keep HTTP failures and provider-reported stream failures on one typed path so
 // session retry policy never needs provider-specific string matching.
 export function classifyProviderFailure(input: ProviderFailure): AIError["reason"] {
-  const body = input.http?.body ?? ""
-  const codes = [input.code, ...providerCodes(body), ...providerCodes(input.message)]
-    .filter((code): code is string => code !== undefined)
-    .map((code) => code.toLowerCase())
-  const text = body || input.message
-  const common = { message: input.message, providerMetadata: input.providerMetadata, http: input.http }
+  const details = { message: input.message, body: input.rawBody, http: input.http, cause: input.cause }
+  const body = input.rawBody ?? ""
+  const codes = [...providerCodes(input.data), ...providerCodes(body), ...providerCodes(input.message)].map((code) =>
+    code.toLowerCase(),
+  )
+  // Scan the raw payload too so signals missing from the summary message
+  // (e.g. overflow phrases nested in a JSON error body) still classify.
+  const text = [input.message, body].filter((value) => value.length > 0).join("\n")
   const clientScoped = input.status === undefined || (input.status >= 400 && input.status < 500)
 
   if (codes.some((code) => INCOMPLETE_STREAM_CODES.has(code)))
-    return new InvalidProviderOutputReason({
-      message: input.message,
-      classification: "incomplete-stream",
-      providerMetadata: input.providerMetadata,
-    })
+    return new InvalidProviderOutputError({ ...details, classification: "incomplete-stream" })
   if (
     clientScoped &&
     (codes.includes("context_length_exceeded") ||
       codes.includes("model_context_window_exceeded") ||
+      codes.includes("request_too_large") ||
       isContextOverflow(text))
   )
-    return new InvalidRequestReason({ ...common, classification: "context-overflow" })
+    return new InvalidRequestError({ ...details, classification: "context-overflow" })
   if (input.status === 413 || isPayloadTooLarge(text))
-    return new InvalidRequestReason({ ...common, classification: "payload-too-large" })
-  if (CONTENT_POLICY_TEXT.test(text)) return new ContentPolicyReason(common)
+    return new InvalidRequestError({ ...details, classification: "payload-too-large" })
+  if (CONTENT_POLICY_TEXT.test(text)) return new ContentPolicyError(details)
   if (codes.some((code) => QUOTA_CODES.has(code)) || (input.status === 429 && QUOTA_TEXT.test(text)))
-    return new QuotaExceededReason(common)
-  if (input.status === 401) return new AuthenticationReason({ ...common, kind: "invalid" })
-  if (input.status === 403) return new AuthenticationReason({ ...common, kind: "insufficient-permissions" })
-  if (codes.includes("authentication_error")) return new AuthenticationReason({ ...common, kind: "invalid" })
+    return new QuotaExceededError(details)
+  if (input.status === 401) return new AuthenticationError({ ...details, kind: "invalid" })
+  if (input.status === 403) return new AuthenticationError({ ...details, kind: "insufficient-permissions" })
+  if (codes.includes("authentication_error")) return new AuthenticationError({ ...details, kind: "invalid" })
   if (codes.includes("permission_error"))
-    return new AuthenticationReason({ ...common, kind: "insufficient-permissions" })
+    return new AuthenticationError({ ...details, kind: "insufficient-permissions" })
   if (
     codes.some((code) => code.includes("rate_limit") || code === "too_many_requests" || code === "throttlingexception")
   )
-    return new RateLimitReason({
-      ...common,
+    return new RateLimitError({
+      ...details,
       retryAfterMs: input.retryAfterMs,
       rateLimit: input.rateLimit,
     })
   if (RATE_LIMIT_TEXT.test(text))
-    return new RateLimitReason({
-      ...common,
+    return new RateLimitError({
+      ...details,
       retryAfterMs: input.retryAfterMs,
       rateLimit: input.rateLimit,
     })
+  if (NETWORK_ERROR_TEXT.test(text)) return new ProviderInternalError(details)
   if (codes.some((code) => SERVER_CODES.has(code) || code.includes("exhausted") || code.includes("unavailable")))
-    return new ProviderInternalReason({
-      ...common,
-      status: input.status,
+    return new ProviderInternalError({
+      ...details,
       retryAfterMs: input.retryAfterMs,
     })
   if (input.status === 429) {
-    return new RateLimitReason({
-      ...common,
+    return new RateLimitError({
+      ...details,
       retryAfterMs: input.retryAfterMs,
       rateLimit: input.rateLimit,
     })
   }
   if (input.status === 408 || input.status === 409 || (input.status !== undefined && input.status >= 500))
-    return new ProviderInternalReason({
-      ...common,
-      status: input.status,
+    return new ProviderInternalError({
+      ...details,
       retryAfterMs: input.retryAfterMs,
     })
-  if (codes.some((code) => INVALID_REQUEST_CODES.has(code))) return new InvalidRequestReason(common)
+  if (codes.some((code) => INVALID_REQUEST_CODES.has(code))) return new InvalidRequestError(details)
   if (input.status === 400 || input.status === 404 || input.status === 413 || input.status === 422)
-    return new InvalidRequestReason(common)
-  return new UnknownProviderReason({ ...common, status: input.status })
+    return new InvalidRequestError(details)
+  return new UnknownProviderError(details)
 }
 
-function providerCodes(value: string) {
-  const decoded = Option.getOrUndefined(decodeJson(value))
+function providerCodes(value: unknown) {
+  const decoded = typeof value === "string" ? Option.getOrUndefined(decodeJson(value)) : value
   if (!isRecord(decoded)) return []
   const error = isRecord(decoded.error) ? decoded.error : undefined
-  return [decoded.code, error?.code, error?.type].filter((value): value is string => typeof value === "string")
+  const response = isRecord(decoded.response) ? decoded.response : undefined
+  const responseError = response && isRecord(response.error) ? response.error : undefined
+  const exception = isRecord(decoded.exception) ? decoded.exception : undefined
+  return [decoded.code, error?.code, error?.type, error?.status, responseError?.code, exception?.type].filter(
+    (value): value is string => typeof value === "string",
+  )
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -174,6 +174,7 @@ async function renderFooter(
           subagent={subagents}
           queuedPrompts={() => input.queuedPrompts ?? []}
           theme={input.theme ?? (() => RUN_THEME_FALLBACK)}
+          tuiConfig={config}
           mono={input.mono ?? false}
           miniSettings={miniSettings}
           onSubmit={input.onSubmit ?? (() => true)}
@@ -865,7 +866,8 @@ test("direct subagent panel toggles between active and inactive subagents", asyn
     const list = panelMenu(app.renderer.root)
 
     expect(frame).toContain("Select subagent")
-    expect(frame).toContain("Inspect auth flow")
+    expect(frame).toContain("Explore: Inspect auth flow · s-1")
+    expect(frame).toContain("s-1")
     expect(frame).not.toContain("Write migration plan")
     expect(frame).not.toContain("done")
     expect(frame).toContain("tab show inactive")
@@ -879,7 +881,8 @@ test("direct subagent panel toggles between active and inactive subagents", asyn
     const inactive = app.captureCharFrame()
 
     expect(inactive).not.toContain("Inspect auth flow")
-    expect(inactive).toContain("Write migration plan")
+    expect(inactive).toContain("General: Write migration plan · s-2")
+    expect(inactive).toContain("s-2")
     expect(inactive).toContain("done")
     expect(inactive).toContain("tab show active")
   } finally {
@@ -986,7 +989,8 @@ test("direct footer steers the oldest queued prompt from an empty composer", asy
 
   try {
     await app.renderOnce()
-    app.mockInput.pressEnter({ meta: true })
+    app.mockInput.pressKey("x", { ctrl: true })
+    app.mockInput.pressEnter()
     await Bun.sleep(0)
     expect(steered).toEqual([])
     app.mockInput.pressEnter()
@@ -1039,7 +1043,8 @@ test("direct footer rejects local commands submitted with the queue shortcut", a
   try {
     await app.renderOnce()
     await app.mockInput.typeText("/settings ")
-    app.mockInput.pressEnter({ meta: true })
+    app.mockInput.pressKey("x", { ctrl: true })
+    app.mockInput.pressEnter()
     await Bun.sleep(0)
     expect(submitted).toEqual([])
     expect(statuses).toContain("this prompt cannot be queued")
@@ -1457,6 +1462,7 @@ test("direct footer shows authoritative queued work while running", async () => 
             },
           ]}
           theme={() => RUN_THEME_FALLBACK}
+          tuiConfig={tuiConfig}
           miniSettings={() => ({
             thinking: "hide",
             shell_output: "hide",
@@ -1696,6 +1702,24 @@ test("direct footer shows full usage metadata when room is available", async () 
     const frame = app.captureCharFrame()
 
     expect(frame).toContain("159.6K (16%) · $4.23")
+  } finally {
+    app.cleanup()
+  }
+})
+
+test("direct footer places provider identity before cost", async () => {
+  const app = await renderFooter({
+    providers: [provider()],
+    currentModel: { providerID: "opencode", modelID: "gpt-5" },
+    state: { usage: "159.6K (16%) · $4.23" },
+    width: 120,
+  })
+
+  try {
+    await app.renderOnce()
+    const line = app.captureCharFrame().split("\n").find((item) => item.includes("$4.23")) ?? ""
+    expect(line.indexOf("opencode")).toBeGreaterThanOrEqual(0)
+    expect(line.indexOf("opencode")).toBeLessThan(line.indexOf("$4.23"))
   } finally {
     app.cleanup()
   }

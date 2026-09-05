@@ -10,6 +10,8 @@ import { toolInlineInfo } from "@opencode-ai/tui/mini/tool"
 import { DEFAULT_LOCALE, translate, type Locale, type Translator } from "@opencode-ai/tui/i18n"
 import { runNonInteractivePrompt } from "./noninteractive"
 import { UI } from "./ui"
+import { Env } from "../env"
+import { errorMessage } from "../util/error"
 
 export type RunCommandInput = {
   server: ServerConnection.Resolved
@@ -81,7 +83,13 @@ async function run(input: RunCommandInput, options: ExecutionOptions) {
 }
 
 async function execute(input: RunCommandInput, prepared: Prepared, endpoint: Endpoint, options: ExecutionOptions) {
-  const client = OpenCode.make({ baseUrl: endpoint.url, headers: Service.headers(endpoint) })
+  const client = OpenCode.make({
+    baseUrl: endpoint.url,
+    headers: Service.headers(endpoint),
+    // Bun's default five-minute deadline terminates the event stream used by long-running sessions.
+    fetch: ((request: RequestInfo | URL, init?: RequestInit) =>
+      fetch(request, { ...init, timeout: false } as BunFetchRequestInit)) as typeof fetch,
+  })
   const explicit = parseRunModel(input.model)
   const target = await resolveSessionTarget({
     client,
@@ -93,6 +101,7 @@ async function execute(input: RunCommandInput, prepared: Prepared, endpoint: End
       ? { providerID: explicit.model.providerID, id: explicit.model.modelID, variant: explicit.variant }
       : undefined,
     agent: input.agent,
+    environment: input.server.service ? Env.session() : undefined,
     prepare: async (next) => {
       const selected =
         next.model ??
@@ -236,13 +245,6 @@ async function renderTool(part: SessionMessageAssistantTool, directory: string, 
 async function renderToolError(part: SessionMessageAssistantTool, directory: string, t: Translator) {
   const info = toolInlineInfo(part, t, directory)
   UI.println(UI.Style.TEXT_NORMAL + "✗", UI.Style.TEXT_NORMAL + t("mini.tool.failed", { tool: info.title }))
-}
-
-function errorMessage(error: unknown) {
-  if (error instanceof Error) return error.message
-  if (typeof error === "object" && error !== null && "message" in error && typeof error.message === "string")
-    return error.message
-  return String(error)
 }
 
 /** @internal Used by the V1 command boundary before a Session exists. */

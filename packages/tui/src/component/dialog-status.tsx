@@ -6,9 +6,9 @@ import { For, Match, Switch, Show, createMemo } from "solid-js"
 import { useI18n } from "../context/i18n"
 
 export function DialogStatus() {
+  const { t } = useI18n()
   const data = useData()
   const theme = useTheme("elevated")
-  const { t } = useI18n()
 
   const mcp = createMemo(() => data.location.mcp.server.list() ?? [])
   const color = (status: string) => {
@@ -42,7 +42,9 @@ export function DialogStatus() {
                     <Switch fallback={item.status.status}>
                       <Match when={item.status.status === "connected"}>{t("dialog.status.connected")}</Match>
                       <Match when={item.status.status === "failed" && item.status}>{(val) => val().error}</Match>
-                      <Match when={item.status.status === "disabled"}>{t("dialog.status.disabledInConfiguration")}</Match>
+                      <Match when={item.status.status === "disabled"}>
+                        {t("dialog.status.disabledInConfiguration")}
+                      </Match>
                       <Match when={item.status.status === "needs_auth"}>{t("dialog.status.needsAuthentication")}</Match>
                     </Switch>
                   </span>

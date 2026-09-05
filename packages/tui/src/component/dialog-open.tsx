@@ -38,21 +38,7 @@ export async function loadDialogOpen(data: ReturnType<typeof useData>, client: R
 }
 
 export function DialogOpen(props: { sessions: SessionInfo[] }) {
-  const dialog = useDialog()
-  const route = useRoute()
-  const data = useData()
-  const client = useClient()
-  const location = useLocation()
-  const sessionTabs = useSessionTabs()
-  const themes = useThemes()
-  const theme = useTheme("elevated")
-  const mode = themes.mode
-  const paths = useTuiPaths()
-  const dimensions = useTerminalDimensions()
-  const shortcuts = Keymap.useShortcuts()
   const { t } = useI18n()
-  const [filter, setFilter] = createSignal("")
-  const [selectionMoved, setSelectionMoved] = createSignal(false)
   const timeAgo = (timestamp: number) => {
     const minutes = Math.floor((Date.now() - timestamp) / 60_000)
     if (minutes < 1) return t("dialog.open.now")
@@ -65,6 +51,20 @@ export function DialogOpen(props: { sessions: SessionInfo[] }) {
     if (months < 12) return t("dialog.open.months", { count: months })
     return t("dialog.open.years", { count: Math.floor(days / 365) })
   }
+  const dialog = useDialog()
+  const route = useRoute()
+  const data = useData()
+  const client = useClient()
+  const location = useLocation()
+  const sessionTabs = useSessionTabs()
+  const themes = useThemes()
+  const theme = useTheme("elevated")
+  const mode = themes.mode
+  const paths = useTuiPaths()
+  const dimensions = useTerminalDimensions()
+  const shortcuts = Keymap.useShortcuts()
+  const [filter, setFilter] = createSignal("")
+  const [selectionMoved, setSelectionMoved] = createSignal(false)
 
   const [matched] = createResource(
     () => {

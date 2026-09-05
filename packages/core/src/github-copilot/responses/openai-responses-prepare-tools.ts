@@ -47,7 +47,7 @@ export function prepareResponsesTools({
           name: tool.name,
           description: tool.description,
           parameters: tool.inputSchema,
-          strict: strictJsonSchema,
+          strict: tool.strict ?? strictJsonSchema,
         })
         break
       case "provider": {
@@ -68,12 +68,6 @@ export function prepareResponsesTools({
               filters: args.filters,
             })
 
-            break
-          }
-          case "openai.local_shell": {
-            openaiTools.push({
-              type: "local_shell",
-            })
             break
           }
           case "openai.web_search_preview": {

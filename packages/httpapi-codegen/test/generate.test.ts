@@ -20,6 +20,7 @@ import {
   emitPromise,
   generate,
   GenerationError,
+  type Output,
 } from "../src"
 import { it } from "./effect"
 import { Api as FixtureApi, Missing } from "./fixture"
@@ -30,6 +31,21 @@ function api(endpoint: HttpApiEndpoint.Constraint) {
 
 function compile<Id extends string, Groups extends HttpApiGroup.Constraint>(source: HttpApi.HttpApi<Id, Groups>) {
   return emitEffect(compileContract(source))
+}
+
+async function emittedModule(output: Output) {
+  const directory = await mkdtemp(join(tmpdir(), "opencode-httpapi-codegen-"))
+  const dispose = () => rm(directory, { recursive: true, force: true })
+
+  try {
+    // Finish each write before cleanup can run, even when a later write fails.
+    await Array.fromAsync(output.files, (file) => Bun.write(join(directory, file.path), file.content))
+    const module = await import(`${join(directory, "index.ts")}?t=${crypto.randomUUID()}`)
+    return { module, [Symbol.asyncDispose]: dispose }
+  } catch (cause) {
+    await dispose()
+    throw cause
+  }
 }
 
 describe("HttpApiCodegen.generate", () => {
@@ -120,8 +136,8 @@ describe("HttpApiCodegen.generate", () => {
     const source = output.files[0]?.content
 
     expect(source).toContain('import type { Session } from "@example/schema/session"')
-    expect(source).toContain('export type Endpoint0_0Input = { readonly "id": string }')
-    expect(source).toContain("export type Endpoint0_0Output = Session.Info")
+    expect(source).toContain('export type SessionGetInput = { readonly "id": string }')
+    expect(source).toContain("export type SessionGetOutput = Session.Info")
     expect(source).not.toContain("HttpApiClient")
     expect(source).not.toContain("@example/api")
   })
@@ -141,7 +157,53 @@ describe("HttpApiCodegen.generate", () => {
     const source = output.files[0]?.content
 
     expect(source).toContain('import type { OpenCodeEvent } from "@example/protocol/event"')
-    expect(source).toContain("export type Endpoint0_0Output = OpenCodeEvent")
+    expect(source).toContain("export type SessionEventsOutput = OpenCodeEvent")
+  })
+
+  test("rejects authoritative Effect types colliding with generated aliases", () => {
+    expect(() =>
+      emitEffectShape(compileContract(api(HttpApiEndpoint.get("get", "/session", { success: Schema.String }))), {
+        outputTypes: {
+          "session.get": {
+            name: "SessionGetOutput",
+            import: 'import type { SessionGetOutput } from "@example/schema/session"',
+          },
+        },
+      }),
+    ).toThrow("Generated Effect type collides with imported type: SessionGetOutput")
+  })
+
+  test("rejects qualified Effect imports colliding with generated interfaces", () => {
+    const Info = Schema.Struct({ id: Schema.String }).annotate({ identifier: "Session.Info" })
+
+    expect(() =>
+      emitEffectShape(compileContract(api(HttpApiEndpoint.get("get", "/session", { success: Info }))), {
+        typeReferences: [
+          {
+            schema: Info,
+            name: "SessionApi.Info",
+            import: 'import type { SessionApi } from "@example/schema/session"',
+          },
+        ],
+      }),
+    ).toThrow("Generated Effect type collides with imported type: SessionApi")
+  })
+
+  test("rejects imported endpoints colliding with generated adapter values", () => {
+    const contract = compileContract(api(HttpApiEndpoint.get("session.get", "/session", { success: Schema.String })))
+
+    expect(() =>
+      emitEffectImported(contract, {
+        module: "@example/api",
+        endpoints: { "session.session.get": "EndpointSessionGet" },
+      }),
+    ).toThrow("Generated Effect adapter collides with imported endpoint: EndpointSessionGet")
+    expect(() =>
+      emitEffectImported(contract, {
+        module: "@example/api",
+        api: "EndpointSessionGet",
+      }),
+    ).toThrow("Generated Effect adapter collides with imported endpoint: EndpointSessionGet")
   })
 
   test("exposes an imported Effect client through its generated shape", () => {
@@ -151,8 +213,8 @@ describe("HttpApiCodegen.generate", () => {
     )
     const source = output.files.find((file) => file.path === "client.ts")?.content
 
-    expect(source).toContain('import type { Endpoint0_0Output } from "../api"')
-    expect(source).toContain("preserveEffect<Endpoint0_0Output>()")
+    expect(source).toContain('import type { SessionGetOutput } from "../api"')
+    expect(source).toContain("preserveEffect<SessionGetOutput>()")
   })
 
   test("projects imported endpoint constants into a generated API", () => {
@@ -271,12 +333,12 @@ describe("HttpApiCodegen.generate", () => {
 
     const effect = emitEffect(contract)
     expect(effect.files.find((file) => file.path === "session.ts")?.content).toContain(
-      '"instructions": { "list": Endpoint0(raw), "put": Endpoint1(raw), "remove": Endpoint2(raw) }',
+      '"instructions": { "list": EndpointInstructionsList(raw), "put": EndpointInstructionsPut(raw), "remove": EndpointInstructionsRemove(raw) }',
     )
 
     const imported = emitEffectImported(contract, { module: "@example/api", api: "Api" })
     expect(imported.files.find((file) => file.path === "client.ts")?.content).toContain(
-      '"instructions": { "list": Endpoint0_0(raw), "put": Endpoint0_1(raw), "remove": Endpoint0_2(raw) }',
+      '"instructions": { "list": EndpointSessionInstructionsList(raw), "put": EndpointSessionInstructionsPut(raw), "remove": EndpointSessionInstructionsRemove(raw) }',
     )
 
     const shape = emitEffectShape(contract)
@@ -306,27 +368,21 @@ describe("HttpApiCodegen.generate", () => {
         ),
     )
     const output = emitPromise(compileContract(source))
-    const directory = await mkdtemp(join(tmpdir(), "opencode-httpapi-codegen-"))
+    await using emitted = await emittedModule(output)
     const methods: Array<string> = []
 
-    try {
-      await Promise.all(output.files.map((file) => Bun.write(join(directory, file.path), file.content)))
-      const generated = await import(`${join(directory, "index.ts")}?t=${crypto.randomUUID()}`)
-      const client = generated.OpenCode.make({
-        baseUrl: "https://example.com",
-        fetch: async (_input: RequestInfo | URL, init?: RequestInit) => {
-          methods.push(init?.method ?? "GET")
-          return Response.json("ok")
-        },
-      })
+    const client = emitted.module.OpenCode.make({
+      baseUrl: "https://example.com",
+      fetch: async (_input: RequestInfo | URL, init?: RequestInit) => {
+        methods.push(init?.method ?? "GET")
+        return Response.json("ok")
+      },
+    })
 
-      expect(await client.session.instructions.list()).toBe("ok")
-      expect(await client.session.instructions.put()).toBe("ok")
-      expect(await client.session.instructions.remove()).toBe("ok")
-      expect(methods).toEqual(["GET", "PUT", "DELETE"])
-    } finally {
-      await rm(directory, { recursive: true, force: true })
-    }
+    expect(await client.session.instructions.list()).toBe("ok")
+    expect(await client.session.instructions.put()).toBe("ok")
+    expect(await client.session.instructions.remove()).toBe("ok")
+    expect(methods).toEqual(["GET", "PUT", "DELETE"])
   })
 
   test("rejects duplicate and leaf-namespace endpoint paths", () => {
@@ -396,8 +452,13 @@ describe("HttpApiCodegen.generate", () => {
   })
 
   test("rejects normalized group, operation-key, and group prototype collisions", () => {
-    const normalized = HttpApi.make("test")
+    const sanitized = HttpApi.make("test")
       .add(HttpApiGroup.make("foo-bar").add(HttpApiEndpoint.get("get", "/first", { success: Schema.String })))
+      .add(HttpApiGroup.make("foo.bar").add(HttpApiEndpoint.get("get", "/second", { success: Schema.String })))
+    expect(() => compileContract(sanitized)).toThrow("Client module name collision: foo-bar")
+
+    const normalized = HttpApi.make("test")
+      .add(HttpApiGroup.make("foo_bar").add(HttpApiEndpoint.get("get", "/first", { success: Schema.String })))
       .add(HttpApiGroup.make("foo.bar").add(HttpApiEndpoint.get("get", "/second", { success: Schema.String })))
     expect(() => compileContract(normalized)).toThrow("Client group type collision: FooBar")
 
@@ -499,12 +560,14 @@ describe("HttpApiCodegen.generate", () => {
 
     expect(contract.groups[0]?.endpoints[0]?.operation.name).toBe("get")
     expect(promise).toContain('"get": (input: SessionGetInput, requestOptions?: RequestOptions)')
-    expect(effect).toContain('const adaptGroup0 = (raw: RawClient["session"]) => ({ "get": Endpoint0_0(raw) })')
+    expect(effect).toContain(
+      'const adaptGroupSession = (raw: RawClient["session"]) => ({ "get": EndpointSessionGet(raw) })',
+    )
     expect(effect).toContain('raw["session.get"]')
   })
 
   test("preserves optional keys in Promise error types", () => {
-    class OptionalError extends Schema.TaggedErrorClass<OptionalError>()(
+    class OptionalError extends Schema.TaggedError<OptionalError>()(
       "OptionalError",
       { message: Schema.String, detail: Schema.String.pipe(Schema.optional) },
       { httpApiStatus: 400 },
@@ -519,7 +582,7 @@ describe("HttpApiCodegen.generate", () => {
   })
 
   test("supports name-discriminated Promise errors", () => {
-    class NamedError extends Schema.ErrorClass<NamedError>("NamedError")(
+    class NamedError extends Schema.Error<NamedError>("NamedError")(
       { name: Schema.Literal("NamedError"), message: Schema.String },
       { httpApiStatus: 400 },
     ) {}
@@ -535,7 +598,7 @@ describe("HttpApiCodegen.generate", () => {
   })
 
   test("preserves reflected default error statuses", () => {
-    class MissingStatus extends Schema.TaggedErrorClass<MissingStatus>()("MissingStatus", {
+    class MissingStatus extends Schema.TaggedError<MissingStatus>()("MissingStatus", {
       message: Schema.String,
     }) {}
     const output = emitPromise(
@@ -579,10 +642,14 @@ describe("HttpApiCodegen.generate", () => {
     const Referenced = Schema.Struct({ value: Schema.String }).annotate({ identifier: "Referenced" })
     const output = emitPromise(
       compileContract(
-        api(
-          HttpApiEndpoint.get("get", "/session", {
-            success: Schema.Struct({ data: Referenced }),
-          }),
+        HttpApi.make("test").add(
+          HttpApiGroup.make("session")
+            .add(HttpApiEndpoint.get("get", "/session", { success: Schema.Struct({ data: Referenced }) }))
+            .add(
+              HttpApiEndpoint.get("list", "/sessions", {
+                success: Schema.Struct({ data: Schema.Array(Referenced) }),
+              }),
+            ),
         ),
       ),
     )
@@ -590,6 +657,21 @@ describe("HttpApiCodegen.generate", () => {
     const types = output.files.find((file) => file.path === "types.ts")?.content
     expect(types).toContain('export type Referenced = { readonly "value": string }')
     expect(types).toContain('export type SessionGetOutput = ({ readonly "data": Referenced })["data"]')
+    expect(types).not.toContain("Referenced1")
+  })
+
+  test("inlines shared anonymous Promise wire types", () => {
+    const Shared = Schema.Struct({ value: Schema.String })
+    const output = emitPromise(
+      compileContract(
+        api(HttpApiEndpoint.get("get", "/session", { success: Schema.Struct({ first: Shared, second: Shared }) })),
+      ),
+    )
+    const types = output.files.find((file) => file.path === "types.ts")?.content
+
+    expect(types).toContain('readonly "first": ({ readonly "value": string })')
+    expect(types).toContain('readonly "second": ({ readonly "value": string })')
+    expect(types).not.toContain("export type Objects")
   })
 
   test("emits mutable Promise outputs without restricting inputs", () => {
@@ -645,6 +727,37 @@ describe("HttpApiCodegen.generate", () => {
 
     expect(types).toContain("export type ExampleName = string")
     expect(types).toContain("export type ExampleName2 = string")
+  })
+
+  test("keeps conflicting Promise reference identifiers distinct", () => {
+    const First = Schema.Struct({ value: Schema.String }).annotate({ identifier: "Shared" })
+    const Second = Schema.Struct({ value: Schema.Number }).annotate({ identifier: "Shared" })
+
+    const output = emitPromise(
+      compileContract(
+        api(HttpApiEndpoint.get("get", "/session", { success: Schema.Struct({ first: First, second: Second }) })),
+      ),
+    )
+    const types = output.files.find((file) => file.path === "types.ts")?.content
+
+    expect(types).toContain('export type Shared = { readonly "value": string }')
+    expect(types).toContain('export type Shared1 = { readonly "value": number }')
+    expect(types).toContain('readonly "first": Shared, readonly "second": Shared1')
+  })
+
+  test("deduplicates equivalent Promise references with the same identifier", () => {
+    const First = Schema.String.annotate({ identifier: "Shared", description: "first" })
+    const Second = Schema.String.annotate({ identifier: "Shared", description: "second" })
+    const output = emitPromise(
+      compileContract(
+        api(HttpApiEndpoint.get("get", "/session", { success: Schema.Struct({ first: First, second: Second }) })),
+      ),
+    )
+    const types = output.files.find((file) => file.path === "types.ts")?.content
+
+    expect(types).toContain("export type Shared = string")
+    expect(types).not.toContain("export type Shared1")
+    expect(types).toContain('readonly "first": Shared, readonly "second": Shared')
   })
 
   test("emits Effect Json schemas as standalone Promise types", () => {
@@ -722,26 +835,19 @@ describe("HttpApiCodegen.generate", () => {
         ),
       ),
     )
-    const directory = await mkdtemp(join(tmpdir(), "opencode-httpapi-codegen-"))
+    await using emitted = await emittedModule(output)
+    let request: Request | undefined
+    const client = emitted.module.OpenCode.make({
+      baseUrl: "https://example.com",
+      fetch: async (input: RequestInfo | URL) => {
+        request = input instanceof Request ? input : new Request(input)
+        return Response.json({ data: "hello" })
+      },
+    })
 
-    try {
-      await Promise.all(output.files.map((file) => Bun.write(join(directory, file.path), file.content)))
-      const generated = await import(`${join(directory, "index.ts")}?t=${crypto.randomUUID()}`)
-      let request: Request | undefined
-      const client = generated.OpenCode.make({
-        baseUrl: "https://example.com",
-        fetch: async (input: RequestInfo | URL) => {
-          request = input instanceof Request ? input : new Request(input)
-          return Response.json({ data: "hello" })
-        },
-      })
-
-      expect(await client.session.get({ sessionID: "a/b" })).toBe("hello")
-      expect(request?.method).toBe("GET")
-      expect(request?.url).toBe("https://example.com/session/a%2Fb")
-    } finally {
-      await rm(directory, { recursive: true, force: true })
-    }
+    expect(await client.session.get({ sessionID: "a/b" })).toBe("hello")
+    expect(request?.method).toBe("GET")
+    expect(request?.url).toBe("https://example.com/session/a%2Fb")
   })
 
   test("maps an emitted no-content response to undefined", async () => {
@@ -755,20 +861,13 @@ describe("HttpApiCodegen.generate", () => {
         ),
       ),
     )
-    const directory = await mkdtemp(join(tmpdir(), "opencode-httpapi-codegen-"))
+    await using emitted = await emittedModule(output)
+    const client = emitted.module.OpenCode.make({
+      baseUrl: "https://example.com",
+      fetch: async () => new Response(null, { status: 204 }),
+    })
 
-    try {
-      await Promise.all(output.files.map((file) => Bun.write(join(directory, file.path), file.content)))
-      const generated = await import(`${join(directory, "index.ts")}?t=${crypto.randomUUID()}`)
-      const client = generated.OpenCode.make({
-        baseUrl: "https://example.com",
-        fetch: async () => new Response(null, { status: 204 }),
-      })
-
-      expect(await client.session.interrupt({ sessionID: "session" })).toBeUndefined()
-    } finally {
-      await rm(directory, { recursive: true, force: true })
-    }
+    expect(await client.session.interrupt({ sessionID: "session" })).toBeUndefined()
   })
 
   test("executes an emitted binary wildcard GET through fetch", async () => {
@@ -782,28 +881,21 @@ describe("HttpApiCodegen.generate", () => {
         ),
       ),
     )
-    const directory = await mkdtemp(join(tmpdir(), "opencode-httpapi-codegen-"))
+    await using emitted = await emittedModule(output)
+    let request: Request | undefined
+    const client = emitted.module.OpenCode.make({
+      baseUrl: "https://example.com",
+      fetch: async (input: RequestInfo | URL) => {
+        request = input instanceof Request ? input : new Request(input)
+        return new Response(new Uint8Array([1, 2, 3]))
+      },
+    })
 
-    try {
-      await Promise.all(output.files.map((file) => Bun.write(join(directory, file.path), file.content)))
-      const generated = await import(`${join(directory, "index.ts")}?t=${crypto.randomUUID()}`)
-      let request: Request | undefined
-      const client = generated.OpenCode.make({
-        baseUrl: "https://example.com",
-        fetch: async (input: RequestInfo | URL) => {
-          request = input instanceof Request ? input : new Request(input)
-          return new Response(new Uint8Array([1, 2, 3]))
-        },
-      })
-
-      const result = await client.session.read({ path: "src/a b#c.ts", token: "x/y" })
-      expect(result).toBeInstanceOf(Uint8Array)
-      expect(Array.from(result)).toEqual([1, 2, 3])
-      expect(request?.method).toBe("GET")
-      expect(request?.url).toBe("https://example.com/file/src/a%20b%23c.ts?token=x%2Fy")
-    } finally {
-      await rm(directory, { recursive: true, force: true })
-    }
+    const result = await client.session.read({ path: "src/a b#c.ts", token: "x/y" })
+    expect(result).toBeInstanceOf(Uint8Array)
+    expect(Array.from(result)).toEqual([1, 2, 3])
+    expect(request?.method).toBe("GET")
+    expect(request?.url).toBe("https://example.com/file/src/a%20b%23c.ts?token=x%2Fy")
   })
 
   test("serializes flattened query, header, and JSON payload inputs", async () => {
@@ -820,29 +912,22 @@ describe("HttpApiCodegen.generate", () => {
         ),
       ),
     )
-    const directory = await mkdtemp(join(tmpdir(), "opencode-httpapi-codegen-"))
+    await using emitted = await emittedModule(output)
+    let request: Request | undefined
+    const client = emitted.module.OpenCode.make({
+      baseUrl: "https://example.com",
+      fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+        request = input instanceof Request ? input : new Request(input, init)
+        return Response.json({ data: "admitted" })
+      },
+    })
 
-    try {
-      await Promise.all(output.files.map((file) => Bun.write(join(directory, file.path), file.content)))
-      const generated = await import(`${join(directory, "index.ts")}?t=${crypto.randomUUID()}`)
-      let request: Request | undefined
-      const client = generated.OpenCode.make({
-        baseUrl: "https://example.com",
-        fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
-          request = input instanceof Request ? input : new Request(input, init)
-          return Response.json({ data: "admitted" })
-        },
-      })
-
-      expect(
-        await client.session.prompt({ sessionID: "session", resume: true, traceID: "trace", prompt: "hello" }),
-      ).toBe("admitted")
-      expect(request?.url).toBe("https://example.com/session/session?resume=true")
-      expect(request?.headers.get("traceID")).toBe("trace")
-      expect(await request?.json()).toEqual({ prompt: "hello" })
-    } finally {
-      await rm(directory, { recursive: true, force: true })
-    }
+    expect(await client.session.prompt({ sessionID: "session", resume: true, traceID: "trace", prompt: "hello" })).toBe(
+      "admitted",
+    )
+    expect(request?.url).toBe("https://example.com/session/session?resume=true")
+    expect(request?.headers.get("traceID")).toBe("trace")
+    expect(await request?.json()).toEqual({ prompt: "hello" })
   })
 
   test("serializes an opaque union payload as the direct JSON body", async () => {
@@ -859,26 +944,19 @@ describe("HttpApiCodegen.generate", () => {
         ),
       ),
     )
-    const directory = await mkdtemp(join(tmpdir(), "opencode-httpapi-codegen-"))
+    await using emitted = await emittedModule(output)
+    let request: Request | undefined
+    const client = emitted.module.OpenCode.make({
+      baseUrl: "https://example.com",
+      fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+        request = input instanceof Request ? input : new Request(input, init)
+        return new Response(null, { status: 204 })
+      },
+    })
 
-    try {
-      await Promise.all(output.files.map((file) => Bun.write(join(directory, file.path), file.content)))
-      const generated = await import(`${join(directory, "index.ts")}?t=${crypto.randomUUID()}`)
-      let request: Request | undefined
-      const client = generated.OpenCode.make({
-        baseUrl: "https://example.com",
-        fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
-          request = input instanceof Request ? input : new Request(input, init)
-          return new Response(null, { status: 204 })
-        },
-      })
+    await client.session.configure({ payload: { type: "local", command: ["opencode"] } })
 
-      await client.session.configure({ payload: { type: "local", command: ["opencode"] } })
-
-      expect(await request?.json()).toEqual({ type: "local", command: ["opencode"] })
-    } finally {
-      await rm(directory, { recursive: true, force: true })
-    }
+    expect(await request?.json()).toEqual({ type: "local", command: ["opencode"] })
   })
 
   test("serializes explicit null query values", async () => {
@@ -892,26 +970,19 @@ describe("HttpApiCodegen.generate", () => {
         ),
       ),
     )
-    const directory = await mkdtemp(join(tmpdir(), "opencode-httpapi-codegen-"))
+    await using emitted = await emittedModule(output)
+    let request: Request | undefined
+    const client = emitted.module.OpenCode.make({
+      baseUrl: "https://example.com",
+      fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+        request = input instanceof Request ? input : new Request(input, init)
+        return Response.json({ data: [] })
+      },
+    })
 
-    try {
-      await Promise.all(output.files.map((file) => Bun.write(join(directory, file.path), file.content)))
-      const generated = await import(`${join(directory, "index.ts")}?t=${crypto.randomUUID()}`)
-      let request: Request | undefined
-      const client = generated.OpenCode.make({
-        baseUrl: "https://example.com",
-        fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
-          request = input instanceof Request ? input : new Request(input, init)
-          return Response.json({ data: [] })
-        },
-      })
+    await client.session.list({ parentID: null })
 
-      await client.session.list({ parentID: null })
-
-      expect(request?.url).toBe("https://example.com/session?parentID=null")
-    } finally {
-      await rm(directory, { recursive: true, force: true })
-    }
+    expect(request?.url).toBe("https://example.com/session?parentID=null")
   })
 
   test("rejects with declared tagged errors and exports a type guard", async () => {
@@ -926,22 +997,15 @@ describe("HttpApiCodegen.generate", () => {
         ),
       ),
     )
-    const directory = await mkdtemp(join(tmpdir(), "opencode-httpapi-codegen-"))
+    await using emitted = await emittedModule(output)
+    const client = emitted.module.OpenCode.make({
+      baseUrl: "https://example.com",
+      fetch: async () => Response.json({ _tag: "Missing", message: "gone" }, { status: 404 }),
+    })
 
-    try {
-      await Promise.all(output.files.map((file) => Bun.write(join(directory, file.path), file.content)))
-      const generated = await import(`${join(directory, "index.ts")}?t=${crypto.randomUUID()}`)
-      const client = generated.OpenCode.make({
-        baseUrl: "https://example.com",
-        fetch: async () => Response.json({ _tag: "Missing", message: "gone" }, { status: 404 }),
-      })
-
-      const error = await client.session.get({ sessionID: "missing" }).catch((cause: unknown) => cause)
-      expect(error).toEqual({ _tag: "Missing", message: "gone" })
-      expect(generated.isMissing(error)).toBeTrue()
-    } finally {
-      await rm(directory, { recursive: true, force: true })
-    }
+    const error = await client.session.get({ sessionID: "missing" }).catch((cause: unknown) => cause)
+    expect(error).toEqual({ _tag: "Missing", message: "gone" })
+    expect(emitted.module.isMissing(error)).toBeTrue()
   })
 
   test("iterates an emitted SSE stream lazily without reconnecting", async () => {
@@ -957,42 +1021,35 @@ describe("HttpApiCodegen.generate", () => {
         ),
       ),
     )
-    const directory = await mkdtemp(join(tmpdir(), "opencode-httpapi-codegen-"))
+    await using emitted = await emittedModule(output)
+    let requests = 0
+    let url: string | undefined
+    const client = emitted.module.OpenCode.make({
+      baseUrl: "https://example.com",
+      fetch: async (input: RequestInfo | URL) => {
+        requests++
+        url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url
+        const encoder = new TextEncoder()
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(encoder.encode('data: {"type":"ready","count":"1"}\r'))
+              controller.enqueue(encoder.encode("\n\r\n"))
+              controller.close()
+            },
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        )
+      },
+    })
+    const events = client.session.subscribe({ after: 2 })
 
-    try {
-      await Promise.all(output.files.map((file) => Bun.write(join(directory, file.path), file.content)))
-      const generated = await import(`${join(directory, "index.ts")}?t=${crypto.randomUUID()}`)
-      let requests = 0
-      let url: string | undefined
-      const client = generated.OpenCode.make({
-        baseUrl: "https://example.com",
-        fetch: async (input: RequestInfo | URL) => {
-          requests++
-          url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url
-          const encoder = new TextEncoder()
-          return new Response(
-            new ReadableStream({
-              start(controller) {
-                controller.enqueue(encoder.encode('data: {"type":"ready","count":"1"}\r'))
-                controller.enqueue(encoder.encode("\n\r\n"))
-                controller.close()
-              },
-            }),
-            { headers: { "content-type": "text/event-stream" } },
-          )
-        },
-      })
-      const events = client.session.subscribe({ after: 2 })
-
-      expect(requests).toBe(0)
-      const received = []
-      for await (const event of events) received.push(event)
-      expect(received).toEqual([{ type: "ready", count: "1" }])
-      expect(requests).toBe(1)
-      expect(url).toBe("https://example.com/event?after=2")
-    } finally {
-      await rm(directory, { recursive: true, force: true })
-    }
+    expect(requests).toBe(0)
+    const received = []
+    for await (const event of events) received.push(event)
+    expect(received).toEqual([{ type: "ready", count: "1" }])
+    expect(requests).toBe(1)
+    expect(url).toBe("https://example.com/event?after=2")
   })
 
   test("preserves public group and endpoint identifiers exactly", () => {
@@ -1035,7 +1092,7 @@ describe("HttpApiCodegen.generate", () => {
     for (const file of output.files) expect(() => transpiler.transformSync(file.content)).not.toThrow()
   })
 
-  it.effect("keeps the strict generated-consumer fixture current", () =>
+  it.live("keeps the strict generated-consumer fixture current", () =>
     Effect.gen(function* () {
       const output = compile(FixtureApi)
       const actual = yield* Effect.promise(() =>
@@ -1347,6 +1404,19 @@ describe("HttpApiCodegen.generate", () => {
     ).toThrow("Effect schema requires authoritative import: session.get")
   })
 
+  test("rejects same-shape custom transformations", () => {
+    const Trimmed = Schema.String.pipe(
+      Schema.decodeTo(Schema.String, {
+        decode: SchemaGetter.transform((value) => value.trim()),
+        encode: SchemaGetter.transform((value) => value),
+      }),
+    )
+
+    expect(() => compile(api(HttpApiEndpoint.get("get", "/session", { success: Trimmed })))).toThrow(
+      "Effect schema requires authoritative import: session.get",
+    )
+  })
+
   test("rejects custom validation checks without portable metadata", () => {
     const Positive = Schema.Number.check(Schema.makeFilter((value) => (value > 0 ? undefined : "positive")))
 
@@ -1404,7 +1474,7 @@ describe("HttpApiCodegen.generate", () => {
   })
 
   test("preserves errors from server-only middleware", () => {
-    class Unauthorized extends Schema.TaggedErrorClass<Unauthorized>()("Unauthorized", {}) {}
+    class Unauthorized extends Schema.TaggedError<Unauthorized>()("Unauthorized", {}) {}
     class Authorization extends HttpApiMiddleware.Service<Authorization>()("Authorization", {
       error: Unauthorized,
     }) {}
@@ -1415,12 +1485,12 @@ describe("HttpApiCodegen.generate", () => {
 
     expect(output.operations[0]).toBeDefined()
     expect(output.files.find((file) => file.path === "session.ts")?.content).toContain(
-      'extends Schema.TaggedErrorClass<Endpoint0Error0Class>("Unauthorized")',
+      'extends Schema.TaggedError<EndpointGetError0Class>("Unauthorized")',
     )
   })
 
   test("preserves tagged error response statuses", () => {
-    class Missing extends Schema.TaggedErrorClass<Missing>()("Missing", {}) {}
+    class Missing extends Schema.TaggedError<Missing>()("Missing", {}) {}
     const output = compile(
       api(
         HttpApiEndpoint.get("get", "/session", {
@@ -1431,7 +1501,7 @@ describe("HttpApiCodegen.generate", () => {
     )
 
     expect(output.files.find((file) => file.path === "session.ts")?.content).toContain(
-      'Endpoint0Error0Class.annotate({ "httpApiStatus": 404 })',
+      'EndpointGetError0Class.annotate({ "httpApiStatus": 404 })',
     )
   })
 
@@ -1441,35 +1511,35 @@ describe("HttpApiCodegen.generate", () => {
     expect(output.files.find((file) => file.path === "session.ts")?.content).toContain('HttpApiEndpoint.make("TRACE")')
   })
 
-  test("uses safe unique module paths without changing public group identifiers", () => {
+  test("uses safe identity-derived module paths without changing public group identifiers", () => {
     const output = compile(
       HttpApi.make("test")
         .add(HttpApiGroup.make("../session").add(HttpApiEndpoint.get("get", "/session", { success: Schema.String })))
         .add(HttpApiGroup.make("GROUP-0").add(HttpApiEndpoint.get("list", "/session", { success: Schema.String }))),
     )
 
-    expect(output.files.slice(0, 2).map((file) => file.path)).toEqual(["group-0.ts", "GROUP-0-1.ts"])
+    expect(output.files.slice(0, 2).map((file) => file.path)).toEqual(["session.ts", "GROUP-0.ts"])
     expect(output.files[0]?.content).toContain('HttpApiGroup.make("../session"')
   })
 
-  test("reserves support module names case-insensitively", () => {
+  test("prefixes group modules that collide with support or Windows-reserved names", () => {
     const output = compile(
       HttpApi.make("test")
-        .add(HttpApiGroup.make("client").add(HttpApiEndpoint.get("get", "/client", { success: Schema.String })))
-        .add(HttpApiGroup.make("INDEX").add(HttpApiEndpoint.get("get", "/index", { success: Schema.String }))),
+        .add(HttpApiGroup.make("INDEX").add(HttpApiEndpoint.get("get", "/index", { success: Schema.String })))
+        .add(HttpApiGroup.make("CON").add(HttpApiEndpoint.get("get", "/con", { success: Schema.String }))),
     )
 
-    expect(output.files.slice(0, 2).map((file) => file.path)).toEqual(["client-0.ts", "INDEX-1.ts"])
+    expect(output.files.slice(0, 2).map((file) => file.path)).toEqual(["group-INDEX.ts", "group-CON.ts"])
   })
 
-  test("keeps searching when a reserved-name fallback is also occupied", () => {
-    const output = compile(
-      HttpApi.make("test")
-        .add(HttpApiGroup.make("client-1").add(HttpApiEndpoint.get("first", "/first", { success: Schema.String })))
-        .add(HttpApiGroup.make("client").add(HttpApiEndpoint.get("second", "/second", { success: Schema.String }))),
-    )
-
-    expect(output.files.slice(0, 2).map((file) => file.path)).toEqual(["client-1.ts", "client-1-1.ts"])
+  test("rejects module names colliding after normalization", () => {
+    expect(() =>
+      compile(
+        HttpApi.make("test")
+          .add(HttpApiGroup.make("my.group").add(HttpApiEndpoint.get("first", "/first", { success: Schema.String })))
+          .add(HttpApiGroup.make("my/group").add(HttpApiEndpoint.get("second", "/second", { success: Schema.String }))),
+      ),
+    ).toThrow("Client module name collision: my-group")
   })
 
   test("rejects collisions in the flattened client namespace", () => {
@@ -1495,7 +1565,7 @@ describe("HttpApiCodegen.generate", () => {
       ),
     )
 
-    expect(output.files[0]?.content).toContain("type RawGroup = HttpApiClient.Client<typeof Group0")
+    expect(output.files[0]?.content).toContain("type RawGroup = HttpApiClient.Client<typeof GroupHealth")
   })
 
   it.effect("reports compiler failures in the generate Effect", () =>

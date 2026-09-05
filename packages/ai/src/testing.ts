@@ -4,14 +4,16 @@ import { LLMClient, type Interface as LLMClientShape } from "./route/client.js"
 import {
   LLMEvent,
   LLMResponse,
+  CompactionResponse,
   type FinishReasonDetails,
   type AIError,
   type LLMRequest,
+  type ProviderMetadata,
   type UsageInput,
 } from "./schema/index.js"
 import { Context, Deferred, Effect, Latch, Layer, Queue, Scope, Stream } from "effect"
 
-export type Response = readonly LLMEvent[] | Stream.Stream<LLMEvent, AIError>
+export type Response = readonly LLMEvent[] | Stream.Stream<LLMEvent, AIError> | CompactionResponse
 
 export type Gate = Readonly<{ started: Effect.Effect<void>; release: Effect.Effect<void> }>
 
@@ -33,13 +35,22 @@ export interface LayerOptions {
 export class Service extends Context.Service<Service, Interface>()("@opencode/ai/TestLLM") {}
 
 export const complete = (
-  options: { readonly reason: FinishReasonDetails; readonly usage?: UsageInput },
+  options: {
+    readonly reason: FinishReasonDetails
+    readonly usage?: UsageInput
+    readonly providerMetadata?: ProviderMetadata
+  },
   ...events: readonly LLMEvent[]
 ) => [
   LLMEvent.stepStart({ index: 0 }),
   ...events,
-  LLMEvent.stepFinish({ index: 0, reason: options.reason, usage: options.usage }),
-  LLMEvent.finish({ reason: options.reason }),
+  LLMEvent.stepFinish({
+    index: 0,
+    reason: options.reason,
+    usage: options.usage,
+    providerMetadata: options.providerMetadata,
+  }),
+  LLMEvent.finish({ reason: options.reason, providerMetadata: options.providerMetadata }),
 ]
 
 export const stop = (...events: readonly LLMEvent[]) => complete({ reason: { normalized: "stop" } }, ...events)
@@ -68,8 +79,6 @@ export const failAfter = (error: AIError, ...events: readonly LLMEvent[]) =>
 
 export const hangAfter = (...events: readonly LLMEvent[]) => Stream.concat(Stream.fromIterable(events), Stream.never)
 
-const toStream = (response: Response) => (Stream.isStream(response) ? response : Stream.fromIterable(response))
-
 export const layer = (options: LayerOptions = {}) =>
   Layer.effect(
     Service,
@@ -84,21 +93,37 @@ export const layer = (options: LayerOptions = {}) =>
           requests.length >= count ? Effect.void : Deferred.await(started).pipe(Effect.andThen(wait(count))),
         )
 
-      const stream = ((request: LLMRequest) => {
-        requests.push(options.transformRequest?.(request) ?? request)
-        const waiting = started
-        started = Deferred.makeUnsafe()
-        Deferred.doneUnsafe(waiting, Effect.void)
-        const response = responses.shift() ?? fallback
-        if (!response) return Stream.die(new Error(`TestLLM has no response for request ${requests.length}`))
-        const streamed = toStream(response)
-        const gate = activeGate
-        if (!gate) return streamed
-        return Stream.unwrap(
-          Queue.offer(gate.started, undefined).pipe(Effect.andThen(gate.release.await), Effect.as(streamed)),
+      const take = (request: LLMRequest) =>
+        Effect.suspend(() => {
+          const count = requests.push(options.transformRequest?.(request) ?? request)
+          const waiting = started
+          started = Deferred.makeUnsafe()
+          const response = responses.shift() ?? fallback
+          const gate = activeGate
+          Deferred.doneUnsafe(waiting, Effect.void)
+          if (!response) return Effect.die(new Error(`TestLLM has no response for request ${count}`))
+          if (!gate) return Effect.succeed(response)
+          return Queue.offer(gate.started, undefined).pipe(Effect.andThen(gate.release.await), Effect.as(response))
+        })
+      const stream: LLMClientShape["stream"] = (request) =>
+        Stream.unwrap(
+          take(request).pipe(
+            Effect.map((response) => {
+              if (response instanceof CompactionResponse)
+                return Stream.die("TestLLM generation requires an event response")
+              return Stream.isStream(response) ? response : Stream.fromIterable(response)
+            }),
+          ),
         )
-      }) as LLMClientShape["stream"]
       const client = LLMClient.Service.of({
+        compact: (request) =>
+          take(request).pipe(
+            Effect.flatMap((response) =>
+              response instanceof CompactionResponse
+                ? Effect.succeed(response)
+                : Effect.die("TestLLM compaction requires a CompactionResponse"),
+            ),
+          ),
         stream,
         generate: (request) =>
           stream(request).pipe(

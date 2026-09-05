@@ -1,7 +1,9 @@
 import { Database } from "@opencode-ai/core/database/database"
 import { V1Migration } from "@opencode-ai/core/database/v1-migration"
 import { App } from "@opencode-ai/core/app"
+import { Instance } from "@opencode-ai/core/instance"
 import { LayerNode } from "@opencode-ai/util/effect/layer-node"
+import { Node } from "@opencode-ai/util/effect/app-node"
 import { httpClient } from "@opencode-ai/util/effect/app-node-platform"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { Bus } from "@opencode-ai/core/bus"
@@ -9,22 +11,23 @@ import { EventLogger } from "@opencode-ai/core/event-logger"
 import { FileSystemSearch } from "@opencode-ai/core/filesystem/search"
 import { Credential } from "@opencode-ai/core/credential"
 import { Config } from "@opencode-ai/core/config"
-import { Command } from "@opencode-ai/core/command"
 import { PermissionSaved } from "@opencode-ai/core/permission/saved"
 import { PtyTicket } from "@opencode-ai/core/pty/ticket"
-import { Pty } from "@opencode-ai/core/pty"
+import { PersistentPty } from "@opencode-ai/core/persistent-pty"
 import { Project } from "@opencode-ai/core/project"
 import { Session } from "@opencode-ai/core/session"
 import { SessionTransfer } from "@opencode-ai/core/session/transfer"
-import { Shell } from "@opencode-ai/core/shell"
+import { ShellSelect } from "@opencode-ai/core/shell/select"
 import { Job } from "@opencode-ai/core/job"
-import { MCP } from "@opencode-ai/core/mcp/index"
+import { Mcp } from "@opencode-ai/core/mcp/index"
 import { Global } from "@opencode-ai/util/global"
 import { InstructionDiscovery } from "@opencode-ai/core/instruction-discovery"
 import { LocationServiceMap } from "@opencode-ai/core/location-service-map"
+import { LocationActivity } from "@opencode-ai/core/location-activity"
 import { ModelsDev } from "@opencode-ai/core/models-dev"
 import { SessionRestart } from "@opencode-ai/core/session/execution/restart"
 import { PluginRuntime } from "@opencode-ai/core/plugin/runtime"
+import { PluginUpdate } from "@opencode-ai/core/plugin/update"
 import { SdkPlugins } from "@opencode-ai/core/plugin/sdk"
 import { WellKnown } from "@opencode-ai/core/wellknown"
 import { Workspace } from "@opencode-ai/core/workspace"
@@ -58,16 +61,20 @@ const applicationServiceNodes = [
   SessionTransfer.node,
   PluginRuntime.providerNode,
   SdkPlugins.node,
+  PluginUpdate.node,
   PermissionSaved.node,
   PtyTicket.node,
+  PersistentPty.node,
   Credential.node,
   WellKnown.node,
   PtyEnvironment.node,
   LocationServiceMap.node,
+  Instance.node,
+  LocationActivity.node,
   SessionRestart.node,
+  Workspace.node,
 ] as const
 const applicationServices = LayerNode.group(applicationServiceNodes)
-const embeddedApplicationServices = LayerNode.group([...applicationServiceNodes, Workspace.node])
 
 export function createRoutes(
   options: ServerOptions = {},
@@ -81,12 +88,19 @@ export function createRoutes(
     options,
     serviceURLs,
     overrides,
-    false,
   )
 }
 
-export function createEmbeddedRoutes(options: ServerOptions = {}, overrides: LayerNode.Replacements = []) {
-  return makeRoutes(ServerAuth.Config.configLayer({ password: Option.none() }), options, () => [], overrides, true)
+type InstanceNode = (
+  replacements: () => LayerNode.Replacements,
+) => LayerNode.Node<Instance.Service, never, typeof Node.tags.values.global>
+
+export function createEmbeddedRoutes(
+  options: ServerOptions = {},
+  overrides: LayerNode.Replacements = [],
+  instances?: InstanceNode,
+) {
+  return makeRoutes(ServerAuth.Config.configLayer({ password: Option.none() }), options, () => [], overrides, instances)
 }
 
 function makeRoutes<AuthError, AuthServices>(
@@ -95,11 +109,12 @@ function makeRoutes<AuthError, AuthServices>(
   serviceURLs: () => ReadonlyArray<string>,
   // Runtime-profile replacements (e.g. workerd) applied after the standard set, so later entries win.
   overrides: LayerNode.Replacements,
-  embedded: boolean,
+  instances?: InstanceNode,
 ) {
   const pluginRuntimeCell = PluginRuntime.makeCell()
   const standard: LayerNode.Replacements = [
     [Database.node, Database.configured(options.database)],
+    [PersistentPty.node, PersistentPty.configured(options.pty)],
     [Bus.node, Bus.configured({ persist: options.events?.persist })],
     [App.node, App.configured(options.app)],
     [ModelsDev.node, ModelsDev.configured(options.models)],
@@ -115,12 +130,10 @@ function makeRoutes<AuthError, AuthServices>(
       }),
     ],
     [InstructionDiscovery.node, InstructionDiscovery.configured({ project: options.config?.project })],
-    [Command.node, Command.configured({ gitbash: options.windows?.gitbash })],
-    [Pty.node, Pty.configured({ gitbash: options.windows?.gitbash })],
-    [Shell.node, Shell.configured({ gitbash: options.windows?.gitbash })],
+    [ShellSelect.node, ShellSelect.configured({ gitbash: options.windows?.gitbash })],
     [
-      MCP.node,
-      MCP.configured({
+      Mcp.node,
+      Mcp.configured({
         clientInfo: {
           name: options.app?.name ?? "opencode",
           version: options.app?.version ?? "unknown",
@@ -130,25 +143,40 @@ function makeRoutes<AuthError, AuthServices>(
     [PluginRuntime.node, PluginRuntime.layerWithCell(pluginRuntimeCell)],
     [PluginRuntime.providerNode, PluginRuntime.providerNodeWithCell(pluginRuntimeCell)],
   ]
-  const replacements: LayerNode.Replacements = [...standard, ...overrides]
+  const build = (selected: LayerNode.Replacements) => {
+    const selectedInstances: LayerNode.Replacements = instances
+      ? [[Instance.node, instances(() => replacements)]]
+      : []
+    const replacements: LayerNode.Replacements = [
+      ...standard,
+      ...selectedInstances,
+      ...selected,
+    ]
+    return AppNodeBuilder.build(applicationServices, replacements)
+  }
   const serviceLayer = options.simulation
     ? Layer.unwrap(
         Effect.gen(function* () {
           const { simulationReplacements } = yield* Effect.promise(() => import("@opencode-ai/simulation/backend"))
           const simulation = yield* simulationReplacements({ version: App.make(options.app).version })
-          return AppNodeBuilder.build(embedded ? embeddedApplicationServices : applicationServices, [
-            ...replacements,
-            ...simulation,
-          ])
+          return build([...overrides, ...simulation])
         }),
       )
-    : AppNodeBuilder.build(embedded ? embeddedApplicationServices : applicationServices, replacements)
+    : build(overrides)
   return serviceLayer.pipe(
     Layer.flatMap((context) => {
       const services = Layer.succeedContext(context)
       const requestServices = Layer.merge(
         Layer.succeedContext(
-          Context.pick(Database.Service, PermissionSaved.Service, Project.Service, WellKnown.Service)(context),
+          Context.pick(
+            Database.Service,
+            Instance.Service,
+            PermissionSaved.Service,
+            PluginUpdate.Service,
+            Project.Service,
+            Session.Service,
+            WellKnown.Service,
+          )(context),
         ),
         ServerInfo.layer(serviceURLs, options.app),
       )

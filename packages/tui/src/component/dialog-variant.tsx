@@ -5,9 +5,9 @@ import { useDialog } from "../ui/dialog"
 import { useI18n } from "../context/i18n"
 
 export function DialogVariant() {
+  const { t } = useI18n()
   const local = useLocal()
   const dialog = useDialog()
-  const { t } = useI18n()
 
   const options = createMemo(() =>
     local.model.variant.list().map((variant) => ({

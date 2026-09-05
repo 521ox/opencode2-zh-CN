@@ -4,11 +4,12 @@ import { Keymap } from "../context/keymap"
 import { useI18n } from "../context/i18n"
 import { useTheme } from "../context/theme"
 import type { Translator } from "../i18n"
-import { MouseButton, Renderable, RGBA } from "@opentui/core"
+import { InputRenderable, MouseButton, Renderable, RGBA } from "@opentui/core"
 import { createStore } from "solid-js/store"
 import { useToast } from "./toast"
 import { useClipboard } from "../context/clipboard"
 import { useConfig } from "../config"
+import { copy, copyOnSelectRelease } from "../util/selection"
 
 export type DialogSize = "medium" | "large" | "xlarge"
 
@@ -113,7 +114,7 @@ function init(t: Translator) {
 
   Keymap.createLayer(() => ({
     mode: "modal",
-    enabled: store.stack.length > 0 && !renderer.getSelection()?.getSelectedText(),
+    enabled: store.stack.length > 0,
     commands: [
       {
         bind: "escape",
@@ -122,6 +123,7 @@ function init(t: Translator) {
         run: () => {
           if (renderer.getSelection()) {
             renderer.clearSelection()
+            return
           }
           const current = store.stack.at(-1)
           current?.onClose?.()
@@ -136,6 +138,13 @@ function init(t: Translator) {
         run: () => {
           if (renderer.getSelection()) {
             renderer.clearSelection()
+            return
+          }
+          const editor = renderer.currentFocusedEditor
+          if (editor?.plainText) {
+            if (editor instanceof InputRenderable) editor.value = ""
+            else editor.setText("")
+            return
           }
           const current = store.stack.at(-1)
           current?.onClose?.()
@@ -210,18 +219,8 @@ export function DialogProvider(props: ParentProps) {
   const toast = useToast()
   const clipboard = useClipboard()
   const config = useConfig()
-  const copyOnSelectEnabled = () => config.data.terminal?.copy_on_select ?? process.platform !== "win32"
-
-  function copySelection() {
-    const text = renderer.getSelection()?.getSelectedText()
-    if (!text) return false
-    void clipboard.write(text).then(
-      () => toast.show({ message: t("ui.dialog.copiedToClipboard"), variant: "info" }),
-      (error) => toast.error(error),
-    )
-    renderer.clearSelection()
-    return true
-  }
+  const copyOnSelectEnabled = () =>
+    (config.data.terminal?.copy ?? (process.platform === "win32" ? "manual" : "select")) === "select"
 
   return (
     <ctx.Provider value={value}>
@@ -233,11 +232,15 @@ export function DialogProvider(props: ParentProps) {
           if (copyOnSelectEnabled()) return
           if (evt.button !== MouseButton.RIGHT) return
 
-          if (!copySelection()) return
+          if (!copy(renderer, toast, clipboard, t("ui.dialog.copiedToClipboard"))) return
           evt.preventDefault()
           evt.stopPropagation()
         }}
-        onMouseUp={copyOnSelectEnabled() ? copySelection : undefined}
+        onMouseUp={
+          copyOnSelectEnabled()
+            ? (event) => copyOnSelectRelease(event, renderer, toast, clipboard, t("ui.dialog.copiedToClipboard"))
+            : undefined
+        }
       >
         <Show when={value.stack.length}>
           <Dialog onClose={() => value.clear()} size={value.size} centered={value.centered}>

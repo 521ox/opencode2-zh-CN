@@ -1,4 +1,6 @@
 import { Form } from "@opencode-ai/core/form"
+import { Instance } from "@opencode-ai/core/instance/service"
+import { Session } from "@opencode-ai/core/session"
 import {
   ConflictError,
   FormAlreadySettledError,
@@ -10,6 +12,7 @@ import { Effect } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
 import { response } from "../location"
+import { missingSession } from "./session-error"
 
 function missingForm(id: Form.ID) {
   return new FormNotFoundError({ id, message: `Form not found: ${id}` })
@@ -35,8 +38,14 @@ export const FormHandler = HttpApiBuilder.group(Api, "server.form", (handlers) =
       .handle(
         "session.form.list",
         Effect.fn(function* (ctx) {
-          const form = yield* Form.Service
-          const forms = yield* form.list({ sessionID: ctx.params.sessionID })
+          const sessionID = Session.ID.make(ctx.params.sessionID)
+          const session = yield* Session.Service.use((sessions) => sessions.get(sessionID)).pipe(
+            Effect.catchTag("Session.NotFoundError", missingSession),
+          )
+          const instances = yield* Instance.Service
+          const forms = yield* Form.Service.use((form) => form.list({ sessionID })).pipe(
+            instances.provide(session),
+          )
           return { data: forms }
         }),
       )

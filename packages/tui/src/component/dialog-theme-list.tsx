@@ -5,8 +5,8 @@ import { onCleanup } from "solid-js"
 import { useI18n } from "../context/i18n"
 
 export function DialogThemeList() {
-  const themes = useThemes()
   const { t } = useI18n()
+  const themes = useThemes()
   const options = Object.keys(themes.all())
     .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }))
     .map((value) => ({

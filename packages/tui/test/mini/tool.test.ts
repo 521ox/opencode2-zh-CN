@@ -92,18 +92,22 @@ describe("Mini tool presentation", () => {
     expect(toolInlineInfo(skill({ name: "effect" }), t).title).toBe('Skill "effect"')
     expect(toolInlineInfo(skill({}), t).title).toBe('Skill "tigerstyle"')
     expect(
-      toolScroll("start", {
-        directory: "/work/project",
-        raw: "",
-        name: "skill",
-        input: { id: "tigerstyle" },
-        meta: { name: "effect" },
-        state: {},
-        status: "completed",
-        error: "",
-        output: "",
-        time: {},
-      }, t),
+      toolScroll(
+        "start",
+        {
+          directory: "/work/project",
+          raw: "",
+          name: "skill",
+          input: { id: "tigerstyle" },
+          meta: { name: "effect" },
+          state: {},
+          status: "completed",
+          error: "",
+          output: "",
+          time: {},
+        },
+        t,
+      ),
     ).toBe('→ Skill "effect"')
   })
 

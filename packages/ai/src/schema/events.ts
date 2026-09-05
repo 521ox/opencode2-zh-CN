@@ -1,7 +1,21 @@
 import { Schema } from "effect"
-import { ContentBlockID, FinishReason, ProviderMetadata, ToolCallID } from "./ids.js"
-import { Message, ToolCallPart, ToolOutput, ToolResultPart, ToolResultValue, type ContentPart } from "./messages.js"
+import { LLM } from "@opencode-ai/schema/llm"
+import { ContentBlockID, ToolCallID } from "./ids.js"
+import {
+  Message,
+  CompactionPart,
+  ProviderMetadata,
+  ToolCallPart,
+  ToolOutput,
+  ToolResultPart,
+  ToolResultValue,
+  type ContentPart,
+} from "./messages.js"
 import { ProviderFailureClassification } from "./errors.js"
+
+export const FinishReason = LLM.FinishReason
+export type FinishReason = Schema.Schema.Type<typeof FinishReason>
+export { ProviderMetadata } from "./messages.js"
 
 /**
  * Token usage reported by an LLM provider.
@@ -49,6 +63,8 @@ import { ProviderFailureClassification } from "./errors.js"
  * Matches the same escape-hatch field on `LLMEvent`.
  */
 export class Usage extends Schema.Class<Usage>("AI.Usage")({
+  /** Effective input size of the final message iteration, when reported; not billed totals. */
+  contextTokens: Schema.optional(Schema.Number),
   inputTokens: Schema.optional(Schema.Number),
   outputTokens: Schema.optional(Schema.Number),
   nonCachedInputTokens: Schema.optional(Schema.Number),
@@ -59,7 +75,7 @@ export class Usage extends Schema.Class<Usage>("AI.Usage")({
   providerMetadata: Schema.optional(ProviderMetadata),
 }) {
   /**
-   * Visible output tokens — `outputTokens` minus `reasoningTokens`, clamped
+   * Non-reasoning output tokens (including compaction summaries) — `outputTokens` minus `reasoningTokens`, clamped
    * to zero. The one place subtraction happens in this contract; the clamp
    * means a provider reporting `reasoningTokens > outputTokens` produces a
    * harmless zero rather than a negative that crashes downstream schemas.
@@ -74,6 +90,12 @@ export class Usage extends Schema.Class<Usage>("AI.Usage")({
 }
 
 export type UsageInput = Usage | ConstructorParameters<typeof Usage>[0]
+
+/** A replacement context window, not an assistant message to append to prior history. */
+export class CompactionResponse extends Schema.Class<CompactionResponse>("LLM.CompactionResponse")({
+  replacement: Schema.Array(Message),
+  usage: Schema.optional(Usage),
+}) {}
 
 export const StepStart = Schema.Struct({
   type: Schema.tag("step-start"),
@@ -139,6 +161,8 @@ export const ToolInputDelta = Schema.Struct({
   id: ToolCallID,
   name: Schema.String,
   text: Schema.String,
+  /** Best-effort parse of all input fragments received through this delta. */
+  input: Schema.optional(Schema.Unknown),
 }).annotate({ identifier: "LLM.Event.ToolInputDelta" })
 export type ToolInputDelta = Schema.Schema.Type<typeof ToolInputDelta>
 
@@ -190,17 +214,19 @@ export const ToolError = Schema.Struct({
 }).annotate({ identifier: "LLM.Event.ToolError" })
 export type ToolError = Schema.Schema.Type<typeof ToolError>
 
+/** A provider started an automatic context-compaction boundary. */
+export const ProviderCompactionStart = Schema.Struct({
+  type: Schema.tag("provider-compaction-start"),
+}).annotate({ identifier: "LLM.Event.ProviderCompactionStart" })
+export type ProviderCompactionStart = Schema.Schema.Type<typeof ProviderCompactionStart>
+
+/** One opaque provider-owned item in a remote compaction checkpoint. */
 export const ProviderCheckpoint = Schema.Struct({
   type: Schema.tag("provider-checkpoint"),
   reset: Schema.Boolean,
   item: Schema.StructWithRest(Schema.Struct({ type: Schema.String }), [Schema.Record(Schema.String, Schema.Json)]),
 }).annotate({ identifier: "LLM.Event.ProviderCheckpoint" })
 export type ProviderCheckpoint = Schema.Schema.Type<typeof ProviderCheckpoint>
-
-export const ProviderCompactionStart = Schema.Struct({
-  type: Schema.tag("provider-compaction-start"),
-}).annotate({ identifier: "LLM.Event.ProviderCompactionStart" })
-export type ProviderCompactionStart = Schema.Schema.Type<typeof ProviderCompactionStart>
 
 export const FinishReasonDetails = Schema.Struct({
   normalized: FinishReason,
@@ -234,6 +260,7 @@ export const ProviderErrorEvent = Schema.Struct({
 export type ProviderErrorEvent = Schema.Schema.Type<typeof ProviderErrorEvent>
 
 const llmEventTagged = Schema.Union([
+  CompactionPart,
   StepStart,
   TextStart,
   TextDelta,
@@ -269,6 +296,7 @@ const toolCallID = (value: ToolCallID | string) => ToolCallID.make(value)
  * `events.filter(LLMEvent.guards["tool-call"])`.
  */
 export const LLMEvent = Object.assign(llmEventTagged, {
+  compaction: CompactionPart.make,
   stepStart: StepStart.make,
   textStart: (input: WithID<TextStart, ContentBlockID>) => TextStart.make({ ...input, id: contentBlockID(input.id) }),
   textDelta: (input: WithID<TextDelta, ContentBlockID>) => TextDelta.make({ ...input, id: contentBlockID(input.id) }),
@@ -308,6 +336,7 @@ export const LLMEvent = Object.assign(llmEventTagged, {
     }),
   providerError: ProviderErrorEvent.make,
   is: {
+    compaction: llmEventTagged.guards.compaction,
     stepStart: llmEventTagged.guards["step-start"],
     textStart: llmEventTagged.guards["text-start"],
     textDelta: llmEventTagged.guards["text-delta"],
@@ -545,6 +574,8 @@ const reduceToolCall = (state: ResponseState, event: ToolCall): ResponseState =>
 const reduceResponseState = (state: ResponseState, event: LLMEvent): ResponseState => {
   const next = appendEvent(state, event)
   switch (event.type) {
+    case "compaction":
+      return appendContent(next, event)
     case "text-start":
       return ensureText(next, event.id, event.providerMetadata)
     case "text-delta":

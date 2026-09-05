@@ -1,15 +1,25 @@
 import { Schema } from "effect"
 import { Tool } from "@opencode-ai/schema/tool"
-import { JsonSchema, MessageRole, ProviderMetadata } from "./ids.js"
 import {
   CacheHint,
   CachePolicy,
   GenerationOptions,
   HttpOptions,
+  JsonSchema,
   LanguageModelSchema,
+  type LanguageModel,
   ProviderOptions,
 } from "./options.js"
+import { ProviderID } from "./ids.js"
 import { isRecord } from "../utils/record.js"
+
+export const MessageRole = Schema.Literals(["system", "user", "assistant", "tool"])
+export type MessageRole = Schema.Schema.Type<typeof MessageRole>
+
+export const ProviderMetadata = Schema.Record(Schema.String, Schema.Record(Schema.String, Schema.Unknown)).annotate({
+  identifier: "LLM.ProviderMetadata",
+})
+export type ProviderMetadata = Schema.Schema.Type<typeof ProviderMetadata>
 
 const systemPartSchema = Schema.Struct({
   type: Schema.Literal("text"),
@@ -43,7 +53,9 @@ export const MediaPart = Schema.Struct({
   mediaType: Schema.String,
   data: Schema.Union([Schema.String, Schema.Uint8Array]),
   filename: Schema.optional(Schema.String),
+  cache: Schema.optional(CacheHint),
   metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+  providerMetadata: Schema.optional(ProviderMetadata),
 }).annotate({ identifier: "LLM.Content.Media" })
 export type MediaPart = Schema.Schema.Type<typeof MediaPart>
 
@@ -181,9 +193,40 @@ export const ReasoningPart = Schema.Struct({
 }).annotate({ identifier: "LLM.Content.Reasoning" })
 export type ReasoningPart = Schema.Schema.Type<typeof ReasoningPart>
 
-export const ContentPart = Schema.Union([TextPart, MediaPart, ToolCallPart, ToolResultPart, ReasoningPart]).pipe(
-  Schema.toTaggedUnion("type"),
-)
+/** A provider-generated context checkpoint, distinct from visible assistant text. */
+type CompactionContent =
+  | { readonly encrypted: string; readonly text?: never }
+  | { readonly text: string | null; readonly encrypted?: never }
+
+const compactionPartSchema = Schema.Struct({
+  type: Schema.Literal("compaction"),
+  provider: ProviderID,
+  id: Schema.optional(Schema.String),
+  encrypted: Schema.optional(Schema.String),
+  /** Null means the provider failed to produce a summary; prior history must be retained. */
+  text: Schema.optional(Schema.NullOr(Schema.String)),
+})
+  .pipe(
+    Schema.refine(
+      (part): part is typeof part & CompactionContent => (part.encrypted !== undefined) !== (part.text !== undefined),
+      { message: "Compaction requires either encrypted content or a summary" },
+    ),
+  )
+  .annotate({ identifier: "LLM.Content.Compaction" })
+export type CompactionPart = typeof compactionPartSchema.Type
+export const CompactionPart = Object.assign(compactionPartSchema, {
+  make: (input: Omit<CompactionPart, "type" | "encrypted" | "text"> & CompactionContent): CompactionPart =>
+    Schema.decodeUnknownSync(compactionPartSchema)({ type: "compaction", ...input }),
+})
+
+export const ContentPart = Schema.Union([
+  TextPart,
+  MediaPart,
+  ToolCallPart,
+  ToolResultPart,
+  ReasoningPart,
+  CompactionPart,
+]).pipe(Schema.toTaggedUnion("type"))
 export type ContentPart = Schema.Schema.Type<typeof ContentPart>
 
 export class Message extends Schema.Class<Message>("LLM.Message")({
@@ -191,6 +234,7 @@ export class Message extends Schema.Class<Message>("LLM.Message")({
   role: MessageRole,
   content: Schema.Array(ContentPart),
   metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+  providerMetadata: Schema.optional(ProviderMetadata),
   native: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
 }) {}
 
@@ -247,6 +291,7 @@ export namespace ToolDefinition {
 export class ToolChoice extends Schema.Class<ToolChoice>("LLM.ToolChoice")({
   type: Schema.Literals(["auto", "none", "required", "tool"]),
   name: Schema.optional(Schema.String),
+  disableParallelToolUse: Schema.optional(Schema.Boolean),
 }) {}
 
 export namespace ToolChoice {
@@ -267,7 +312,7 @@ export namespace ToolChoice {
   }
 }
 
-export class LLMRequest extends Schema.Class<LLMRequest>("LLM.Request")({
+const requestSchema = Schema.Struct({
   id: Schema.optional(Schema.String),
   model: LanguageModelSchema,
   system: Schema.Array(SystemPart),
@@ -281,12 +326,26 @@ export class LLMRequest extends Schema.Class<LLMRequest>("LLM.Request")({
   // Stable cache affinity for protocols that support provider-managed prompt caching.
   promptCacheKey: Schema.optional(Schema.String),
   metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
-}) {}
+})
+
+export class LLMRequest<Model extends LanguageModel = LanguageModel> extends Schema.Class<LLMRequest>("LLM.Request")(
+  requestSchema.fields,
+) {
+  declare readonly model: Model
+
+  // Preserve model inference instead of inheriting the schema's erased constructor signature.
+  // oxlint-disable-next-line no-useless-constructor
+  constructor(input: LLMRequest.Input<Model>) {
+    super(input)
+  }
+}
 
 export namespace LLMRequest {
-  export type Input = ConstructorParameters<typeof LLMRequest>[0]
+  export type Input<Model extends LanguageModel = LanguageModel> = Omit<typeof requestSchema.Type, "model"> & {
+    readonly model: Model
+  }
 
-  export const input = (request: LLMRequest): Input => ({
+  export const input = <Model extends LanguageModel>(request: LLMRequest<Model>): Input<Model> => ({
     id: request.id,
     model: request.model,
     system: request.system,
@@ -301,7 +360,16 @@ export namespace LLMRequest {
     metadata: request.metadata,
   })
 
-  export const update = (request: LLMRequest, patch: Partial<Input>) => {
+  export function update<Model extends LanguageModel>(
+    request: LLMRequest,
+    patch: Partial<Input<Model>> & { readonly model: Model },
+  ): LLMRequest<Model>
+  export function update<Model extends LanguageModel>(
+    request: LLMRequest<Model>,
+    patch: Partial<Omit<Input, "model">> & { readonly model?: undefined },
+  ): LLMRequest<Model>
+  export function update(request: LLMRequest, patch: Partial<Input>): LLMRequest
+  export function update(request: LLMRequest, patch: Partial<Input>) {
     if (Object.keys(patch).length === 0) return request
     return new LLMRequest({
       ...input(request),

@@ -16,6 +16,7 @@ export function footerStatuslinePolicy(input: {
   contextWidths: number[]
   modelWidth?: number
   variantWidth?: number
+  providerWidth?: number
   usageWidth?: number
 }) {
   let remaining = input.width - input.mainWidth - (input.commandWidth ?? 0)
@@ -37,11 +38,17 @@ export function footerStatuslinePolicy(input: {
   const variantWidth = input.variantWidth
   const showVariant = showModel && contextComplete && variantWidth !== undefined && remaining >= variantWidth
   if (showVariant) remaining -= variantWidth
+  const showProvider =
+    showModel &&
+    contextComplete &&
+    (showVariant || input.variantWidth === undefined) &&
+    include(input.providerWidth)
   const showUsage =
     (showModel || input.modelWidth === undefined) &&
     (showAgent || input.agentWidth === undefined) &&
     contextComplete &&
     (showVariant || input.variantWidth === undefined) &&
+    (showProvider || input.providerWidth === undefined) &&
     include(input.usageWidth, USAGE_HEADROOM)
 
   return {
@@ -49,6 +56,7 @@ export function footerStatuslinePolicy(input: {
     contextCount,
     showModel,
     showVariant,
+    showProvider,
     showUsage,
   }
 }

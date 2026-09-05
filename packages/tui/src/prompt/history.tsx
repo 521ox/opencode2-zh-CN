@@ -71,12 +71,16 @@ export const { use: usePromptHistory, provider: PromptHistoryProvider } = create
         writeText(historyPath, lines.map((line) => JSON.stringify(line)).join("\n") + "\n").catch(() => {})
     })
 
-    const [store, setStore] = createStore({
-      index: 0,
-      history: [] as PromptInfo[],
-    })
+    const [store, setStore] = createStore({ index: 0, history: [] as PromptInfo[] })
 
     return {
+      state(input: string) {
+        if (store.index === 0) return "idle" as const
+        return store.history.at(store.index)?.text === input ? ("selected" as const) : ("edited" as const)
+      },
+      reset() {
+        setStore("index", 0)
+      },
       move(direction: 1 | -1, input: string) {
         if (!store.history.length) return undefined
         const current = store.history.at(store.index)

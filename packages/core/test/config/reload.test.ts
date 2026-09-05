@@ -1,4 +1,6 @@
 import path from "path"
+import fs from "fs/promises"
+import { writeFileSync } from "node:fs"
 import { describe, expect } from "bun:test"
 import { Document, Event, Info } from "@opencode-ai/schema/config"
 import { Agent } from "@opencode-ai/core/agent"
@@ -11,27 +13,214 @@ import { ConfigProviderPlugin } from "@opencode-ai/core/config/plugin/provider"
 import { ConfigReferencePlugin } from "@opencode-ai/core/config/plugin/reference"
 import { ConfigSkillPlugin } from "@opencode-ai/core/config/plugin/skill"
 import { Bus } from "@opencode-ai/core/bus"
-import { Global } from "@opencode-ai/util/global"
+import { Integration } from "@opencode-ai/core/integration"
 import { Plugin } from "@opencode-ai/core/plugin"
 import { PluginHost } from "@opencode-ai/core/plugin/host"
+import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { Provider } from "@opencode-ai/core/provider"
 import { Reference } from "@opencode-ai/core/reference"
 import { Skill } from "@opencode-ai/core/skill"
-import { Effect, Schema } from "effect"
+import { ShellSelect } from "@opencode-ai/core/shell/select"
+import { Job } from "@opencode-ai/core/job"
+import { Global } from "@opencode-ai/util/global"
+import { Location } from "@opencode-ai/core/location"
+import { Credential } from "@opencode-ai/core/credential"
+import { WellKnown } from "@opencode-ai/core/wellknown"
+import { Watcher } from "@opencode-ai/core/filesystem/watcher"
+import { AppProcess } from "@opencode-ai/util/process"
+import { Deferred, Effect, Layer, Schema } from "effect"
+import { LayerNode } from "@opencode-ai/util/effect/layer-node"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { testEffect } from "../lib/effect"
 import { PluginTestLayer } from "../plugin/fixture"
+import { emptyCredentialNode, emptyWellknownNode } from "../fixture/config-nodes"
+import { location } from "../fixture/location"
+import { tmpdir } from "../fixture/tmpdir"
 
-const it = testEffect(PluginTestLayer)
+const it = testEffect(
+  Layer.merge(PluginTestLayer, AppNodeBuilder.build(LayerNode.group([AppProcess.node, ShellSelect.node, Job.node]))),
+)
 const decode = Schema.decodeUnknownSync(Info)
 const document = path.join(import.meta.dir, "opencode.json")
 
 describe("config plugin reloads", () => {
+  for (const input of [
+    { root: ".agents", global: false },
+    { root: "../.claude", global: false },
+    { root: "home/.agents", global: true },
+    { root: "home/.claude", global: true },
+  ]) {
+    it.live(`loads skills when ${input.root} appears after startup`, () =>
+      Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
+        Effect.flatMap((tmp) =>
+          Effect.gen(function* () {
+            const project = path.join(tmp.path, "project")
+            const root = path.resolve(project, input.root)
+            const file = path.join(project, "opencode.json")
+            yield* Effect.promise(async () => {
+              await fs.mkdir(path.join(project, "home"), { recursive: true })
+              await fs.mkdir(path.join(project, "global"))
+              await Bun.write(file, JSON.stringify({ shell: "initial" }))
+            })
+            return yield* Effect.gen(function* () {
+              const config = yield* Config.Service
+              const plugins = yield* Plugin.Service
+              const skills = yield* Skill.Service
+              const host = yield* PluginHost.make(plugins)
+              yield* ConfigSkillPlugin.Plugin.effect(host)
+              expect(yield* skills.list()).toEqual([])
+
+              yield* Effect.promise(() => Bun.write(file, JSON.stringify({ shell: "ready" })))
+              yield* waitUntil(
+                config.entries().pipe(Effect.map((entries) => Config.latest(entries, "shell") === "ready")),
+              )
+              const skill = path.join(root, "skills", "probe", "SKILL.md")
+              yield* Effect.promise(() =>
+                Bun.write(skill, "---\nname: probe\ndescription: Hot reload\n---\nTest skill"),
+              )
+              yield* waitUntil(skills.list().pipe(Effect.map((items) => items.some((item) => item.id === "probe"))))
+              expect((yield* skills.list())[0]?.location).toBe(AbsolutePath.make(skill))
+              yield* Effect.promise(() => fs.rm(root, { recursive: true }))
+              yield* waitUntil(skills.list().pipe(Effect.map((items) => items.length === 0)))
+              yield* Effect.promise(() => Bun.write(skill, "---\nname: probe\ndescription: Recreated\n---\nTest skill"))
+              yield* waitUntil(skills.list().pipe(Effect.map((items) => items[0]?.description === "Recreated")))
+            }).pipe(Effect.provide(liveConfig(project, undefined, { global: input.global })))
+          }),
+        ),
+      ),
+    )
+  }
+
+  it.live("retains readiness signalled synchronously during initial config startup", () =>
+    Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
+      Effect.flatMap((tmp) => {
+        const native = Watcher.Native.of({
+          subscribe: (input) =>
+            Effect.sync(() => {
+              if (input.type === "entries" && input.target === tmp.path) {
+                writeFileSync(path.join(tmp.path, "opencode.json"), JSON.stringify({ references: { docs: "./docs" } }))
+              }
+              return { unsubscribe: () => Promise.resolve() }
+            }),
+        })
+        return Effect.gen(function* () {
+          const plugins = yield* Plugin.Service
+          const references = yield* Reference.Service
+          const host = yield* PluginHost.make(plugins)
+          yield* ConfigReferencePlugin.Plugin.effect(host)
+          yield* waitUntil(references.list().pipe(Effect.map((items) => items.some((item) => item.name === "docs"))))
+          expect((yield* references.list())[0]?.path).toBe(AbsolutePath.make(path.join(tmp.path, "docs")))
+        }).pipe(Effect.provide(liveConfig(tmp.path, native)))
+      }),
+    ),
+  )
+
+  it.live("loads the first config written while a new directory watch is starting", () =>
+    Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const root = path.join(tmp.path, ".opencode")
+          const parent = yield* Deferred.make<(update: Watcher.Update) => void>()
+          const starting = yield* Deferred.make<void>()
+          const release = yield* Deferred.make<void>()
+          const native = Watcher.Native.of({
+            subscribe: (input) =>
+              Effect.gen(function* () {
+                if (input.type === "entries" && input.target === tmp.path) yield* Deferred.succeed(parent, input.publish)
+                if (input.type === "directory" && input.target === root) {
+                  yield* Deferred.succeed(starting, undefined)
+                  yield* Deferred.await(release)
+                }
+                return { unsubscribe: () => Promise.resolve() }
+              }),
+          })
+          return yield* Effect.gen(function* () {
+            const plugins = yield* Plugin.Service
+            const references = yield* Reference.Service
+            const host = yield* PluginHost.make(plugins)
+            yield* ConfigReferencePlugin.Plugin.effect(host)
+            const publish = yield* Deferred.await(parent)
+            yield* Effect.promise(() => fs.mkdir(root))
+            publish({ path: root, type: "create" })
+            yield* Deferred.await(starting).pipe(Effect.timeout("2 seconds"))
+            yield* Effect.promise(() =>
+              fs.writeFile(path.join(root, "opencode.json"), JSON.stringify({ references: { docs: "./docs" } })),
+            )
+            yield* Deferred.succeed(release, undefined)
+            yield* waitUntil(references.list().pipe(Effect.map((items) => items.some((item) => item.name === "docs"))))
+            expect((yield* references.list())[0]?.path).toBe(AbsolutePath.make(path.join(root, "docs")))
+          }).pipe(Effect.provide(liveConfig(tmp.path, native)))
+        }),
+      ),
+    ),
+  )
+
+  for (const input of [
+    { file: "opencode.json", empty: false },
+    { file: "../opencode.jsonc", empty: false },
+    { file: ".opencode/opencode.json", empty: false },
+    { file: "../.opencode/opencode.jsonc", empty: true },
+  ]) {
+    it.live(`loads references when ${input.file} is first created and keeps watching it`, () =>
+      Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
+        Effect.flatMap((tmp) =>
+          Effect.gen(function* () {
+            const project = path.join(tmp.path, "project")
+            const target = path.resolve(project, input.file)
+            yield* Effect.promise(() => fs.mkdir(project))
+            return yield* Effect.gen(function* () {
+              const plugins = yield* Plugin.Service
+              const references = yield* Reference.Service
+              const host = yield* PluginHost.make(plugins)
+              yield* ConfigReferencePlugin.Plugin.effect(host)
+              expect(yield* references.list()).toEqual([])
+
+              if (input.empty) {
+                yield* Effect.promise(() => fs.mkdir(path.dirname(target)))
+                const config = yield* Config.Service
+                yield* waitUntil(
+                  config.entries().pipe(
+                    Effect.map((entries) =>
+                      entries.some((entry) => entry.type === "directory" && entry.path === path.dirname(target)),
+                    ),
+                  ),
+                )
+              }
+              yield* Effect.promise(async () => {
+                await fs.mkdir(path.dirname(target), { recursive: true })
+                await fs.writeFile(target, JSON.stringify({ references: { docs: "./docs" } }))
+              })
+              yield* waitUntil(references.list().pipe(Effect.map((items) => items.some((item) => item.name === "docs"))))
+              expect((yield* references.list())[0]?.path).toBe(
+                AbsolutePath.make(path.join(path.dirname(target), "docs")),
+              )
+              yield* Effect.promise(() => fs.writeFile(target, JSON.stringify({ references: { next: "./next" } })))
+              yield* waitUntil(references.list().pipe(Effect.map((items) => items.length === 1 && items[0]?.name === "next")))
+
+              yield* Effect.promise(() =>
+                fs.rm(input.file.includes(".opencode/") ? path.dirname(target) : target, { recursive: true }),
+              )
+              yield* waitUntil(references.list().pipe(Effect.map((items) => items.length === 0)))
+              yield* Effect.promise(async () => {
+                await fs.mkdir(path.dirname(target), { recursive: true })
+                await fs.writeFile(target, JSON.stringify({ references: { docs: "./docs" } }))
+              })
+              yield* waitUntil(references.list().pipe(Effect.map((items) => items.length === 1 && items[0]?.name === "docs")))
+              yield* Effect.promise(() => fs.writeFile(target, JSON.stringify({ references: { next: "./next" } })))
+              yield* waitUntil(references.list().pipe(Effect.map((items) => items.length === 1 && items[0]?.name === "next")))
+            }).pipe(Effect.provide(liveConfig(project)))
+          }),
+        ),
+      ),
+    )
+  }
+
   it.live("reloads config-backed domains without reloading external plugins", () =>
     Effect.gen(function* () {
       const agents = yield* Agent.Service
       const catalog = yield* Catalog.Service
       const commands = yield* Command.Service
+      const integrations = yield* Integration.Service
       const bus = yield* Bus.Service
       const plugins = yield* Plugin.Service
       const references = yield* Reference.Service
@@ -47,6 +236,7 @@ describe("config plugin reloads", () => {
 
       expect((yield* agents.get(Agent.ID.make("first")))?.description).toBe("First agent")
       expect((yield* commands.get("first"))?.description).toBe("First command")
+      expect(yield* integrations.get(Integration.ID.make("first"))).toBeDefined()
       expect((yield* skills.list()).some((skill) => skill.id === "first")).toBe(true)
       expect((yield* references.list()).map((reference) => reference.name)).toEqual(["first"])
       expect(yield* catalog.provider.get(Provider.ID.make("first"))).toBeDefined()
@@ -61,6 +251,8 @@ describe("config plugin reloads", () => {
             (yield* agents.get(Agent.ID.make("second")))?.description === "Second agent" &&
             (yield* commands.get("first")) === undefined &&
             (yield* commands.get("second"))?.description === "Second command" &&
+            (yield* integrations.get(Integration.ID.make("first"))) === undefined &&
+            (yield* integrations.get(Integration.ID.make("second"))) !== undefined &&
             (yield* references.list()).some((reference) => reference.name === "second") &&
             (yield* catalog.provider.get(Provider.ID.make("first"))) === undefined &&
             (yield* catalog.provider.get(Provider.ID.make("second"))) !== undefined
@@ -76,6 +268,22 @@ describe("config plugin reloads", () => {
     ),
   )
 })
+
+function liveConfig(directory: string, native?: Watcher.NativeInterface, options: Config.Options = { global: false }) {
+  return AppNodeBuilder.build(LayerNode.group([Config.node, Bus.node, Reference.node, Global.node, Location.node]), [
+    [Config.node, Config.configured(options)],
+    [
+      Location.node,
+      Layer.succeed(Location.Service, Location.Service.of(location({ directory: AbsolutePath.make(directory) }))),
+    ],
+    [Global.node, Global.layerWith({ config: path.join(directory, "global"), home: path.join(directory, "home") })],
+    [Credential.node, emptyCredentialNode],
+    [WellKnown.node, emptyWellknownNode],
+    ...(native
+      ? ([[Watcher.node, Watcher.layer().pipe(Layer.provide(Layer.succeed(Watcher.Native, native)))]] as const)
+      : []),
+  ])
+}
 
 function config(name: string) {
   return new Document({

@@ -2,148 +2,168 @@
 
 > [!IMPORTANT]
 > 本仓库是基于 [anomalyco/opencode](https://github.com/anomalyco/opencode) V2 的独立社区二开，
-> 与 anomalyco、OpenCode 官方项目及其维护团队没有隶属、授权或背书关系。
-> 上游项目与原作者的版权和 MIT License 归属保持不变。
+> 与 anomalyco、OpenCode 官方项目或其维护团队没有隶属、授权、赞助或背书关系。
+> 上游项目、作者和贡献者的版权及 MIT License 归属保持不变。
 
-**English summary:** OpenCode2 zh-CN is an independent, community-maintained fork of
-OpenCode V2. It focuses on a Simplified Chinese TUI, native OpenAI Responses support,
-durable session execution, provider-managed compaction safeguards, migration tooling,
-and reproducible Windows builds. It is not affiliated with or endorsed by the upstream
-OpenCode project. The initial public publication contains source code only.
+**English summary:** OpenCode2 zh-CN is an independent, community-maintained
+OpenCode V2 fork. It provides a Simplified Chinese-first TUI, explicit native
+provider routes, bounded remote-compaction behavior, session and subagent
+enhancements, plugin management, and additional local tools. It is not
+affiliated with or endorsed by anomalyco or the upstream OpenCode project. The
+public repository is a source-only sanitized snapshot: it provides no GitHub
+Release or prebuilt binary, and GitHub Actions are disabled.
 
 ## 当前状态
 
-- 发布形态：源码公开，暂不提供 GitHub Release 或预编译二进制。
-- 主要平台：当前自定义构建和运行验证集中在 Windows x64。
-- 上游策略：按定制保护清单逐项审查、选择性移植，不把本仓库当作无差异镜像。
-- GitHub Actions：首次公开时默认禁用，待 fork 专属工作流和密钥边界完成独立审计后再决定是否启用。
-- 稳定性：基于仍在快速演进的 OpenCode V2，适合能够自行构建、验证和排障的用户。
+- **发布形态**：周期性发布经过清理的源码快照提交；不提供 GitHub Release 或预编译二进制。
+- **自动化**：GitHub Actions 当前禁用。不要把公开源码等同于已由托管 CI 验证的构建。
+- **运行时前置**：以根目录 `packageManager` 为准，当前为 **Bun 1.3.14**。
+- **上游同步**：已选择性审查到上游提交
+  [`0808ebc3`](https://github.com/anomalyco/opencode/commit/0808ebc3c52286f5a3a602f82f069ae597f86469)。
+  该提交不是本 fork 的直接祖先；“审查到”也不表示该范围内的每项上游改动都已合入。
+- **适用人群**：当前快照适合能够自行审阅源码、构建、执行 package 范围测试并管理本机权限的用户。
 
-## 主要增强
+## 主要功能
 
-| 领域 | 本分支的实现 |
-| --- | --- |
-| 简体中文体验 | 简体中文 TUI、本地化文案和针对中文终端交互的定制。 |
-| OpenAI Responses | 原生 Responses 协议路由、流式事件、工具调用、provider checkpoint 与 opaque encrypted content 持久化。 |
-| 远程压缩 | 正常请求携带由模型限制和 buffer 动态计算的 `compact_threshold`；支持自动 checkpoint 与手动 `/compact`。 |
-| 压缩保护 | 成功响应的上下文用量超过动态阈值 5%，且没有已完成的自动 checkpoint 时，同一次 execution run 最多补发一次 `compaction_trigger`；触发仍失败则停止，避免继续冲向模型上限。 |
-| Session 执行 | SQLite 跨进程 lease、owner fencing、heartbeat、崩溃恢复和 restart continuity，防止多个进程重复接管同一 Session。 |
-| 上下文治理 | 受保护规则上下文、工具结果裁剪、远程 checkpoint replay、子代理 continuation 与历史投影保护。 |
-| V1 迁移 | V1 到 V2 的上下文迁移、只读预演、备份和验收工具。 |
-| Windows 构建 | 固定 Bun canary 编译运行时、SHA-256 校验、构建 sidecar、service smoke 和不覆盖运行中二进制的发布流程。 |
-| CPU 运行档位 | CLI、server、service 和 self-spawn 链路中的 CPU profile 传播。 |
+- 简体中文优先的 TUI 与非交互命令界面；英文仍作为可选语言和字典回退。
+- 原生 OpenAI Responses、独立的兼容 Responses/Chat 路由，以及 official xAI Responses 路由。
+- provider checkpoint 的持久化与重放、受控自动/手动 compaction、跨进程 Session lease。
+- direct-child subagent continuation、完整子代理最终结论、command subagents 与 background Job。
+- fork-owned 普通工具 `environment_tools` 与 `direct_exec`。
+- 仅 Code Mode 可见且 pinned 的 `opencode.session_move`。
+- Plugin CLI/TUI 管理界面；`/stats` 与 CLI `stats`；根命令 `update` 作为 `upgrade` 的别名。
+- App/WebUI 的 **Copy Session ID** 命令。该功能不是 TUI 命令；TUI 通过自己的 Session/子代理界面显示相关 ID。
+- Windows 上 persistent terminal panes 默认关闭；用户显式启用前应先确认所需 PTY 支持可用。
 
-远程压缩阈值不是固定的 `304000`。该数值只是特定模型配置下的计算结果；实际阈值由模型的
-input/context/output limit 与用户配置的 compaction buffer 共同决定。第三方网关必须真正实现
-OpenAI Responses 的 `context_management` 和 `compaction_trigger` 语义，不能只接受字段而忽略它们。
+`environment_tools` 是环境范围的程序目录，而不是已安装软件扫描器；目录中没有某个名称，不能证明程序未安装。
+`direct_exec` 只接受有效 catalog ID 与 argv，不能接受原始 executable 路径、shell 命令串、调用方环境变量、stdin、
+shell 语法或后台执行。catalog membership 也不等于执行授权。
 
-完整定制边界和上游同步保护规则见 [CUSTOMIZATIONS.md](CUSTOMIZATIONS.md) 与
-[upstream-sync-preservation.md](specs/v2/upstream-sync-preservation.md)。
+`opencode.session_move` 只允许移动当前 Session，或当前 Session 所拥有的 direct child；不能移动任意、外部或更深层
+Session。移动在安全边界生效，因此同一次调用中不要继续执行依赖目标目录的操作。
 
-## 上游关系与同步记录
+内部 ACP 与诊断接口不是日常用户界面，本 README 不把它们作为普通功能入口。
 
-本分支的 V2 定制基点是上游提交
-[`b0480a6f`](https://github.com/anomalyco/opencode/commit/b0480a6f9350d1846cca12a4fd282bdf2286e603)。
-之后的上游变化不是整段 merge，而是依据定制保护矩阵选择性审查和移植。
+## Provider / protocol / operation 完整白名单
 
-截至 **2026-08-17**：
+能力由**配置的 package、所选 protocol 以及该 route 实际拥有的 operation**共同决定。provider 显示名称、
+provider ID 或 `baseURL` 相似都不能授予能力。
 
-- 最近完成的选择性同步记录审查到上游 head
-  [`7731d123`](https://github.com/anomalyco/opencode/commit/7731d1235dec02a2f0fc8977e7140bf0d446fa9f)。
-- 后续上游 head
-  [`6106cb64`](https://github.com/anomalyco/opencode/commit/6106cb64c7e28e7b379638b75d521fcb13acb392)
-  已进入差异评估，但不属于当前已合入范围。
+| 配置 package / route | 协议与 storage | Compaction | Responses WebSocket |
+| --- | --- | --- | --- |
+| `@opencode-ai/ai/providers/openai` | 完整 native OpenAI Responses；允许显式 native `store` | 自动与手动 remote compaction | 可选，默认关闭 |
+| `@opencode-ai/ai/providers/openai/responses` | 上一项的同一 native owner 别名 | 与 native parent 相同 | 与 native parent 相同 |
+| `@opencode-ai/ai/providers/openai-compatible/responses` | generic Responses-compatible HTTP；最终 dispatch 强制 `store: false` | 仅 local summary；移除 native compaction 字段 | 不支持 |
+| `aisdk:@ai-sdk/openai` | 映射到 generic compatible Responses，不加载 AI SDK OpenAI provider | 仅 local summary | 不支持 |
+| `@opencode-ai/ai/providers/openai-compatible` | generic OpenAI-compatible Chat Completions | 仅 local summary | 非 Responses route |
+| `@opencode-ai/ai/providers/xai` 的 Responses route | official xAI Responses；强制 `store: false` | route-owned `POST /responses/compact` | 不因 WebSocket 获得 compact operation |
+| `@opencode-ai/ai/providers/xai` 的 Chat route | xAI Chat Completions | 仅 local summary | 非 Responses route |
 
-“审查到某个 head”不表示该范围内所有提交都被合入。每次同步的选择、排除、验证和残余风险记录在
-[`specs/v2/upstream-sync-records/`](specs/v2/upstream-sync-records/) 中。
+DeepSeek、Anthropic、Azure、Modal、Copilot、generic compatible Responses、Chat 及其他未在上表明确授予 remote
+compaction operation 的 route 均使用 local summary。不能通过改 provider 名称或 `baseURL` 把它们提升为 native
+OpenAI 或 official xAI 能力。
+
+## Compaction 配置与线路语义
+
+当前 V2 顶层配置只有以下字段：
+
+```jsonc
+{
+  "compaction": {
+    "auto": true,        // 默认 true
+    "prune": false,      // 默认 false；只裁剪请求投影，不改 durable history
+    "buffer": 20000,     // 默认 20000
+    "keep": {
+      "tokens": 15000    // 默认 15000；只用于 local-summary tail
+    }
+  }
+}
+```
+
+不存在顶层 `compact_threshold`。remote threshold 由运行时根据已解析模型限制计算：
+
+```text
+min(inputLimit - buffer,
+    contextLimit - max(min(outputLimit, 32000), buffer))
+```
+
+缺少 `inputLimit` 时按无穷大处理；最终结果必须是正 safe integer，否则不触发 remote compaction。自定义模型应填写
+准确的 `limit.context`、`limit.input`（若提供方有独立输入上限）和 `limit.output`；错误的限制会产生错误阈值。
+
+### Native OpenAI Responses
+
+只有 `@opencode-ai/ai/providers/openai`（及其 `/openai/responses` 别名）拥有 native remote compaction：
+
+- 普通 `POST /responses` 通过 `context_management` 携带计算后的 `compact_threshold`；这不是
+  `/responses/compact` 调用。
+- 用户手动 `/compact`，以及一次性的 overflow/缺失 checkpoint 恢复，仍走普通 `/responses`，并把
+  `{ "type": "compaction_trigger" }` 作为最终 input item。
+- native OpenAI 生产路径绝不调用 `/responses/compact`。remote trigger 失败会显式停止 Session，不会静默回退到
+  local summary。
+
+自定义 OpenAI gateway 必须真实实现 `context_management`、opaque checkpoint 和 `compaction_trigger` 语义；仅接受并
+忽略字段不代表兼容。
+
+### Official xAI Responses
+
+只有 package `@opencode-ai/ai/providers/xai` 所选的 dedicated Responses route 拥有 xAI compact operation：
+
+- crossing threshold 或手动 `/compact` 都恰好调用一次所选 `<baseURL>/responses/compact`。
+- proxy 或 gateway 必须实现该 endpoint，并返回一个可重放的 opaque `encrypted_content` compaction item。
+- 404、错误响应或缺失 compaction item 都是可见失败；不会 local fallback，也没有 custom-base-URL opt-out。
+
+两个独立、安全编写的配置示例见 [opencode.example.jsonc](opencode.example.jsonc)。它不是从任何 live config 删字段
+生成的，所有 credential 与 gateway URL 均使用环境变量占位符。
+
+## Session memory 插件与隐私
+
+`session-memory-v2` 的仓库内位置为 [`plugins/session-memory/`](plugins/session-memory/)。请按该目录 README 的
+repository-relative 步骤安装或启用，并在使用前自行审阅插件权限与当前快照中的验证说明；本页不把“源码已放入目录”
+等同于对任意环境的通过或安全承诺。
+
+插件生成的 snapshot 即使已经 redacted，仍可能包含提示词、工具结果、文件名、项目结构或其他敏感上下文。请将生成
+snapshot 保留在本机受控位置，使用最小文件权限，并且**不要提交到 Git、Issue、PR 或聊天记录**。共享前必须再次人工
+审阅。
 
 ## 从源码运行
 
-### 前置条件
+前置条件：Git、[Bun](https://bun.sh/) 1.3.14，以及目标平台所需的本机构建依赖。
 
-- Git
-- [Bun 1.3.14](https://bun.sh/)，与根目录 `packageManager` 固定版本一致
-- Windows 构建脚本需要 PowerShell 7 (`pwsh`)
-
-```powershell
+```bash
 git clone https://github.com/521ox/opencode2-zh-CN.git
-Set-Location opencode2-zh-CN
+cd opencode2-zh-CN
 bun install
 bun dev
 ```
 
-模型、provider 和网关凭据应通过你自己的 OpenCode 配置或环境变量提供。不要把 API key、会话数据库、
-日志或本机配置提交到仓库，也不要在公开 Issue 中粘贴这些内容。
-
-## Windows x64 可复现构建
-
-本仓库使用固定脚本 [build-custom-windows.ps1](script/build-custom-windows.ps1)。构建采用两个明确分工的
-Bun 运行时：
-
-1. **Build Bun 1.3.14**：执行安装、测试编排和构建脚本。
-2. **Pinned compile runtime**：默认使用经过 asset、archive 与 executable SHA-256 校验的
-   `1.4.0-canary.1+aec33f581` 执行 `bun build --compile`。
-
-脚本默认不会替换正在运行的安装文件。建议始终显式指定发布目录：
-
-```powershell
-$publish = Join-Path $PWD "dist\windows-x64"
-
-pwsh -File .\script\build-custom-windows.ps1 `
-  -BuildBun "$env:USERPROFILE\.bun\bin\bun.exe" `
-  -PublishDirectory $publish `
-  -RunServiceSmoke
-```
-
-构建产物包含候选 executable 和 `.build.json` 身份 sidecar。只有脚本退出成功、sidecar 与 executable
-SHA-256 对应且 service smoke 通过后，候选文件才应被视为可使用产物。不要在构建时覆盖当前正在运行的
-OpenCode2 executable。
-
-固定 runtime、缓存校验和回退模式的完整约束见
-[bun-canary-snapshot.md](specs/v2/bun-canary-snapshot.md)。
+不要把 API key、Cookie、Session 数据库、日志、本机配置、生成的 memory snapshot 或私有 endpoint 提交到仓库。
 
 ## 验证
 
-根目录 `bun test` 被设计为直接失败，防止把所有 package 的测试无边界地混在一起运行。请使用类型检查和
-定向测试：
+根目录的聚合测试入口被故意阻止，以免把不同 package 的测试无边界混合运行。请通过 Bun 的 global `--cwd`
+选项从相关 package cwd 执行类型检查和定向测试，例如：
 
-```powershell
-bun run typecheck
-bun test packages/core/test/session-compaction.test.ts
-bun test packages/core/test/session-execution.test.ts
-bun test packages/core/test/session-runner.test.ts
-bun test packages/ai/test/provider/openai-responses.test.ts
+```bash
+bun --cwd packages/schema run typecheck
+bun --cwd packages/schema test test/compaction-contract.test.ts
+bun --cwd packages/core run typecheck
+bun --cwd packages/core test test/config/compaction.test.ts
+bun --cwd packages/ai run typecheck
+bun --cwd packages/ai test test/provider/compaction.test.ts
 ```
 
-具体改动还应运行对应 package 的测试、lint、migration check 和 `git diff --check`。公开源码不等于某个
-本地构建已经通过这些检查；以提交记录或维护者提供的验证证据为准。
+具体修改还应运行其 owner package 的相关测试、lint/format 检查以及 `git diff --check`。由于 Actions 禁用，公开
+snapshot 本身不构成这些检查已经通过的证明。
 
-## 已知限制
+## 安全、贡献与许可
 
-- 初始公开仓库不提供预编译二进制，也不承诺自动更新。
-- 某些第三方 OpenAI-compatible/DeepSeek 网关会发送 `response.reasoning_text.delta`；当前 AI SDK
-  compatibility 路径尚未显示该事件。根因已经定位，但本分支尚未确定兼容策略。
-- 第三方网关可能接受 `compact_threshold` 却不执行远程自动压缩。当前 one-shot fallback 能阻止上下文
-  无限增长，但不能让不支持 compaction 的网关获得官方能力。
-- OpenCode2 会按用户授权调用 shell、文件系统、网络、MCP 和其他本机工具。它不是安全沙箱。
-- 上游 V2 变化较快；同步时必须保留本分支的 Session、Responses、迁移和构建不变量。
+- fork 特有缺陷与功能请求：[GitHub Issues](https://github.com/521ox/opencode2-zh-CN/issues)
+- fork 的私密漏洞报告：[GitHub Security Advisories](https://github.com/521ox/opencode2-zh-CN/security/advisories/new)
+- 同时影响上游的问题：按上游 [SECURITY.md](https://github.com/anomalyco/opencode/blob/v2/SECURITY.md) 私密报告
+- 贡献规则：[CONTRIBUTING.md](CONTRIBUTING.md)
+- 定制边界：[CUSTOMIZATIONS.md](CUSTOMIZATIONS.md)
+- 归属说明：[NOTICE.md](NOTICE.md)
+- 许可：[MIT License](LICENSE)
 
-## 安全与问题反馈
-
-- fork 特有缺陷和功能请求：[GitHub Issues](https://github.com/521ox/opencode2-zh-CN/issues)
-- fork 的非公开安全报告：[GitHub Security Advisories](https://github.com/521ox/opencode2-zh-CN/security/advisories/new)
-- 可确认也影响上游的安全问题：同时按照
-  [上游 SECURITY.md](https://github.com/anomalyco/opencode/blob/v2/SECURITY.md) 私下报告
-
-报告前请删除 API key、Cookie、Authorization header、会话内容、数据库、日志中的私有路径和任何客户数据。
-更多说明见 [SECURITY.md](SECURITY.md)。
-
-## 贡献
-
-贡献前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。较大改动应先说明目标、行为边界、验证方法以及对
-上游同步保护矩阵的影响。
-
-## 许可与归属
-
-本项目延续上游的 [MIT License](LICENSE)。原始 OpenCode 项目、其作者与贡献者保留各自版权；本分支的
-额外改动由相应提交作者贡献。详细说明见 [NOTICE.md](NOTICE.md)。
+OpenCode2 可以在用户授权下读写文件、执行进程并访问网络；它不是安全沙箱。使用最小操作系统权限，审阅 provider、
+MCP、plugin 和工具权限，并在允许写操作前备份重要工作。

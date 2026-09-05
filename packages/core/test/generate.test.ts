@@ -21,7 +21,7 @@ const runtime = LanguageModel.make({ id: "gemini", provider: "test-provider", ro
 
 const catalog = Layer.mock(Catalog.Service, {
   provider: {
-    get: () => Effect.succeed(undefined),
+    get: () => Effect.undefined,
     all: () => Effect.die("unused"),
     available: () => Effect.die("unused"),
   },
@@ -35,9 +35,10 @@ const catalog = Layer.mock(Catalog.Service, {
 })
 const integrations = Layer.mock(Integration.Service, {
   connection: {
-    active: () => Effect.succeed(undefined),
+    active: () => Effect.undefined,
     resolve: () => Effect.die("unused"),
     key: () => Effect.die("unused"),
+    activate: () => Effect.die("unused"),
     update: () => Effect.die("unused"),
     remove: () => Effect.die("unused"),
   },
@@ -89,10 +90,10 @@ resolverIt.effect("resolves dynamic models with their catalog metadata", () =>
 
     expect(result).toEqual({
       model: runtime,
-      providerPackage: selected.package!,
       ref: Ref.make({ providerID: selected.providerID, id: selected.id }),
       capabilities: selected.capabilities,
       cost: selected.cost,
+      limit: selected.limit,
     })
   }),
 )

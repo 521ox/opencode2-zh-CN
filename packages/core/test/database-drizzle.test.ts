@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises"
+import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Database } from "bun:sqlite"
@@ -6,8 +6,8 @@ import { expect, test } from "bun:test"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
 import { eq, sql } from "drizzle-orm"
 import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core"
-import { Effect } from "effect"
-import type { SqlClient as SqlClientService } from "effect/unstable/sql/SqlClient"
+import { Effect, Tracer } from "effect"
+import type { SqlClient } from "effect/unstable/sql/SqlClient"
 import { isSqlError } from "effect/unstable/sql/SqlError"
 import { EffectDrizzleSqlite } from "@opencode-ai/core/database/drizzle"
 
@@ -16,7 +16,7 @@ const users = sqliteTable("users", {
   name: text().notNull(),
 })
 
-const run = <A, E>(effect: Effect.Effect<A, E, SqlClientService>) =>
+const run = <A, E>(effect: Effect.Effect<A, E, SqlClient>) =>
   Effect.runPromise(
     effect.pipe(Effect.provide(SqliteClient.layer({ filename: ":memory:", disableWAL: true })), Effect.scoped),
   )
@@ -26,16 +26,6 @@ const makeDb = Effect.gen(function* () {
   yield* db.run(sql`create table users (id integer primary key autoincrement, name text not null)`)
   return db
 })
-
-const createMigrationsFolder = async () => {
-  const migrationsFolder = await mkdtemp(join(tmpdir(), "effect-drizzle-sqlite-"))
-  await mkdir(join(migrationsFolder, "20240101000000_create_migrated_users"), { recursive: true })
-  await Bun.write(
-    join(migrationsFolder, "20240101000000_create_migrated_users", "migration.sql"),
-    "create table migrated_users (id integer primary key autoincrement, name text not null);",
-  )
-  return migrationsFolder
-}
 
 test("selects rows through Effect-yieldable query builders", async () => {
   await run(
@@ -47,6 +37,31 @@ test("selects rows through Effect-yieldable query builders", async () => {
       expect(yield* db.select({ id: users.id }).from(users).where(eq(users.name, "Ada")).get()).toEqual({ id: 1 })
     }),
   )
+})
+
+test("suppresses statement spans", async () => {
+  const spans: Tracer.NativeSpan[] = []
+  const tracer = Tracer.make({
+    span(options) {
+      const span = new Tracer.NativeSpan(options)
+      spans.push(span)
+      return span
+    },
+  })
+
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const db = yield* makeDb
+      yield* db.transaction((tx) => tx.insert(users).values({ name: "Grace" }))
+      yield* db.select().from(users)
+    }).pipe(
+      Effect.provideService(Tracer.Tracer, tracer),
+      Effect.provide(SqliteClient.layer({ filename: ":memory:", disableWAL: true })),
+      Effect.scoped,
+    ),
+  )
+
+  expect(spans.map((span) => span.name)).not.toContain("sql.execute")
 })
 
 test("commits successful transactions", async () => {
@@ -147,26 +162,4 @@ test("supports returning and rejects empty update sets", async () => {
       expect(() => db.update(users).set({ name: undefined })).toThrow("No values to set")
     }),
   )
-})
-
-test("runs migrations once and records migration metadata", async () => {
-  const migrationsFolder = await createMigrationsFolder()
-  try {
-    await run(
-      Effect.gen(function* () {
-        const db = yield* EffectDrizzleSqlite.makeWithDefaults()
-
-        yield* EffectDrizzleSqlite.migrate(db, { migrationsFolder })
-        yield* EffectDrizzleSqlite.migrate(db, { migrationsFolder })
-        yield* db.run(sql`insert into migrated_users (name) values ('Margaret')`)
-
-        expect(yield* db.all<{ name: string }>(sql`select name from migrated_users`)).toEqual([{ name: "Margaret" }])
-        expect(yield* db.all<{ name: string | null }>(sql`select name from __drizzle_migrations`)).toEqual([
-          { name: "20240101000000_create_migrated_users" },
-        ])
-      }),
-    )
-  } finally {
-    await rm(migrationsFolder, { recursive: true, force: true })
-  }
 })

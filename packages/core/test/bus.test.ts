@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Schema, Stream } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Ref, Schema, Stream } from "effect"
 import { Bus } from "@opencode-ai/core/bus"
 import { Event } from "@opencode-ai/schema/event"
 import { Session } from "@opencode-ai/schema/session"
@@ -149,6 +149,23 @@ describe("Bus", () => {
     }),
   )
 
+  it.effect("omits ambient and explicit locations for global events", () =>
+    Effect.gen(function* () {
+      const bus = yield* Bus.Service
+      const event = yield* bus.publish(
+        GlobalMessage,
+        { text: "hello" },
+        {
+          global: true,
+          location: { directory: AbsolutePath.make("explicit"), workspaceID: Workspace.ID.make("wrk_explicit") },
+        },
+      )
+
+      expect(event).not.toHaveProperty("location")
+      expect(event.type).toBe("test.global")
+    }),
+  )
+
   itWithoutLocation.effect("omits location when no location is available", () =>
     Effect.gen(function* () {
       const bus = yield* Bus.Service
@@ -211,10 +228,10 @@ describe("Bus", () => {
       )
 
       const event = yield* bus.publish(SyncMessage, { id: "one", text: "hello" })
-      yield* bus.publish(SyncMessage, { id: "one", text: "after unsubscribe" })
+      yield* bus.publish(SyncMessage, { id: "one", text: "second event" })
 
       expect(received[0]).toEqual(event)
-      expect(received[1]?.data).toEqual({ id: "one", text: "after unsubscribe" })
+      expect(received[1]?.data).toEqual({ id: "one", text: "second event" })
     }),
   )
 

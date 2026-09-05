@@ -9,9 +9,9 @@ import { useTuiApp } from "../context/runtime"
 import { describeOS, describeTerminal } from "../util/system"
 
 export function ErrorComponent(props: { error: Error; reset: () => void; mode?: "dark" | "light" }) {
+  const { t } = useI18n()
   const term = useTerminalDimensions()
   const exit = useExit()
-  const { t } = useI18n()
   const clipboard = useClipboard()
   const app = useTuiApp()
   const [copyState, setCopyState] = createSignal<"idle" | "copied" | "failed">("idle")
@@ -58,11 +58,9 @@ export function ErrorComponent(props: { error: Error; reset: () => void; mode?: 
     {
       key: "c",
       label: () =>
-        ({
-          idle: t("ui.error.copyReport"),
-          copied: t("ui.error.copied"),
-          failed: t("ui.error.copyFailed"),
-        })[copyState()],
+        ({ idle: t("ui.error.copyReport"), copied: t("ui.error.copied"), failed: t("ui.error.copyFailed") })[
+          copyState()
+        ],
       copy: true,
       onUse: copyReport,
     },
@@ -244,7 +242,7 @@ function buildIssueURL(message: string, stack: string, version: string) {
   // clipped trace is obvious. searchParams.set handles encoding without throwing,
   // so measuring url.toString() is both correct and safe on any input.
   const MAX_URL_LENGTH = 6000
-  const marker = "\n... (truncated)"
+  const marker = "\n… (truncated)"
   const head = `The OpenCode TUI crashed with an unexpected error.\n\n**Error:** ${message}\n\n**Stack trace:**\n`
   const setBody = (body: string) => url.searchParams.set("description", head + "```\n" + body + "\n```")
 

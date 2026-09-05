@@ -6,10 +6,10 @@ import { errorMessage } from "../util/error"
 import { useI18n } from "../context/i18n"
 
 export function DialogSessionRename(props: { sessionID: string; currentTitle?: string }) {
+  const { t } = useI18n()
   const dialog = useDialog()
   const client = useClient()
   const toast = useToast()
-  const { t } = useI18n()
 
   return (
     <DialogPrompt

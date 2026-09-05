@@ -98,11 +98,11 @@ export type DialogSelectRef<T> = {
 }
 
 export function DialogSelect<T>(props: DialogSelectProps<T>) {
+  const { t } = useI18n()
   type Action = NonNullable<DialogSelectProps<T>["actions"]>[number]
   type FooterHint = NonNullable<DialogSelectProps<T>["footerHints"]>[number]
   type VisibleAction = (Action & { label: string }) | FooterHint
 
-  const { t } = useI18n()
   const dialog = useDialog()
   const themes = useThemes()
   const theme = useTheme("elevated")

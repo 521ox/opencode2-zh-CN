@@ -2,6 +2,7 @@ import type { Plugin } from "@opencode-ai/plugin/tui"
 import { useTerminalDimensions } from "@opentui/solid"
 import { TextAttributes } from "@opentui/core"
 import { createSignal } from "solid-js"
+import { useI18n } from "../../../context/i18n"
 import { DialogMoveSession } from "../../../component/dialog-move-session"
 import { SessionLocationUnavailable } from "../../../routes/session/location-missing"
 import type { Story } from "./index"
@@ -12,7 +13,8 @@ const directory = "/Users/kit/code/open-source/opencode-workerd-profile"
 function SessionLocationMissingStory(props: { context: Plugin.Context }) {
   const dimensions = useTerminalDimensions()
   const theme = props.context.theme.contextual.elevated
-  const [message, setMessage] = createSignal("Choose another directory to continue")
+  const i18n = useI18n()
+  const [message, setMessage] = createSignal(i18n.t("session.location.chooseDirectory"))
   const open = () =>
     props.context.ui.dialog.show(() => (
       <DialogMoveSession
@@ -27,7 +29,7 @@ function SessionLocationMissingStory(props: { context: Plugin.Context }) {
         fixture
         onSelect={(selection) => {
           if (selection.type !== "directory") return
-          setMessage(`Selected ${selection.directory}`)
+          setMessage(i18n.t("feature.storybook.location.selectedDirectory", { directory: selection.directory }))
           props.context.ui.dialog.clear()
         }}
       />
@@ -37,8 +39,8 @@ function SessionLocationMissingStory(props: { context: Plugin.Context }) {
     commands: [
       {
         bind: "escape",
-        title: "Back to storybook",
-        group: "Storybook",
+        title: i18n.t("feature.storybook.command.backToStorybook"),
+        group: i18n.t("feature.storybook.group"),
         run: () => props.context.ui.router.navigate({ type: "plugin", name: "storybook" }),
       },
     ],
@@ -62,11 +64,11 @@ function SessionLocationMissingStory(props: { context: Plugin.Context }) {
       </box>
       <StoryFooter
         context={props.context}
-        title="storybook / missing session directory"
+        title={i18n.t("feature.storybook.footer.sessionLocationMissing")}
         status={message()}
         controls={[
-          { shortcut: "enter", label: "confirm" },
-          { shortcut: "esc", label: "back" },
+          { shortcut: "enter", label: i18n.t("feature.storybook.control.confirm") },
+          { shortcut: "esc", label: i18n.t("feature.storybook.control.back") },
         ]}
       />
     </box>

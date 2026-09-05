@@ -1,0 +1,59 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+
+  // Select one configured model. Replace only the model ID placeholder.
+  // To use the xAI example instead, select:
+  // "model": "xai-official/replace-with-xai-model-id"
+  "model": "mycodex/replace-with-model-id",
+
+  // Shared V2 compaction settings. There is no top-level compact_threshold.
+  "compaction": {
+    "auto": true,
+    "prune": false,
+    "buffer": 20000,
+    "keep": {
+      // Used only for the local-summary tail, not for remote checkpoints.
+      "tokens": 15000
+    }
+  },
+
+  "providers": {
+    // Example 1: a gateway that genuinely implements native OpenAI Responses,
+    // including context_management and compaction_trigger. A display name or
+    // baseURL alone does not grant these capabilities.
+    "mycodex": {
+      "name": "Native OpenAI Responses gateway",
+      "package": "@opencode-ai/ai/providers/openai",
+      "env": ["MYCODEX_API_KEY"],
+      "settings": {
+        "apiKey": "{env:MYCODEX_API_KEY}",
+        "baseURL": "{env:MYCODEX_BASE_URL}"
+      },
+      "models": {
+        "replace-with-model-id": {
+          "name": "Replace with the gateway model ID"
+          // For a custom model, add accurate limit.context, limit.input (when
+          // distinct), and limit.output values from the provider. Do not guess:
+          // the computed remote threshold depends on those limits.
+        }
+      }
+    },
+
+    // Example 2: official xAI Responses. No custom baseURL is set here.
+    // This package's Responses route owns POST /responses/compact; threshold
+    // crossing and manual compaction fail visibly if that operation fails.
+    "xai-official": {
+      "name": "Official xAI Responses",
+      "package": "@opencode-ai/ai/providers/xai",
+      "env": ["XAI_API_KEY"],
+      "settings": {
+        "apiKey": "{env:XAI_API_KEY}"
+      },
+      "models": {
+        "replace-with-xai-model-id": {
+          "name": "Replace with the official xAI model ID"
+        }
+      }
+    }
+  }
+}

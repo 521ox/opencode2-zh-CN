@@ -1,7 +1,7 @@
 import { describe, expect } from "bun:test"
 import os from "os"
 import { Effect, Layer } from "effect"
-import * as TestClock from "effect/testing/TestClock"
+import { TestClock } from "effect/testing"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { Location } from "@opencode-ai/core/location"
 import { FSUtil } from "@opencode-ai/util/fs-util"
@@ -51,7 +51,7 @@ describe("InstructionBuiltIns", () => {
           `  Workspace root folder: ${projectDirectory}`,
           "  Is directory a git repo: yes",
           `  Platform: ${process.platform}`,
-          `  Use ${temporary} for temporary work outside the workspace; it already exists and is pre-approved for external directory access.`,
+          `  Prefer ${temporary} over generic system temporary directories such as /tmp; it is pre-created and approved for external access.`,
           "</env>",
           "",
           `Today's date: ${localDate(timestamp)}`,

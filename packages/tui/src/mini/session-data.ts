@@ -1,5 +1,5 @@
-import type { Translator } from "../i18n"
 import type { FooterView, MiniFormRequest, MiniPermissionRequest } from "./types"
+import type { Translator } from "../i18n"
 
 export function pickBlockerView(input: { permission?: MiniPermissionRequest; form?: MiniFormRequest }): FooterView {
   if (input.permission) return { type: "permission", request: input.permission }

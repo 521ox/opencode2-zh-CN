@@ -76,6 +76,26 @@ export function permissionPresentation(
     }
   }
 
+  if (action === "direct_exec") {
+    const program = text(metadata.name) || "program"
+    const path = text(metadata.path)
+    const cwd = text(metadata.cwd)
+    const argv = Array.isArray(metadata.args)
+      ? metadata.args.filter((value): value is string => typeof value === "string")
+      : []
+    const args = JSON.stringify(argv)
+    return {
+      icon: "$",
+      title: t("common.permission.info.directExec", { program }),
+      lines: [
+        ...(path ? [t("common.permission.info.directExecPath", { path: formatPath(path) })] : []),
+        t("common.permission.info.directExecArgs", { args }),
+        ...(cwd ? [t("common.permission.info.directExecCwd", { cwd: formatPath(cwd) })] : []),
+        t("common.permission.info.directExecScope"),
+      ],
+    }
+  }
+
   if (action === "subagent") {
     const agent = text(input.agent) || "general"
     const description = text(input.description)
@@ -158,6 +178,22 @@ function wildcardDirectory(value: string) {
   const prefix = value.slice(0, wildcard)
   if (/^[\\/]+$/.test(prefix) || /^[A-Za-z]:[\\/]$/.test(prefix)) return prefix
   return prefix.replace(/[\\/]+$/, "")
+}
+
+export function permissionAlwaysLines(input: { action: string; save?: ReadonlyArray<string> }): string[] {
+  const save = input.save ?? []
+  if (save.length === 1 && save[0] === "*") {
+    return [`This will always allow ${input.action} for this project.`]
+  }
+  return ["This will always allow the following patterns for this project.", ...save.map((item) => `- ${item}`)]
+}
+
+export function permissionOptionLabel(option: "once" | "always" | "reject" | "confirm" | "cancel") {
+  if (option === "once") return "Allow once"
+  if (option === "always") return "Always allow"
+  if (option === "reject") return "Reject"
+  if (option === "confirm") return "Confirm"
+  return "Cancel"
 }
 
 function normalizeInput(action: string, value: unknown): Dict {

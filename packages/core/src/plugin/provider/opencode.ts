@@ -2,7 +2,6 @@ import { Duration, Effect, Schema, Semaphore, Stream } from "effect"
 import type { Scope } from "effect"
 import type { IntegrationOAuthMethodRegistration } from "@opencode-ai/plugin/effect/integration"
 import { define } from "@opencode-ai/plugin/effect/plugin"
-import type { CredentialValue } from "@opencode-ai/sdk/v2/types"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { Bus } from "../../bus.js"
 import { Credential } from "../../credential.js"
@@ -47,15 +46,18 @@ function oauth(http: HttpClient.HttpClient) {
       Effect.gen(function* () {
         const server = yield* normalizeServer(answer.server ?? defaultServer)
         const device = yield* post(http, `${server}/auth/device/code`, { client_id: clientID }, Device)
-        const verification = URL.canParse(device.verification_uri_complete)
-          ? new URL(device.verification_uri_complete)
-          : undefined
-        if (verification && verification.protocol !== "http:" && verification.protocol !== "https:") {
-          return yield* Effect.fail(new Error("Invalid device verification URL: expected HTTP(S)"))
-        }
+        const verification = yield* Effect.try({
+          try: () => {
+            const url = new URL(device.verification_uri_complete, `${server}/`)
+            if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("expected HTTP(S)")
+            return url
+          },
+          catch: (cause) =>
+            new Error(`Invalid device verification URL: ${cause instanceof Error ? cause.message : String(cause)}`),
+        })
         return {
           mode: "auto" as const,
-          url: verification?.href ?? `${server}/${device.verification_uri_complete.replace(/^\/+/, "")}`,
+          url: verification.href,
           instructions: `Enter code: ${device.user_code}`,
           callback: poll(http, server, device.device_code, Duration.seconds(device.interval)),
         }
@@ -76,9 +78,7 @@ function oauth(http: HttpClient.HttpClient) {
           expires: Date.now() + token.expires_in * 1000,
         }
       }),
-    label: (credential) => {
-      return typeof credential.metadata?.orgName === "string" ? credential.metadata.orgName : undefined
-    },
+    label: (credential) => (typeof credential.metadata?.orgName === "string" ? credential.metadata.orgName : undefined),
   } satisfies IntegrationOAuthMethodRegistration
 }
 
@@ -94,7 +94,7 @@ export const OpencodePlugin = define<HttpClient.HttpClient | Bus.Service | Scope
     const load = Effect.fn("OpencodePlugin.load")(function* () {
       const connection = yield* ctx.integration.connection.active("opencode")
       const credential = connection
-        ? yield* ctx.integration.connection.resolve(connection).pipe(Effect.catch(() => Effect.succeed(undefined)))
+        ? yield* ctx.integration.connection.resolve(connection).pipe(Effect.orElseSucceed(() => undefined))
         : undefined
       connected = connection !== undefined
       providers = credential
@@ -106,12 +106,12 @@ export const OpencodePlugin = define<HttpClient.HttpClient | Bus.Service | Scope
         : undefined
     })
 
-    yield* ctx.integration.transform((draft) => {
-      draft.update("opencode", (integration) => {
+    yield* ctx.integration.transform((editor) => {
+      editor.update("opencode", (integration) => {
         integration.name = "OpenCode"
       })
-      draft.method.update(oauth(http))
-      draft.method.update({ integrationID: "opencode", method: { type: "key", label: "API key (service account)" } })
+      editor.method.update(oauth(http))
+      editor.method.update({ integrationID: "opencode", method: { type: "key", label: "API key (service account)" } })
     })
 
     yield* load()
@@ -148,16 +148,18 @@ export const OpencodePlugin = define<HttpClient.HttpClient | Bus.Service | Scope
               model.variants ??= []
               for (const [id, options] of Object.entries(config.variants)) {
                 const variantID = Model.VariantID.make(id)
+                const normalized = variantOptions(
+                  withoutCredentials(options),
+                  model.package ?? (item.npm ? Provider.aisdk(item.npm) : undefined),
+                )
                 let existing = model.variants.find((item) => item.id === variantID)
                 if (!existing) {
                   existing = { id: variantID }
                   model.variants.push(existing)
                 }
                 existing.headers = { ...existing.headers, ...options.headers }
-                existing.settings = {
-                  ...existing.settings,
-                  ...ConfigProviderOptionsV1.model(withoutCredentials(options)),
-                }
+                existing.settings = { ...existing.settings, ...normalized.settings }
+                if (normalized.body !== undefined) existing.body = Provider.mergeOverlay(existing.body, normalized.body)
               }
             }
             if (config.release_date !== undefined) {
@@ -186,14 +188,14 @@ export const OpencodePlugin = define<HttpClient.HttpClient | Bus.Service | Scope
       if (hasKey) return
       for (const model of item.models.values()) {
         if (!model.cost.some((cost) => cost.input > 0)) continue
-        catalog.model.update(item.provider.id, model.id, (draft) => {
-          draft.enabled = false
+        catalog.model.update(item.provider.id, model.id, (editor) => {
+          editor.enabled = false
         })
       }
     })
 
     const refresh = () => loading.withPermit(load().pipe(Effect.andThen(ctx.catalog.reload())))
-    yield* bus.subscribe(Integration.Event.ConnectionUpdated).pipe(
+    yield* bus.subscribe(Credential.Event.Switched).pipe(
       Stream.filter((event) => event.data.integrationID === Integration.ID.make("opencode")),
       Stream.runForEach(refresh),
       Effect.forkScoped({ startImmediately: true }),
@@ -201,7 +203,7 @@ export const OpencodePlugin = define<HttpClient.HttpClient | Bus.Service | Scope
   }),
 })
 
-function fetchProviders(http: HttpClient.HttpClient, value: CredentialValue) {
+function fetchProviders(http: HttpClient.HttpClient, value: Credential.Value) {
   const metadata = value.metadata
   const server = typeof metadata?.server === "string" ? metadata.server : defaultServer
   const orgID = typeof metadata?.orgID === "string" ? metadata.orgID : undefined
@@ -216,7 +218,7 @@ function fetchProviders(http: HttpClient.HttpClient, value: CredentialValue) {
     )
     .pipe(
       Effect.flatMap((response) => {
-        if (response.status === 404) return Effect.succeed(undefined)
+        if (response.status === 404) return Effect.undefined
         return HttpClientResponse.filterStatusOk(response).pipe(
           Effect.flatMap(HttpClientResponse.schemaBodyJson(RemoteResponse)),
           Effect.map((remote) => remote.config.provider),
@@ -227,6 +229,20 @@ function fetchProviders(http: HttpClient.HttpClient, value: CredentialValue) {
 
 function withoutCredentials(body: Readonly<Record<string, unknown>> | undefined) {
   return Object.fromEntries(Object.entries(body ?? {}).filter(([key]) => key !== "apiKey" && key !== "headers"))
+}
+
+function variantOptions(options: Readonly<Record<string, unknown>>, packageName: string | undefined) {
+  const settings = ConfigProviderOptionsV1.model(options)
+  if (packageName !== Provider.aisdk("@ai-sdk/openai")) return { settings }
+  const { reasoningEffort, reasoningSummary, body, ...rest } = settings
+  const reasoning = {
+    ...(typeof reasoningEffort === "string" ? { effort: reasoningEffort } : {}),
+    ...(typeof reasoningSummary === "string" ? { summary: reasoningSummary } : {}),
+  }
+  if (Object.keys(reasoning).length === 0) return { settings }
+  const native =
+    typeof body === "object" && body !== null && !Array.isArray(body) ? Object.fromEntries(Object.entries(body)) : {}
+  return { settings: rest, body: Provider.mergeOverlay({ reasoning }, native) }
 }
 
 function normalizeServer(input: unknown) {

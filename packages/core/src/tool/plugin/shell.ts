@@ -1,8 +1,6 @@
 export * as ShellTool from "./shell.js"
 
-import path from "path"
 import { ToolFailure } from "@opencode-ai/ai"
-import type { Content } from "@opencode-ai/schema/tool"
 import type { Context as PluginContext } from "@opencode-ai/plugin/effect/plugin"
 import { Deferred, Effect, Schema, Scope } from "effect"
 import { Config } from "../../config.js"
@@ -14,14 +12,14 @@ import { NonNegativeInt } from "../../schema.js"
 import { SessionSchema } from "../../session/schema.js"
 import { Shell } from "../../shell.js"
 import { ShellParse } from "../../shell/parse.js"
+import { ShellSelect } from "../../shell/select.js"
 import { ToolOutput } from "../../tool-output.js"
 
 export const name = "shell"
 export const DEFAULT_TIMEOUT_MS = 2 * 60 * 1_000
 
-const BACKGROUND_STARTED = "The command was moved to the background."
 const BACKGROUND_INSTRUCTION =
-  "You will be notified automatically when the command finishes. DO NOT sleep, poll, or proactively check on its progress."
+  "You will be notified automatically when the command finishes. Avoid sleep commands or polling for completion; if you need the output before then, read the file directly."
 const OS =
   process.platform === "darwin"
     ? "macOS"
@@ -72,11 +70,35 @@ const Output = Schema.Struct({
 
 type Output = typeof Output.Type
 
-const modelOutput = (output: Output): string | undefined => {
-  if (output.status === "running") return BACKGROUND_INSTRUCTION
-  if (output.timeout) return "Command timed out before completion."
-  return `Command exited with code ${output.exit}.`
+const resultMessages = (output: Output) => {
+  const notice = (() => {
+    if (output.status === "running") return BACKGROUND_INSTRUCTION
+    if (output.timeout) return "Command timed out before completion."
+    if (output.exit !== undefined) return `Command exited with code ${output.exit}.`
+  })()
+  return [output.output, ...(notice ? [notice] : [])]
 }
+
+const toolResult = (output: Output) => {
+  return {
+    output,
+    content: resultMessages(output).map((text) => ({ type: "text" as const, text })),
+    metadata: {
+      status: output.status,
+      truncated: output.truncated,
+      ...(output.exit !== undefined ? { exit: output.exit } : {}),
+      ...(output.shellID !== undefined ? { shellID: output.shellID } : {}),
+      ...(output.timeout !== undefined ? { timeout: output.timeout } : {}),
+    },
+  }
+}
+
+const backgroundResult = (shellID: string, file: string) => ({
+  output: `Command moved to the background (shell ID: ${shellID}).\nOutput is streaming to: ${file}`,
+  shellID,
+  truncated: false,
+  status: "running" as const,
+})
 
 export const Plugin = {
   id: "opencode.tool.shell",
@@ -86,45 +108,54 @@ export const Plugin = {
     const environment = yield* Environment.Service
     const mutation = yield* LocationMutation.Service
     const shell = yield* Shell.Service
+    const shellSelect = yield* ShellSelect.Service
+    const compatibleShell = shellSelect.resolve({ priority: "compat" })
     const permission = yield* Permission.Service
     const config = yield* Config.Service
 
-    const notifyWhenDone = Effect.fn("ShellTool.notifyWhenDone")(function* (
-      sessionID: SessionSchema.ID,
-      id: string,
-      command: string,
-    ) {
-      yield* runtime.job.wait({ id: id }).pipe(
-        Effect.flatMap((result) => {
-          const state =
-            result.info?.status === "completed"
-              ? "completed"
-              : result.info?.status === "error"
-                ? "error"
-                : result.info?.status === "cancelled"
-                  ? "cancelled"
-                  : undefined
-          if (state === undefined) return Effect.void
-          const text =
-            state === "completed"
-              ? (result.info!.output ?? "")
-              : state === "error"
-                ? (result.info!.error ?? "Command failed")
-                : "Command cancelled"
-          return runtime.session.synthetic({
-            sessionID,
-            text: `<shell id="${id}" state="${state}" command="${command}">\n${text}\n</shell>`,
-            description: command,
-            metadata: { source: "shell", jobID: id, state },
-          })
-        }),
-        Effect.forkIn(scope, { startImmediately: true }),
-      )
-    })
+    const notifyWhenDone = Effect.fn("ShellTool.notifyWhenDone")(
+      function* (
+        sessionID: SessionSchema.ID,
+        id: string,
+        shellID: string,
+        command: string,
+        settled: Deferred.Deferred<Output>,
+      ) {
+        const info = (yield* runtime.job.wait({ id })).info
+        if (!info || info.status === "running") return
+        const output = info.status === "completed" ? yield* Deferred.await(settled) : undefined
+        const text = output
+          ? resultMessages(output).join("\n\n")
+          : info.status === "error"
+            ? (info.error ?? "Command failed")
+            : "Command cancelled"
+        yield* runtime.session.synthetic({
+          ...(info.notificationID ? { id: info.notificationID } : {}),
+          sessionID,
+          text: `<shell id="${id}" state="${info.status}" command="${command}">\n${text}\n</shell>`,
+          description: command,
+          metadata: {
+            source: "shell",
+            jobID: id,
+            shellID,
+            state: info.status,
+            ...(output
+              ? {
+                  truncated: output.truncated,
+                  ...(output.exit !== undefined ? { exit: output.exit } : {}),
+                  ...(output.timeout !== undefined ? { timeout: output.timeout } : {}),
+                }
+              : {}),
+          },
+        })
+        if (info.notificationID) yield* runtime.job.completeBackground(info.notificationID)
+      },
+      Effect.forkIn(scope, { startImmediately: true }),
+    )
 
     yield* ctx.tool
-      .transform((draft) =>
-        draft.add({
+      .transform((editor) =>
+        editor.add({
           name,
           options: { codemode: false },
           description: description(),
@@ -144,59 +175,49 @@ export const Plugin = {
                   command: input.command,
                   cwd: input.workdir,
                   timeout,
+                  shell: yield* compatibleShell,
                   metadata: { sessionID: context.sessionID },
                 },
                 (invocation) =>
                   Effect.gen(function* () {
                     const target = yield* mutation.resolve({ path: invocation.cwd, kind: "directory" })
-                    const unrestricted =
-                      (yield* permission.allowsAll({
-                        sessionID: context.sessionID,
-                        action: name,
-                        agent: context.agent,
-                      })) &&
-                      (yield* permission.allowsAll({
-                        sessionID: context.sessionID,
-                        action: "external_directory",
-                        agent: context.agent,
-                      }))
                     invocation.cwd = target.absolute
                     finalTimeout = invocation.timeout
-                    if (!unrestricted) {
-                      const portable =
-                        Config.latest(yield* config.entries(), "experimental")?.portable_shell_scanner === true
-                      const parsed = yield* ShellParse.scan(invocation.command, invocation.shell, target.absolute, {
-                        portable,
-                      })
-                      const directories = yield* Effect.forEach(parsed.directories, (directory) =>
-                        mutation.resolve({ path: path.resolve(target.absolute, directory), kind: "directory" }),
+                    const portable =
+                      Config.latest(yield* config.entries(), "experimental")?.portable_shell_scanner === true
+                    const parsed = yield* ShellParse.scan(invocation.command, invocation.shell, target.absolute, {
+                      portable,
+                    })
+                    const directories = yield* Effect.forEach(parsed.directories, (directory) =>
+                      mutation.resolve({
+                        path: LocationMutation.resolvePath(target.absolute, directory),
+                        kind: "directory",
+                      }),
+                    )
+                    const external = [target, ...directories]
+                      .map((item) => item.externalDirectory)
+                      .filter((item) => item !== undefined)
+                      .filter(
+                        (item, index, items) => items.findIndex((other) => other.resource === item.resource) === index,
                       )
-                      const external = [target, ...directories]
-                        .map((item) => item.externalDirectory)
-                        .filter((item) => item !== undefined)
-                        .filter(
-                          (item, index, items) =>
-                            items.findIndex((other) => other.resource === item.resource) === index,
-                        )
-                      if (external.length > 0)
-                        yield* permission.assert({
-                          action: "external_directory",
-                          resources: external.map((item) => item.resource),
-                          save: external.map((item) => item.save),
-                          sessionID: context.sessionID,
-                          agent: context.agent,
-                          source,
-                        })
-                      if (parsed.commands.length > 0)
-                        yield* permission.assert({
-                          action: name,
-                          resources: parsed.commands.map((command) => command.resource),
-                          save: parsed.commands.map((command) => command.save),
-                          sessionID: context.sessionID,
-                          agent: context.agent,
-                          source,
-                        })
-                    }
+                    if (external.length > 0)
+                      yield* permission.assert({
+                        action: "external_directory",
+                        resources: external.map((item) => item.resource),
+                        save: external.map((item) => item.save),
+                        sessionID: context.sessionID,
+                        agent: context.agent,
+                        source,
+                      })
+                    if (parsed.commands.length > 0)
+                      yield* permission.assert({
+                        action: name,
+                        resources: parsed.commands.map((command) => command.resource),
+                        save: parsed.commands.map((command) => command.save),
+                        sessionID: context.sessionID,
+                        agent: context.agent,
+                        source,
+                      })
                     const workdir = yield* Environment.typeFollowing(environment.files, target.absolute).pipe(
                       Effect.catchTag("Environment.NotFound", () =>
                         Effect.fail(new Error(`Working directory does not exist: ${target.absolute}`)),
@@ -208,7 +229,7 @@ export const Plugin = {
               )
               yield* context.progress({ shellID: info.id })
 
-              const captureShell = Effect.fn("ShellTool.captureShell")(function* () {
+              const captureShell = Effect.fnUntraced(function* () {
                 const configured = Config.latest(yield* config.entries(), "tool_output")
                 const maxLines = configured?.max_lines ?? ToolOutput.MAX_LINES
                 const maxBytes = configured?.max_bytes ?? ToolOutput.MAX_BYTES
@@ -228,7 +249,7 @@ export const Plugin = {
                 }
               })
 
-              const settleShell = Effect.fn("ShellTool.settleShell")(function* () {
+              const settleShell = Effect.fnUntraced(function* () {
                 const final = yield* shell.wait(info.id)
                 const capture = yield* captureShell()
 
@@ -255,7 +276,7 @@ export const Plugin = {
               const settled = yield* Deferred.make<Output>()
               const run = settleShell().pipe(
                 Effect.tap((output) => Deferred.succeed(settled, output)),
-                Effect.map((output) => output.output),
+                Effect.map((output) => resultMessages(output).join("\n\n")),
                 Effect.onInterrupt(() => shell.remove(info.id).pipe(Effect.ignore)),
               )
               const job = yield* runtime.job.start({
@@ -263,18 +284,19 @@ export const Plugin = {
                 type: name,
                 title: info.command,
                 metadata: { sessionID: context.sessionID, shellID: info.id },
+                recovery: {
+                  kind: "shell",
+                  sessionID: context.sessionID,
+                  shellID: info.id,
+                  command: info.command,
+                },
                 run,
               })
 
               if (input.background === true) {
                 yield* runtime.job.background(job.id)
-                yield* notifyWhenDone(context.sessionID, context.id, info.command)
-                return {
-                  output: BACKGROUND_STARTED,
-                  shellID: info.id,
-                  truncated: false,
-                  status: "running" as const,
-                }
+                yield* notifyWhenDone(context.sessionID, context.id, info.id, info.command, settled)
+                return backgroundResult(info.id, info.file)
               }
 
               const result = yield* runtime.job
@@ -282,13 +304,8 @@ export const Plugin = {
                 .pipe(Effect.onInterrupt(() => runtime.job.cancel(job.id).pipe(Effect.ignore)))
               if (result?.type === "backgrounded") {
                 yield* shell.timeout(info.id, 0)
-                yield* notifyWhenDone(context.sessionID, context.id, info.command)
-                return {
-                  output: BACKGROUND_STARTED,
-                  shellID: info.id,
-                  truncated: false,
-                  status: "running" as const,
-                }
+                yield* notifyWhenDone(context.sessionID, context.id, info.id, info.command, settled)
+                return backgroundResult(info.id, info.file)
               }
               if (result?.info.status === "error")
                 return yield* Effect.fail(new Error(result.info.error ?? "Command failed"))
@@ -296,22 +313,7 @@ export const Plugin = {
 
               return yield* Deferred.await(settled)
             }).pipe(
-              Effect.map((output) => {
-                const content: Array<Content> = [{ type: "text", text: output.output }]
-                const model = modelOutput(output)
-                if (model) content.push({ type: "text", text: model })
-                return {
-                  output,
-                  content,
-                  metadata: {
-                    status: output.status,
-                    truncated: output.truncated,
-                    ...("exit" in output && output.exit !== undefined ? { exit: output.exit } : {}),
-                    ...("shellID" in output && output.shellID !== undefined ? { shellID: output.shellID } : {}),
-                    ...("timeout" in output && output.timeout !== undefined ? { timeout: output.timeout } : {}),
-                  },
-                }
-              }),
+              Effect.map(toolResult),
               Effect.mapError(
                 (error) => new ToolFailure({ message: `Unable to execute command: ${input.command}`, error }),
               ),
@@ -324,7 +326,7 @@ export const Plugin = {
       Effect.gen(function* () {
         const tool = event.tools[name]
         if (!tool) return
-        tool.description = description(yield* shell.name())
+        tool.description = description(ShellSelect.name(yield* compatibleShell))
       }),
     )
   }),

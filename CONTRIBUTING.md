@@ -4,34 +4,30 @@ Thank you for contributing to this independent OpenCode V2 fork.
 
 ## Choose the Correct Project
 
-Use this repository for behavior introduced by this fork, including its
-Simplified Chinese TUI, native Responses path, compaction safeguards, durable
-session execution, migration tooling, and custom Windows build process.
+Use this repository for behavior introduced or intentionally preserved by this
+fork, including the Simplified Chinese TUI, native Responses ownership,
+compaction safeguards, session/subagent behavior, fork-owned tools, plugin
+management, and source-build workflow.
 
-If a defect reproduces on the current upstream V2 branch without this fork's
-changes, report it to [anomalyco/opencode](https://github.com/anomalyco/opencode).
-When practical, link the upstream report from the fork issue so the relationship
-is visible.
-
-Security vulnerabilities must follow [SECURITY.md](SECURITY.md) and must not be
-opened as public issues.
+If a defect reproduces on the current upstream V2 branch without fork changes,
+report it to [anomalyco/opencode](https://github.com/anomalyco/opencode). When
+practical, link the upstream report from the fork issue. Security
+vulnerabilities must follow [SECURITY.md](SECURITY.md), not a public issue.
 
 ## Before Opening an Issue
 
-1. Search existing issues and confirm the behavior still occurs on the current
-   public `main` branch.
-2. State the operating system, terminal, exact source commit, provider route,
-   model identifier, and whether a third-party gateway is involved.
-3. Provide the smallest reproducible sequence and the expected and observed
-   behavior.
+1. Search existing issues and reproduce on the current public `main` branch.
+2. State the operating system, terminal, public source revision, configured
+   provider package/protocol, model identifier, and whether a gateway is used.
+3. Provide the smallest reproducible sequence and expected/observed behavior.
 4. Redact credentials, prompts, customer data, cookies, authorization headers,
-   session databases, logs, and identifying local paths.
-5. For lifecycle or concurrency defects, include process IDs and timestamps only
-   after confirming they do not expose private data.
+   session databases, memory snapshots, logs, and identifying local paths.
+5. Use synthetic data. Do not attach machine-local configuration or audit data.
 
 ## Development Setup
 
-The repository pins Bun through the root `packageManager` field.
+The root `packageManager` field is authoritative; the current source requires
+Bun 1.3.14.
 
 ```bash
 git clone https://github.com/521ox/opencode2-zh-CN.git
@@ -40,59 +36,67 @@ bun install
 bun dev
 ```
 
-The root `bun test` command intentionally fails. Run type checking and tests for
-the affected package instead:
+The root aggregate test entry intentionally fails. Use Bun's global `--cwd`
+option to run type checks and tests from the affected package cwd:
 
 ```bash
-bun run typecheck
-bun test packages/core/test/<relevant-test>.test.ts
+bun --cwd packages/core run typecheck
+bun --cwd packages/core test test/<relevant-test>.test.ts
+bun --cwd packages/ai run typecheck
+bun --cwd packages/ai test test/<relevant-test>.test.ts
 ```
 
-Windows release candidates must be built with
-`script/build-custom-windows.ps1`; do not replace or overwrite a running binary.
+Do not add a second runtime or canary lane to documentation or automation
+without an accepted product change. This source snapshot does not publish
+prebuilt binaries.
 
 ## Change Requirements
 
 Keep each change bounded to one product outcome. A pull request should include:
 
-- the user-visible behavior or defect being addressed;
-- the affected ownership boundary and public contract, if any;
-- focused tests that can fail on the previous behavior;
-- the commands and exit results used for verification;
-- migration, recovery, and compatibility notes when persistent state changes;
+- the user-visible behavior or defect;
+- the affected owner and public contract;
+- focused tests that fail on the previous behavior where applicable;
+- exact verification commands and exit results;
+- recovery and compatibility notes when persistent state changes;
 - an upstream-sync impact note when a protected customization is touched.
 
-Preserve the contracts documented in
-[`specs/v2/upstream-sync-preservation.md`](specs/v2/upstream-sync-preservation.md).
-Do not silently replace native Responses behavior with an AI SDK compatibility
-path, bypass session ownership fencing, weaken migration preflight, or publish
-an unverified compile runtime.
+Preserve [CUSTOMIZATIONS.md](CUSTOMIZATIONS.md). In particular:
 
-Generated clients, schemas, and migrations must be regenerated with the
-repository's existing scripts. Do not hand-edit generated output unless the
-owning generator explicitly requires it.
+- do not infer capabilities from provider display names or base URLs;
+- do not replace native Responses behavior with a compatibility route;
+- do not route native OpenAI compaction to `/responses/compact`;
+- do not add local fallback to failed xAI remote compaction;
+- do not bypass Session ownership, direct-child, or permission boundaries;
+- do not restore retired fork-specific V1 migration tooling.
 
-## Style and Scope
+Generated clients and schemas must be regenerated through their existing owner
+workflow. Do not hand-edit generated output unless that workflow explicitly
+requires it.
 
-- Follow the surrounding TypeScript and Effect patterns.
-- Prefer existing services and schemas over parallel abstractions.
-- Keep unrelated formatting and refactors out of behavioral fixes.
-- Add comments only where the invariant is not evident from the code.
-- Use clear English for persistent engineering documentation. Preserve Chinese
-  localization text where it is part of the product experience.
+## Style, Privacy, and Scope
 
-Large features or public contract changes should start with an issue describing
+- Follow surrounding TypeScript and Effect patterns.
+- Prefer existing services, schemas, and route owners over parallel abstractions.
+- Keep unrelated formatting and refactors out of behavioral changes.
+- Use clear English for persistent engineering documentation; Chinese-primary
+  product copy such as the README and localization resources is appropriate.
+- Never commit credentials, private endpoints, local configuration, generated
+  session-memory snapshots, local paths, private session data, or build/audit
+  sidecars.
+
+Large features and public-contract changes should begin with an issue describing
 the behavior, non-goals, compatibility constraints, and acceptance criteria.
 
 ## Pull Requests
 
 Open pull requests against `main`. Use a concise conventional title such as
-`fix(core): fence session terminal publication`. Draft pull requests are
-welcome when the unresolved behavior or verification gap is clearly listed.
+`fix(core): preserve route ownership`. Draft pull requests are welcome when the
+remaining behavior or verification gap is explicit.
 
-A contribution may be declined when it cannot be reconciled with the protected
-fork contracts, lacks a reproducible verification path, contains private data,
-or expands the product scope without an agreed contract.
+A contribution may be declined when it conflicts with protected fork
+contracts, lacks a reproducible verification path, contains private data, or
+expands product scope without an agreed contract.
 
 By contributing, you agree that your contribution is provided under the
 repository's [MIT License](LICENSE).

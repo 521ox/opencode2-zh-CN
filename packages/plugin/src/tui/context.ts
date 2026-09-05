@@ -1,7 +1,9 @@
 import type {
   AgentInfo,
   CommandInfo,
+  FormCancelInput,
   FormInfo,
+  FormReplyInput,
   IntegrationInfo,
   LocationRef,
   McpResource,
@@ -91,6 +93,8 @@ export interface Data {
       list(sessionID: string, location?: LocationRef): Array<FormInfo & { readonly location?: LocationRef }> | undefined
       sync(sessionID: string, location?: LocationRef): Promise<void>
       invalidate(sessionID: string, location?: LocationRef): void
+      reply(input: FormReplyInput, location?: LocationRef): Promise<void>
+      cancel(input: FormCancelInput, location?: LocationRef): Promise<void>
     }
   }
   readonly project: {
@@ -150,7 +154,11 @@ export interface Page {
   readonly render: (input: { readonly data?: Record<string, any> }) => JSX.Element
 }
 
-type PromptFooterInput = { readonly sessionID?: string; readonly mode: "normal" | "shell" }
+type PromptFooterInput = {
+  readonly sessionID?: string
+  readonly mode: "normal" | "shell"
+  readonly showDetails: boolean
+}
 
 /**
  * The host UI's slot tree. Every path is one slot: a named boundary a plugin
@@ -171,7 +179,7 @@ export interface SlotMap {
   readonly "prompt.footer.file": PromptFooterInput
   readonly "session.composer.top": { readonly sessionID: string }
   readonly "sidebar.content": { readonly sessionID: string }
-  readonly "sidebar.footer": Readonly<Record<string, never>>
+  readonly "sidebar.footer": { readonly sessionID: string }
 }
 export type SlotPath = keyof SlotMap
 
@@ -472,6 +480,7 @@ export interface Context {
   readonly data: Data
   readonly attention: Attention
   readonly theme: ResolvedTheme
+  readonly themeMode: "dark" | "light"
   readonly markdown: {
     registerCodeBlockRenderer(language: string, render: MarkdownCodeBlockRenderer): () => void
   }

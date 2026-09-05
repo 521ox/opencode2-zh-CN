@@ -1,6 +1,6 @@
 import { Config, Effect, Formatter, Layer, Schema, Stream } from "effect"
 import { LLM, LLMClient, LLMRequest, Message, ProviderID, Tool, ToolRuntime } from "@opencode-ai/ai"
-import { Route, Auth, Endpoint, Framing, Protocol, RequestExecutor, WebSocketExecutor } from "@opencode-ai/ai/route"
+import { Route, Auth, Endpoint, Framing, Protocol, RequestExecutor } from "@opencode-ai/ai/route"
 import { OpenAI } from "@opencode-ai/ai/providers"
 
 /**
@@ -22,7 +22,7 @@ const model = OpenAI.configure({
   apiKey,
   generation: { maxTokens: 160 },
   providerOptions: {
-    openai: { store: false },
+    store: false,
   },
 }).model("gpt-4o-mini")
 
@@ -34,7 +34,7 @@ const model = OpenAI.configure({
 //   - `generation`: common controls such as max tokens, temperature, topP/topK,
 //     penalties, seed, and stop sequences.
 //   - `promptCacheKey`: stable cache affinity for protocols that support it.
-//   - `providerOptions`: namespaced provider-native behavior. For example,
+//   - `providerOptions`: model-typed provider-native behavior. For example,
 //     OpenAI store behavior, Anthropic thinking, Gemini thinking config, or
 //     OpenRouter routing/reasoning.
 //   - `http`: last-resort serializable overlays for final request body, headers,
@@ -188,7 +188,7 @@ const FakeProtocol = Protocol.make<FakeBody, string, string, void>({
   },
 })
 
-// An route is the runnable binding for that protocol. It adds the deployment
+// A route is the runnable binding for that protocol. It adds the deployment
 // axes that the protocol deliberately does not know: URL, auth, and framing.
 const FakeAdapter = Route.make({
   id: "fake-echo",
@@ -213,8 +213,7 @@ const FakeEcho = {
 // enabled at a time so the tutorial can demonstrate generate, stream, or
 // tool-loop behavior without spending tokens on every example.
 const requestExecutorLayer = RequestExecutor.fetchLayer
-const llmDeps = Layer.mergeAll(requestExecutorLayer, WebSocketExecutor.layer)
-const llmClientLayer = LLMClient.layer.pipe(Layer.provide(llmDeps))
+const llmClientLayer = LLMClient.layer.pipe(Layer.provide(requestExecutorLayer))
 
 const program = Effect.gen(function* () {
   // yield* generateOnce
@@ -222,6 +221,6 @@ const program = Effect.gen(function* () {
   // yield* generateStructuredObject
   // yield* generateDynamicObject.pipe(Effect.andThen((response) => Effect.sync(() => console.log(response.object))))
   yield* streamWithTools
-}).pipe(Effect.provide(Layer.mergeAll(llmDeps, llmClientLayer)))
+}).pipe(Effect.provide(Layer.mergeAll(requestExecutorLayer, llmClientLayer)))
 
 Effect.runPromise(program)

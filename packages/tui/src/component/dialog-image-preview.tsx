@@ -3,8 +3,8 @@ import { useTerminalDimensions } from "@opentui/solid"
 import { createMemo, createSignal } from "solid-js"
 import { Keymap } from "../context/keymap"
 import { useTheme } from "../context/theme"
-import { DialogCloseButton, useDialog } from "../ui/dialog"
 import { useI18n } from "../context/i18n"
+import { DialogCloseButton, useDialog } from "../ui/dialog"
 
 type ImagePreviewItem = Readonly<{
   uri: string
@@ -13,9 +13,9 @@ type ImagePreviewItem = Readonly<{
 
 export function DialogImagePreview(props: { images: readonly ImagePreviewItem[]; initial: number }) {
   const dialog = useDialog()
+  const { t } = useI18n()
   const dimensions = useTerminalDimensions()
   const theme = useTheme("elevated")
-  const { t } = useI18n()
   const [index, setIndex] = createSignal(Math.max(0, Math.min(props.images.length - 1, props.initial)))
   const [failed, setFailed] = createSignal(false)
   const current = createMemo(() => props.images[index()])
@@ -60,7 +60,9 @@ export function DialogImagePreview(props: { images: readonly ImagePreviewItem[];
           {props.images.length > 1 ? `← ${t("dialog.imagePreview.previous")}` : ""}
         </text>
         <text fg={failed() ? theme.text.feedback.error.default : theme.text.subdued} wrapMode="none" truncate>
-          {failed() ? t("dialog.imagePreview.none") : (current().mention?.text ?? t("dialog.imagePreview.label", { index: index() + 1 }))}
+          {failed()
+            ? t("dialog.imagePreview.none")
+            : (current().mention?.text ?? t("dialog.imagePreview.label", { index: index() + 1 }))}
         </text>
         <text fg={theme.text.subdued} onMouseUp={() => move(1)}>
           {props.images.length > 1 ? `${t("dialog.imagePreview.next")} →` : ""}
