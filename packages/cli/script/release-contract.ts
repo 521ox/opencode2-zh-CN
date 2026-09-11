@@ -2,10 +2,10 @@ import { lstat, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promis
 import path from "node:path"
 import { gzipSync } from "node:zlib"
 
-export const RELEASE_VERSION = "1.18.4-zhcn.1"
+export const RELEASE_VERSION = "1.18.4-zhcn.2"
 export const RELEASE_TAG = `v${RELEASE_VERSION}`
 export const RELEASE_CHANNEL = "zh-cn"
-export const RELEASE_BUN_VERSION = "1.3.14"
+export const RELEASE_BUN_VERSION = "1.4.2"
 export const RELEASE_REPOSITORY = "521ox/opencode2-zh-CN"
 export const RELEASE_REF = "refs/heads/main"
 
@@ -70,7 +70,8 @@ export const RELEASE_PLATFORMS: readonly ReleasePlatform[] = [
 ] as const
 
 export type ReleaseSidecar = {
-  readonly schemaVersion: 1
+  readonly schemaVersion: 2
+  readonly bytecode: true
   readonly sourceSha: string
   readonly version: string
   readonly channel: string
@@ -84,7 +85,8 @@ export type ReleaseSidecar = {
 }
 
 export type ReleaseManifest = {
-  readonly schemaVersion: 1
+  readonly schemaVersion: 2
+  readonly bytecode: true
   readonly repository: string
   readonly tag: string
   readonly sourceSha: string
@@ -92,12 +94,14 @@ export type ReleaseManifest = {
   readonly channel: string
   readonly prerelease: true
   readonly unsigned: true
-  readonly platforms: readonly (ReleaseSidecar & { readonly sidecar: { readonly name: string; readonly sha256: string } })[]
+  readonly platforms: readonly (ReleaseSidecar & {
+    readonly sidecar: { readonly name: string; readonly sha256: string }
+  })[]
 }
 
 export function validateReleaseVersion(value: string) {
   if (value !== RELEASE_VERSION) {
-    throw new Error(`This first-release workflow only accepts version ${RELEASE_VERSION}`)
+    throw new Error(`This selected-release workflow only accepts version ${RELEASE_VERSION}`)
   }
   return value
 }
@@ -195,7 +199,12 @@ function tar(entries: readonly ArchiveEntry[]) {
     writeTarFixed(header, 263, 2, "00")
     writeTarString(header, 265, 32, "root")
     writeTarString(header, 297, 32, "root")
-    writeTarOctal(header, 148, 8, header.reduce((sum, byte) => sum + byte, 0))
+    writeTarOctal(
+      header,
+      148,
+      8,
+      header.reduce((sum, byte) => sum + byte, 0),
+    )
     blocks.push(header, entry.body)
     const remainder = entry.body.byteLength % 512
     if (remainder) blocks.push(Buffer.alloc(512 - remainder))

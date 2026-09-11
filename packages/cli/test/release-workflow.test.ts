@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import path from "node:path"
+import { RELEASE_BUN_VERSION, RELEASE_TAG, RELEASE_VERSION } from "../script/release-contract"
 
 const root = path.resolve(import.meta.dir, "../../..")
 const workflowPath = path.join(root, ".github", "workflows", "release-cli.yml")
@@ -16,14 +17,15 @@ const expectedMatrix = [
 ]
 
 describe("fork CLI release workflow", () => {
-  test("has only the exact manual first-release trigger", () => {
+  test("has only the exact manual selected-release trigger", () => {
     expect(Object.keys(workflow.on)).toEqual(["workflow_dispatch"])
     expect(Object.keys(workflow.on.workflow_dispatch.inputs)).toEqual(["version"])
     expect(workflow.on.workflow_dispatch.inputs.version).toMatchObject({
       required: true,
       type: "string",
-      default: "1.18.4-zhcn.1",
+      default: RELEASE_VERSION,
     })
+    expect(workflow.jobs.release.env.RELEASE_TAG).toBe(RELEASE_TAG)
   })
 
   test("defines the exact six native runner/target/archive combinations", () => {
@@ -55,7 +57,9 @@ describe("fork CLI release workflow", () => {
   test("enables Windows symlinks before checkout and verifies source before and after build", () => {
     const steps = workflow.jobs.build.steps as Array<Record<string, unknown>>
     const symlinks = steps.findIndex((step) => step.name === "Enable native symlink checkout on Windows")
-    const checkout = steps.findIndex((step) => step.uses === "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5")
+    const checkout = steps.findIndex(
+      (step) => step.uses === "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+    )
     expect(symlinks).toBeGreaterThanOrEqual(0)
     expect(symlinks).toBeLessThan(checkout)
     expect(steps[symlinks]).toMatchObject({
@@ -68,7 +72,9 @@ describe("fork CLI release workflow", () => {
       typeof step.run === "string" && step.run.includes("packages/cli/script/release-source-check.ts") ? [index] : [],
     )
     const install = steps.findIndex((step) => typeof step.run === "string" && step.run.includes("bun install"))
-    const build = steps.findIndex((step) => typeof step.run === "string" && step.run.includes("packages/cli/script/build.ts"))
+    const build = steps.findIndex(
+      (step) => typeof step.run === "string" && step.run.includes("packages/cli/script/build.ts"),
+    )
     expect(sourceChecks).toHaveLength(2)
     expect(sourceChecks[0]).toBeLessThan(install)
     expect(sourceChecks[0]).toBeLessThan(build)
@@ -81,13 +87,17 @@ describe("fork CLI release workflow", () => {
     expect(source).not.toContain("always()")
     expect(source).toContain("pattern: release-*")
     expect(source).toContain("--draft")
-    expect(source).toContain("gh release edit \"$RELEASE_TAG\" --draft=false --prerelease")
+    expect(source).toContain('gh release edit "$RELEASE_TAG" --draft=false --prerelease')
     expect(source).toContain("trap cleanup_failed_release ERR")
     expect(source).toContain("refusing to clobber it")
   })
 
   test("keeps build, smoke, integrity, and release identity gates explicit", () => {
-    expect(source).toContain("bun-version: 1.3.14")
+    const runtimes = Object.values(workflow.jobs)
+      .flatMap((job: any) => job.steps)
+      .filter((step: any) => step.uses?.startsWith("oven-sh/setup-bun@"))
+    expect(runtimes).toHaveLength(2)
+    expect(runtimes.every((step: any) => step.with["bun-version"] === RELEASE_BUN_VERSION)).toBeTrue()
     expect(source).toContain("--frozen-lockfile")
     expect(source).toContain("--single")
     expect(source).toContain("--skip-install")
@@ -97,20 +107,28 @@ describe("fork CLI release workflow", () => {
     expect(source).toContain("packages/cli/script/verify-artifact.ts")
     expect(source).toContain("packages/cli/script/release-source-check.ts")
     expect(source).toContain("packages/cli/script/release-manifest.ts")
-    expect(source).toContain("--version=\"$RELEASE_VERSION\"")
+    expect(source).toContain('--version="$RELEASE_VERSION"')
     expect(source.match(/--repository=\"\$GITHUB_REPOSITORY\"/g)).toHaveLength(2)
     expect(source.match(/--ref=\"\$GITHUB_REF\"/g)).toHaveLength(2)
     expect(source).toContain("retention-days: 1")
     expect(source).not.toMatch(/retention-days:\s*(?!1(?:\s|$))\d+/)
-    expect(Object.values(workflow.jobs.build.env).some((value) => String(value).includes("${{ runner.temp }}"))).toBeFalse()
-    expect(Object.values(workflow.jobs.release.env).some((value) => String(value).includes("${{ runner.temp }}"))).toBeFalse()
+    expect(
+      Object.values(workflow.jobs.build.env).some((value) => String(value).includes("${{ runner.temp }}")),
+    ).toBeFalse()
+    expect(
+      Object.values(workflow.jobs.release.env).some((value) => String(value).includes("${{ runner.temp }}")),
+    ).toBeFalse()
     expect(source).toContain('--output="$RUNNER_TEMP/release"')
     expect(source).toContain('--artifacts="$RUNNER_TEMP/release-downloads"')
     expect(source).toContain('--output="$RUNNER_TEMP/release-assets"')
     expect(source).toContain('"$RUNNER_TEMP/release-assets"/*')
-    expect(source).toContain('$reported = (& $executable --version | Out-String).Trim()')
+    expect(source).toContain("$reported = (& $executable --version | Out-String).Trim()")
     expect(source).toContain('$reported -ne "opencode2 v$env:RELEASE_VERSION"')
     expect(source).toContain('if [ "$reported" != "opencode2 v$RELEASE_VERSION" ]; then')
+    expect(source).toContain('$env:BUN_BE_BUN = "1"')
+    expect(source).toContain("$embeddedRevision -ne $compilerRevision")
+    expect(source).toContain('embedded_revision="$(BUN_BE_BUN=1 "$executable" --revision)"')
+    expect(source).toContain('if [ "$embedded_revision" != "$compiler_revision" ]; then')
     expect(source).not.toContain("$reported.Contains(")
     expect(source).not.toContain('case "$reported" in')
   })

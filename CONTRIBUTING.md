@@ -87,10 +87,15 @@ Validation for this source update covers local Windows tests, builds, isolated
 service checks, and user manual use, not six-platform Bun 1.4.2 validation.
 No new binary Release is part of this update.
 
-The fixed first-release workflow and validator retain Bun 1.3.14 for the
-already-published release contract. They are not the build entry point for
-current Bun 1.4.2 source. A future binary release requires its own version,
-workflow alignment, platform verification, and explicit publication approval.
+The manually dispatched workflow and validator now target `v1.18.4-zhcn.2`
+with Bun 1.4.2 and bytecode enabled. This preparation does not change the
+already-published `.1` assets. The workflow builds the six native targets from
+one source commit, checks embedded runtime identity and service lifecycle,
+then publishes only after all six archives and schema-v2 sidecars agree.
+An existing tag or Release is never overwritten. Future binary releases still
+require an explicitly selected version, platform evidence, and owner approval.
+See [the release procedure](docs/releasing.md) for the manual dispatch, six-way
+gates, and post-publication checks.
 
 Binary publication remains a manual, audited authority boundary. A source
 change, pull request, merge, tag, or available workflow does not by itself

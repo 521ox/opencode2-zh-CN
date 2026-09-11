@@ -23,6 +23,11 @@ describe("six-way release fan-in", () => {
     })
 
     expect(manifest.platforms).toHaveLength(6)
+    expect(manifest.schemaVersion).toBe(2)
+    expect(manifest.bytecode).toBeTrue()
+    expect(manifest.platforms.every((item) => item.schemaVersion === manifest.schemaVersion)).toBeTrue()
+    expect(manifest.platforms.every((item) => item.bytecode === manifest.bytecode)).toBeTrue()
+    expect(manifest.platforms.every((item) => item.bun.version === "1.4.2")).toBeTrue()
     expect(new Set(manifest.platforms.map((item) => item.target)).size).toBe(6)
     expect(manifest.platforms.every((item) => item.sourceSha === fixture.sourceSha)).toBeTrue()
     expect(manifest.platforms.every((item) => item.unsigned)).toBeTrue()
@@ -56,6 +61,44 @@ describe("six-way release fan-in", () => {
       }),
     ).rejects.toThrow("found 7")
   })
+
+  for (const scenario of [
+    "missing bytecode",
+    "false bytecode",
+    "legacy schema",
+    "legacy schema without bytecode",
+    "Bun version mismatch",
+  ]) {
+    test(`rejects ${scenario}`, async () => {
+      const fixture = await releaseFixture()
+      const platform = RELEASE_PLATFORMS[0]
+      const sidecar = path.join(fixture.artifacts, `release-${platform.target}`, `${platform.archive}.json`)
+      const value = JSON.parse(await readFile(sidecar, "utf8"))
+      if (scenario === "missing bytecode") delete value.bytecode
+      if (scenario === "false bytecode") value.bytecode = false
+      if (scenario === "legacy schema") value.schemaVersion = 1
+      if (scenario === "legacy schema without bytecode") {
+        value.schemaVersion = 1
+        delete value.bytecode
+      }
+      if (scenario === "Bun version mismatch") value.bun.version = "1.3.14"
+      await writeFile(sidecar, JSON.stringify(value, null, 2) + "\n")
+      await expect(
+        assembleRelease({
+          version: RELEASE_VERSION,
+          sourceSha: fixture.sourceSha,
+          artifacts: fixture.artifacts,
+          output: path.join(fixture.root, "out"),
+        }),
+      ).rejects.toThrow(
+        scenario === "Bun version mismatch"
+          ? "Archive contract mismatch"
+          : scenario === "missing bytecode" || scenario === "legacy schema without bytecode"
+            ? "Unexpected metadata keys"
+            : "Invalid sidecar values",
+      )
+    })
+  }
 
   test("rejects sidecar hash and identity mismatches", async () => {
     const fixture = await releaseFixture()
@@ -110,7 +153,7 @@ async function releaseFixture() {
       target: platform.target,
       dist,
       output: source,
-      bunVersion: "1.3.14",
+      bunVersion: "1.4.2",
       bunRevision: "synthetic-revision",
     })
     await cp(source, path.join(artifacts, `release-${platform.target}`), { recursive: true })

@@ -2,6 +2,7 @@
 
 import { mkdir, readdir, readFile, stat } from "node:fs/promises"
 import path from "node:path"
+import { bytecodeOptions } from "./build-bytecode"
 import {
   createReleaseArchive,
   releasePlatform,
@@ -30,7 +31,11 @@ export async function createPlatformRelease(input: {
   validateBunVersion(input.bunVersion)
   if (!/^[0-9a-f]{40}$/.test(input.sourceSha)) throw new Error(`Invalid source SHA: ${input.sourceSha}`)
   if (!input.bunVersion || !input.bunRevision) throw new Error("Bun version and revision are required")
-  const platform = releasePlatform({ runner: input.runner, target: input.target, distDirectory: path.basename(input.dist) })
+  const platform = releasePlatform({
+    runner: input.runner,
+    target: input.target,
+    distDirectory: path.basename(input.dist),
+  })
   const executable = path.join(input.dist, ...platform.executable.split("/"))
   const executableInfo = await stat(executable)
   if (!executableInfo.isFile()) throw new Error(`Missing release executable: ${executable}`)
@@ -43,7 +48,8 @@ export async function createPlatformRelease(input: {
   const archiveBody = await createReleaseArchive(platform, input.dist, archivePath)
   const executableBody = await readFile(executable)
   const sidecar: ReleaseSidecar = {
-    schemaVersion: 1,
+    schemaVersion: 2,
+    bytecode: bytecodeOptions.bytecode,
     sourceSha: input.sourceSha,
     version: RELEASE_VERSION,
     channel: RELEASE_CHANNEL,

@@ -2,6 +2,7 @@
 
 import { copyFile, mkdir, readdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
+import { bytecodeOptions } from "./build-bytecode"
 import {
   RELEASE_CHANNEL,
   RELEASE_BUN_VERSION,
@@ -17,7 +18,12 @@ import {
   type ReleaseSidecar,
 } from "./release-contract"
 
-export async function assembleRelease(input: { version: string; sourceSha: string; artifacts: string; output: string }) {
+export async function assembleRelease(input: {
+  version: string
+  sourceSha: string
+  artifacts: string
+  output: string
+}) {
   validateReleaseVersion(input.version)
   if (!/^[0-9a-f]{40}$/.test(input.sourceSha)) throw new Error(`Invalid source SHA: ${input.sourceSha}`)
   const entries = await readdir(input.artifacts, { withFileTypes: true })
@@ -47,7 +53,11 @@ export async function assembleRelease(input: { version: string; sourceSha: strin
     const sidecarBody = await readFile(sidecarPath)
     const sidecar = parseSidecar(JSON.parse(sidecarBody.toString("utf8")), platform.target)
     const archiveBody = await readFile(archivePath)
-    if (sidecar.sourceSha !== input.sourceSha || sidecar.version !== RELEASE_VERSION || sidecar.channel !== RELEASE_CHANNEL) {
+    if (
+      sidecar.sourceSha !== input.sourceSha ||
+      sidecar.version !== RELEASE_VERSION ||
+      sidecar.channel !== RELEASE_CHANNEL
+    ) {
       throw new Error(`Release identity mismatch in ${sidecarName}`)
     }
     if (
@@ -65,12 +75,16 @@ export async function assembleRelease(input: { version: string; sourceSha: strin
     await copyFile(archivePath, path.join(input.output, platform.archive))
     await copyFile(sidecarPath, path.join(input.output, sidecarName))
     const sidecarHash = sha256(sidecarBody)
-    checksums.push({ name: platform.archive, sha256: sidecar.archive.sha256 }, { name: sidecarName, sha256: sidecarHash })
+    checksums.push(
+      { name: platform.archive, sha256: sidecar.archive.sha256 },
+      { name: sidecarName, sha256: sidecarHash },
+    )
     manifestPlatforms.push({ ...sidecar, sidecar: { name: sidecarName, sha256: sidecarHash } })
   }
 
   const manifest: ReleaseManifest = {
-    schemaVersion: 1,
+    schemaVersion: 2,
+    bytecode: bytecodeOptions.bytecode,
     repository: RELEASE_REPOSITORY,
     tag: RELEASE_TAG,
     sourceSha: input.sourceSha,
@@ -85,7 +99,10 @@ export async function assembleRelease(input: { version: string; sourceSha: strin
   await writeStableJson(path.join(input.output, manifestName), manifest)
   checksums.push({ name: manifestName, sha256: sha256(manifestBody) })
   checksums.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0))
-  await writeFile(path.join(input.output, "SHA256SUMS"), checksums.map((item) => `${item.sha256}  ${item.name}`).join("\n") + "\n")
+  await writeFile(
+    path.join(input.output, "SHA256SUMS"),
+    checksums.map((item) => `${item.sha256}  ${item.name}`).join("\n") + "\n",
+  )
   return manifest
 }
 
@@ -93,6 +110,7 @@ function parseSidecar(value: unknown, target: string): ReleaseSidecar {
   if (!isRecord(value)) throw new Error(`Invalid sidecar for ${target}`)
   exactKeys(value, [
     "schemaVersion",
+    "bytecode",
     "sourceSha",
     "version",
     "channel",
@@ -125,7 +143,8 @@ function parseSidecar(value: unknown, target: string): ReleaseSidecar {
     value.executable.sha256,
   ]
   if (
-    value.schemaVersion !== 1 ||
+    value.schemaVersion !== 2 ||
+    value.bytecode !== true ||
     value.unsigned !== true ||
     strings.some((item) => typeof item !== "string" || item.length === 0) ||
     typeof value.archive.bytes !== "number" ||
