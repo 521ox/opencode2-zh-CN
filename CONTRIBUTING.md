@@ -27,14 +27,45 @@ vulnerabilities must follow [SECURITY.md](SECURITY.md), not a public issue.
 ## Development Setup
 
 The root `packageManager` field is authoritative; the current source requires
-Bun 1.3.14.
+Bun 1.4.2 (`bun@1.4.2`). The source type dependencies are `@types/bun` 1.4.0
+and `bun-types` 1.4.2; the type-package version is not the runtime version.
 
 ```bash
 git clone https://github.com/521ox/opencode2-zh-CN.git
 cd opencode2-zh-CN
-bun install
+bun install --frozen-lockfile
 bun dev
 ```
+
+On Windows, install dependencies with Bun 1.4.2 using
+`bun install --frozen-lockfile --linker hoisted` before running or building.
+Do not silently drop `--frozen-lockfile` to bypass a lockfile mismatch; investigate
+it as a source/dependency consistency issue.
+
+### Windows x64 source build
+
+The `script/build-custom-windows.ps1` wrapper defaults to `Current` and the
+isolated toolchain at `%LOCALAPPDATA%\opencode-build\bun\1.4.2\bin\bun.exe`.
+Prepare that cache yourself, or pass `-BuildBun` with an already installed Bun
+whose version is exactly 1.4.2. The default wrapper does not download Bun or
+install dependencies. For an existing Bun 1.4.2 on PATH, run from the repository
+root in PowerShell:
+
+```powershell
+$buildBun = (Get-Command bun.exe).Source
+& $buildBun --version # Must print exactly 1.4.2.
+& $buildBun install --frozen-lockfile --linker hoisted
+pwsh -File .\script\build-custom-windows.ps1 -BuildBun $buildBun
+```
+
+If using the default cache, use its executable for the dependency installation
+and omit `-BuildBun` when invoking the wrapper. The wrapper strictly checks the
+Bun version and temporarily adjusts PATH for the build without changing the
+global runtime. Its default export directory is the ignored repository-local
+`dist/windows-x64`. The CLI build defaults to `bytecode: true`; the Windows
+wrapper probes the embedded runtime after compilation against build metadata.
+Bytecode typically increases executable size in exchange for less startup
+parsing work; no fixed performance or memory improvement is promised.
 
 The root aggregate test entry intentionally fails. Use Bun's global `--cwd`
 option to run type checks and tests from the affected package cwd:
@@ -49,8 +80,17 @@ bun --cwd packages/ai test test/<relevant-test>.test.ts
 Do not add a second runtime or canary lane to documentation or automation
 without an accepted product change. Public source updates are periodic
 sanitized snapshots. The repository also currently publishes the separately
-audited prerelease `v1.18.4-zhcn.1` with six native CLI archives; Windows and
-macOS assets are unsigned and the application updater is disabled.
+audited prerelease `v1.18.4-zhcn.1` with six native CLI archives built with
+Bun 1.3.14; these assets are unchanged by the Bun 1.4.2 source update. Windows
+and macOS assets are unsigned and the application updater is disabled.
+Validation for this source update covers local Windows tests, builds, isolated
+service checks, and user manual use, not six-platform Bun 1.4.2 validation.
+No new binary Release is part of this update.
+
+The fixed first-release workflow and validator retain Bun 1.3.14 for the
+already-published release contract. They are not the build entry point for
+current Bun 1.4.2 source. A future binary release requires its own version,
+workflow alignment, platform verification, and explicit publication approval.
 
 Binary publication remains a manual, audited authority boundary. A source
 change, pull request, merge, tag, or available workflow does not by itself

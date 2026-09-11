@@ -9,6 +9,7 @@ import type { BunPlugin } from "bun"
 import pkg from "../package.json"
 import { buildAppArchive } from "./app-assets"
 import { matchesSingleTarget } from "./build-target"
+import { bytecodeOptions, bytecodeReleaseNeedsProbe, verifyBytecodeRuntime } from "./build-bytecode"
 import { verifyArtifact, verifySimulationGraph } from "./verify-artifact"
 import { resolveOpencodePty } from "./opencode-pty"
 
@@ -119,6 +120,7 @@ export default { path: file, version: ${JSON.stringify(opencodePty.version)}, sh
   const executablePath = await compileExecutable(item)
   console.log(`building ${name}`)
   const result = await Bun.build({
+    ...bytecodeOptions,
     entrypoints: ["./src/index.ts"],
     tsconfig: "./tsconfig.json",
     plugins: [appAssetsPlugin, solidPlugin, parcelWatcherPlugin, opencodePtyPlugin, simulationGraphPlugin],
@@ -205,6 +207,7 @@ async function compileExecutable(item: (typeof allTargets)[number]) {
     if (actualHash !== expectedHash) {
       throw new Error(`BUN_COMPILE_EXECUTABLE hash mismatch: actual=${actualHash} expected=${expectedHash}`)
     }
+    verifyBytecodeRuntime(directExecutable)
     console.log(
       JSON.stringify({
         compileRuntime: {
@@ -220,6 +223,7 @@ async function compileExecutable(item: (typeof allTargets)[number]) {
 
   const release = process.env.BUN_COMPILE_RELEASE
   if (!release) return
+  const probe = bytecodeReleaseNeedsProbe(release, item)
 
   const platform = item.os === "win32" ? "windows" : item.os
   const name = [
@@ -233,7 +237,10 @@ async function compileExecutable(item: (typeof allTargets)[number]) {
     .join("-")
   const cache = path.join(outdir, ".bun", release)
   const executable = path.join(cache, name, item.os === "win32" ? "bun.exe" : "bun")
-  if (await Bun.file(executable).exists()) return executable
+  if (await Bun.file(executable).exists()) {
+    if (probe) verifyBytecodeRuntime(executable)
+    return executable
+  }
 
   await mkdir(cache, { recursive: true })
   const archive = path.join(cache, `${name}.zip`)
@@ -252,6 +259,7 @@ async function compileExecutable(item: (typeof allTargets)[number]) {
   await sink.end()
   await $`unzip -oq ${archive} -d ${cache}`
   await rm(archive)
+  if (probe) verifyBytecodeRuntime(executable)
   return executable
 }
 

@@ -53,7 +53,7 @@ OpenCode2 zh-CN 因此选择了一条明确路线：
 
 ## 下载与 Windows 三步开始
 
-当前公开版本是 **[`v1.18.4-zhcn.1`](https://github.com/521ox/opencode2-zh-CN/releases/tag/v1.18.4-zhcn.1)**：一个预发行版，包含 Windows x64/arm64、Linux glibc x64/arm64、macOS x64/arm64 共六个原生 CLI archive。
+当前公开二进制版本是 **[`v1.18.4-zhcn.1`](https://github.com/521ox/opencode2-zh-CN/releases/tag/v1.18.4-zhcn.1)**：一个预发行版，包含 Windows x64/arm64、Linux glibc x64/arm64、macOS x64/arm64 共六个原生 CLI archive。这些已发布资产仍使用 **Bun 1.3.14**；当前源码已更新至 **Bun 1.4.2**，本次不发布新的二进制 Release。
 
 ### 1. 下载与你机器匹配的 archive
 
@@ -320,7 +320,9 @@ Rules directory 只是运行时提供的优先位置提示：它不会自动创�
 
 - **当前公开源码**：`main` 会继续接收清理后的 source snapshot 和公开文档提交，不能用 README 中写死的 SHA 代替实时分支状态。
 - **当前二进制**：`v1.18.4-zhcn.1` 是已发布并审计的 prerelease，包含六个原生 CLI archives；该 Release 精确绑定源码 commit `6718a6fef1e80d79e028d0d9fe95c28216418637`。
-- **构建运行时**：Bun **1.3.14**。
+- **当前源码运行时**：Bun **1.4.2**，CLI 默认启用 `bytecode: true`。Bytecode 通常以更大的 EXE 换取较少的启动解析成本，不代表固定的速度或内存收益。
+- **验证范围**：本次 Bun 1.4.2 源码更新已有 Windows 本地测试、构建、隔离服务检查及用户手动试用通过；这不是六平台 Bun 1.4.2 验证或广泛稳定性承诺。
+- **已发布资产运行时**：`v1.18.4-zhcn.1` 的六平台 archives 仍为 Bun **1.3.14**，不因源码更新而改变。
 - **资产证据**：Release 中的 `SHA256SUMS`、`release-manifest.json` 和平台 sidecar 绑定源码 commit、版本、channel、Bun revision、runner/target、archive/executable 大小和 SHA-256。
 - **签名与稳定性**：Windows/macOS 未签名；没有 installer、notarization、stable 或 reproducible-build 承诺。
 - **更新方式**：应用 updater 禁用。用户应返回本 fork Releases，重新下载并校验；上游 updater、installer 或 npm CLI 不是本 fork 更新来源。
@@ -330,14 +332,25 @@ Rules directory 只是运行时提供的优先位置提示：它不会自动创�
 
 ## 从源码运行与贡献
 
-前置条件：Git、[Bun](https://bun.sh/) 1.3.14，以及目标平台需要的本机构建依赖。
+前置条件：Git、[Bun](https://bun.sh/) **1.4.2**（以根 `packageManager` 为准），以及目标平台需要的本机构建依赖。
 
 ```bash
 git clone https://github.com/521ox/opencode2-zh-CN.git
 cd opencode2-zh-CN
-bun install
+bun install --frozen-lockfile
 bun dev
 ```
+
+Windows 请先用 Bun 1.4.2 执行 `bun install --frozen-lockfile --linker hoisted`。Windows x64 构建 wrapper 默认使用 `Current`，从 `%LOCALAPPDATA%\opencode-build\bun\1.4.2\bin\bun.exe` 读取隔离工具链，不自动安装依赖或下载 Bun；也可以显式指定你已安装的确切 1.4.2：
+
+```powershell
+# 在仓库根目录执行；先确认所选 Bun 的 --version 精确为 1.4.2。
+$buildBun = (Get-Command bun.exe).Source
+& $buildBun install --frozen-lockfile --linker hoisted
+pwsh -File .\script\build-custom-windows.ps1 -BuildBun $buildBun
+```
+
+若已预备默认 cache 中的 Bun 1.4.2 并安装依赖，可省略 `-BuildBun`。Wrapper 严格检查版本，只临时调整构建进程的 PATH，不修改全局 Bun；默认导出到仓库内已忽略的 `dist/windows-x64`。编译后会探测内嵌 runtime 并核对构建 metadata。详细前置条件见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 根聚合测试入口被故意阻止，避免混合不同 package 的无边界测试。修改代码时，从 owner package cwd 执行最小相关检查，例如：
 
@@ -370,4 +383,4 @@ OpenCode2 可在用户授权下读写文件、执行进程并访问网络；它�
 
 ## English summary
 
-OpenCode2 zh-CN is an independent, community-maintained OpenCode V2 fork for Chinese and Windows users. It provides a Simplified Chinese-first interface, explicit provider/protocol capability boundaries, route-specific compaction behavior, long-Session and direct-child continuation, controlled local-tool execution, and optional local history analysis. The current public prerelease is **`v1.18.4-zhcn.1`**, with six native CLI archives built with Bun 1.3.14; Windows and macOS assets are unsigned, and the application updater is disabled. Updates come only from this fork's Releases page. The fork is selectively reviewed through upstream `0808ebc3`, which is not a direct ancestor and does not imply complete adoption. This project is not affiliated with or endorsed by anomalyco, upstream OpenCode, or OpenAI.
+OpenCode2 zh-CN is an independent, community-maintained OpenCode V2 fork for Chinese and Windows users. It provides a Simplified Chinese-first interface, explicit provider/protocol capability boundaries, route-specific compaction behavior, long-Session and direct-child continuation, controlled local-tool execution, and optional local history analysis. Current source requires **Bun 1.4.2**, with CLI bytecode enabled by default; validation for this update is limited to Windows, not all six platforms. This is a source-only update, not a new binary Release. The current public prerelease remains **`v1.18.4-zhcn.1`**, with six native CLI archives built with Bun 1.3.14; Windows and macOS assets are unsigned, and the application updater is disabled. Updates come only from this fork's Releases page. The fork is selectively reviewed through upstream `0808ebc3`, which is not a direct ancestor and does not imply complete adoption. This project is not affiliated with or endorsed by anomalyco, upstream OpenCode, or OpenAI.

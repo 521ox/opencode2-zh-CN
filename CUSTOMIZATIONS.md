@@ -25,9 +25,24 @@ not claim that every upstream change in the reviewed range was integrated.
   owner only after semantic equivalence is demonstrated.
 - Keep provider credentials, endpoints, prompts, response IDs, session data,
   generated memory snapshots, and machine evidence out of fixtures and docs.
-- The source runtime prerequisite is Bun 1.3.14, as declared by the root
-  `packageManager`. Historical canary build modes are not a current product
-  contract.
+- The source runtime prerequisite is Bun 1.4.2, declared as `bun@1.4.2` by the
+  root `packageManager`; source type dependencies are `@types/bun` 1.4.0 and
+  `bun-types` 1.4.2. The CLI build defaults to `bytecode: true`; the Windows
+  wrapper probes the embedded runtime after compilation against build metadata.
+- The Windows wrapper defaults to `Current`, using the isolated toolchain at
+  `%LOCALAPPDATA%\opencode-build\bun\1.4.2\bin\bun.exe`, or an explicitly
+  supplied `-BuildBun` executable with exact version 1.4.2. It strictly checks
+  the version, adjusts PATH only temporarily, and does not change global Bun.
+  By default it does not download Bun or install dependencies; prepare the
+  cache or supply an installed runtime and install dependencies first (Windows
+  requires `--linker hoisted`). Exports default to the ignored repository-local
+  `dist/windows-x64`. See [CONTRIBUTING.md](CONTRIBUTING.md) for build steps.
+  Historical canary build modes are not a current product contract.
+- Current source and published binaries are separate scopes. The existing
+  `v1.18.4-zhcn.1` six-platform archives remain built with Bun 1.3.14; this
+  source-only Bun 1.4.2 update does not replace them or publish a new Release.
+  Its validation is limited to Windows local tests, builds, isolated service
+  checks, and user manual use, not six-platform Bun 1.4.2 support evidence.
 
 ## Complete Provider, Protocol, and Operation Whitelist
 

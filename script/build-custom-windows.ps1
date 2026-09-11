@@ -6,9 +6,9 @@ param(
   [switch] $RunServiceSmoke,
   [switch] $DryRun,
   [ValidateSet("PinnedCanary", "Current", "MovingCanary")]
-  [string] $CompileRuntime = "PinnedCanary",
+  [string] $CompileRuntime = "Current",
   [string] $CompileRuntimeCache = "$env:LOCALAPPDATA\opencode-build\bun",
-  [string] $BuildBun = "$env:USERPROFILE\.bun\bin\bun.exe"
+  [string] $BuildBun = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -294,11 +294,12 @@ $rootPackage = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "package.json"
 $cliPackage = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "packages\cli\package.json") | ConvertFrom-Json
 $requiredBun = $rootPackage.packageManager -replace '^bun@', ''
 $version = $cliPackage.version
-$bun = $BuildBun
+$bun = if ($BuildBun) { $BuildBun } else { Join-Path $CompileRuntimeCache "$requiredBun\bin\bun.exe" }
 
 if (-not (Test-Path -LiteralPath $bun)) {
-  throw "Bun executable not found: $bun"
+  throw "Bun $requiredBun executable not found: $bun. Install the exact official release there or pass -BuildBun; no global Bun fallback is used."
 }
+$bun = (Resolve-Path -LiteralPath $bun).Path
 
 $actualBun = (& $bun --version).Trim()
 if ($LASTEXITCODE -ne 0) {
@@ -314,12 +315,16 @@ $previousCompileRelease = $env:BUN_COMPILE_RELEASE
 $previousCompileExecutable = $env:BUN_COMPILE_EXECUTABLE
 $previousCompileTarget = $env:BUN_COMPILE_EXECUTABLE_TARGET
 $previousCompileSHA256 = $env:BUN_COMPILE_EXECUTABLE_SHA256
+$previousPath = $env:PATH
+$previousBeBun = $env:BUN_BE_BUN
 
 $compileTarget = if ($Baseline) { "opencode2-windows-x64-baseline" } else { "opencode2-windows-x64" }
 $compileRuntimeInfo = $null
 $pushedLocation = $false
 $sourceBefore = $null
 try {
+  $env:PATH = "$(Split-Path -Parent $bun)$([IO.Path]::PathSeparator)$previousPath"
+  Remove-Item -LiteralPath "Env:BUN_BE_BUN" -ErrorAction SilentlyContinue
   Push-Location $repoRoot
   $pushedLocation = $true
   $sourceBefore = Get-GitSourceState -Repository $repoRoot -Git "git"
@@ -330,11 +335,7 @@ try {
 
   switch ($CompileRuntime) {
     "PinnedCanary" {
-      $compileRuntimeInfo = Get-PinnedBunRuntime -IsBaseline ([bool] $Baseline) -CacheRoot $CompileRuntimeCache
-      Remove-Item -LiteralPath "Env:BUN_COMPILE_RELEASE" -ErrorAction SilentlyContinue
-      $env:BUN_COMPILE_EXECUTABLE = $compileRuntimeInfo.Path
-      $env:BUN_COMPILE_EXECUTABLE_TARGET = $compileTarget
-      $env:BUN_COMPILE_EXECUTABLE_SHA256 = $compileRuntimeInfo.SHA256
+      throw "PinnedCanary is 1.4.0-canary.1+aec33f581 and cannot run Bun $requiredBun bytecode. Use -CompileRuntime Current; bytecode requires the compiler's exact version and revision."
     }
     "Current" {
       Remove-Item -LiteralPath "Env:BUN_COMPILE_RELEASE" -ErrorAction SilentlyContinue
@@ -353,7 +354,7 @@ try {
 
   if ($DryRun) {
     if ($CompileRuntime -eq "MovingCanary") {
-      throw "MovingCanary cannot be identity-checked without compiling; use PinnedCanary or Current"
+      throw "MovingCanary cannot be identity-checked in DryRun; use Current. A build accepts it only when its version and revision match the bytecode compiler."
     }
     $sourceAfter = Get-GitSourceState -Repository $repoRoot -Git "git"
     if ($sourceBefore.Commit -ne $sourceAfter.Commit -or $sourceBefore.Porcelain -cne $sourceAfter.Porcelain) {
@@ -365,6 +366,7 @@ try {
       SourceCommit = $sourceBefore.Commit
       SourceDirty = $sourceBefore.Dirty
       BuildBunVersion = $actualBun
+      Bytecode = $true
       CompileTarget = $compileTarget
       CompileRuntimeMode = $CompileRuntime
       CompileRuntimeVersion = $compileRuntimeInfo.Version
@@ -416,6 +418,17 @@ try {
   }
 
   $expectedVersion = "opencode2 v$version"
+  try {
+    $env:BUN_BE_BUN = "1"
+    $embeddedRuntime = Get-BunRuntimeInfo -Path $builtExe -ExpectedVersion $compileRuntimeInfo.Version -ExpectedRevision $compileRuntimeInfo.Revision
+    $compilerRuntime = Get-BunRuntimeInfo -Path $bun
+    if ($embeddedRuntime.Version -ne $compilerRuntime.Version -or $embeddedRuntime.Revision -ne $compilerRuntime.Revision) {
+      throw "Embedded Bun runtime does not match the bytecode compiler: actual=$($embeddedRuntime.Revision) expected=$($compilerRuntime.Revision)"
+    }
+  }
+  finally {
+    Remove-Item -LiteralPath "Env:BUN_BE_BUN" -ErrorAction SilentlyContinue
+  }
   $builtVersion = ((& $builtExe --version) | Out-String).Trim()
   if ($LASTEXITCODE -ne 0 -or $builtVersion -ne $expectedVersion) {
     throw "Build version mismatch: actual=$builtVersion expected=$expectedVersion"
@@ -467,6 +480,9 @@ try {
     SourceDirty = $sourceBefore.Dirty
     SourceStatus = @($sourceBefore.Lines)
     BuildBunVersion = $actualBun
+    Bytecode = $true
+    EmbeddedBunVersion = $embeddedRuntime.Version
+    EmbeddedBunRevision = $embeddedRuntime.Revision
     CompileRuntimeMode = $CompileRuntime
     CompileRuntimeVersion = $compileRuntimeInfo.Version
     CompileRuntimeRevision = $compileRuntimeInfo.Revision
@@ -491,6 +507,9 @@ try {
   [pscustomobject]@{
     Version = $version
     Bun = $actualBun
+    Bytecode = $true
+    EmbeddedBunVersion = $embeddedRuntime.Version
+    EmbeddedBunRevision = $embeddedRuntime.Revision
     CompileRuntimeMode = $CompileRuntime
     CompileRuntimeVersion = $compileRuntimeInfo.Version
     CompileRuntimeRevision = $compileRuntimeInfo.Revision
@@ -510,6 +529,8 @@ try {
   } | Format-List
 }
 finally {
+  Restore-EnvironmentVariable -Name "PATH" -Value $previousPath
+  Restore-EnvironmentVariable -Name "BUN_BE_BUN" -Value $previousBeBun
   Restore-EnvironmentVariable -Name "OPENCODE_CHANNEL" -Value $previousChannel
   Restore-EnvironmentVariable -Name "OPENCODE_VERSION" -Value $previousVersion
   Restore-EnvironmentVariable -Name "BUN_COMPILE_RELEASE" -Value $previousCompileRelease
