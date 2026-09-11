@@ -26,11 +26,16 @@ may carry their own notices and license terms. Their inclusion does not alter
 those terms.
 
 In addition to periodic sanitized source snapshots, this repository currently
-publishes the manually audited prerelease `v1.18.4-zhcn.1` through the fork's
-GitHub Releases page. It contains six native CLI archives; the Windows and
+publishes the manually audited prerelease
+[v1.18.4-zhcn.2](https://github.com/521ox/opencode2-zh-CN/releases/tag/v1.18.4-zhcn.2)
+through the fork's GitHub Releases page. It contains six native CLI archives
+built from `946cf3501b8c8c545735ba98366b5bf863ffae30` with Bun 1.4.2,
+bytecode enabled, and the full embedded WebUI; the Windows and
 macOS assets are unsigned, and the application updater is disabled. Release
 archives, `SHA256SUMS`, the manifest, and platform sidecars belong to that
 specific release and must not be inferred from source-snapshot history.
+Later documentation commits do not change that source SHA or those assets.
+Historical `v1.18.4-zhcn.1` assets remain unchanged.
 
 A locally built or third-party binary must not be represented as an official
 OpenCode release, an endorsed upstream build, or an asset published by this

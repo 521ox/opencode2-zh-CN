@@ -38,11 +38,16 @@ not claim that every upstream change in the reviewed range was integrated.
   requires `--linker hoisted`). Exports default to the ignored repository-local
   `dist/windows-x64`. See [CONTRIBUTING.md](CONTRIBUTING.md) for build steps.
   Historical canary build modes are not a current product contract.
-- Current source and published binaries are separate scopes. The existing
-  `v1.18.4-zhcn.1` six-platform archives remain built with Bun 1.3.14; this
-  source-only Bun 1.4.2 update does not replace them or publish a new Release.
-  Its validation is limited to Windows local tests, builds, isolated service
-  checks, and user manual use, not six-platform Bun 1.4.2 support evidence.
+- Current source and published binaries are separate scopes. The current
+  `v1.18.4-zhcn.2` six-platform prerelease is built from
+  `946cf3501b8c8c545735ba98366b5bf863ffae30` with Bun 1.4.2, bytecode enabled,
+  and the full embedded WebUI. All six native build/runtime/service gates and
+  the final publication job passed, followed by verification of all 14 downloaded
+  assets. This is not a broad stability guarantee. Later `main` documentation
+  commits do not change the release's source SHA or bytes. Historical `.1`
+  archives remain built with Bun 1.3.14 and are not replaced. Windows/macOS
+  assets remain unsigned, with no installer, notarization, or application
+  auto-updater. See [the release procedure](docs/releasing.md).
 
 ## Complete Provider, Protocol, and Operation Whitelist
 

@@ -7,7 +7,7 @@
 > [!IMPORTANT]
 > 本项目与 anomalyco、OpenCode 上游维护者及 OpenAI 均无隶属、授权、赞助或背书关系。它保留上游版权与 MIT License，是独立维护的社区 fork。
 
-**快速入口：** [下载当前预发行版](https://github.com/521ox/opencode2-zh-CN/releases/tag/v1.18.4-zhcn.1) · [选择 provider 路线](docs/provider-compaction.md) · [恢复 Session](docs/session-history.md) · [Agent 接手](docs/agent-takeover.md) · [定制边界](CUSTOMIZATIONS.md) · [安全报告](SECURITY.md)
+**快速入口：** [下载当前预发行版](https://github.com/521ox/opencode2-zh-CN/releases/tag/v1.18.4-zhcn.2) · [选择 provider 路线](docs/provider-compaction.md) · [恢复 Session](docs/session-history.md) · [Agent 接手](docs/agent-takeover.md) · [定制边界](CUSTOMIZATIONS.md) · [安全报告](SECURITY.md)
 
 ## 目录
 
@@ -53,7 +53,7 @@ OpenCode2 zh-CN 因此选择了一条明确路线：
 
 ## 下载与 Windows 三步开始
 
-当前公开二进制版本是 **[`v1.18.4-zhcn.1`](https://github.com/521ox/opencode2-zh-CN/releases/tag/v1.18.4-zhcn.1)**：一个预发行版，包含 Windows x64/arm64、Linux glibc x64/arm64、macOS x64/arm64 共六个原生 CLI archive。这些已发布资产仍使用 **Bun 1.3.14**；当前源码已更新至 **Bun 1.4.2**，本次不发布新的二进制 Release。
+当前公开二进制版本是 **[`v1.18.4-zhcn.2`](https://github.com/521ox/opencode2-zh-CN/releases/tag/v1.18.4-zhcn.2)**：一个预发行版，包含 Windows x64/arm64、Linux glibc x64/arm64、macOS x64/arm64 共六个原生 CLI archive，均使用 **Bun 1.4.2**、启用 bytecode 并内嵌完整 WebUI。六个平台的原生构建、版本/运行时检查及隔离服务 smoke 均已通过；这不是广泛稳定性保证。
 
 ### 1. 下载与你机器匹配的 archive
 
@@ -82,16 +82,28 @@ ARM64 用户把文件名换成 `opencode2-windows-arm64.zip`。确认两处 SHA-
 ### 3. 检查版本并启动
 
 ```powershell
-Expand-Archive $archive.FullName -DestinationPath ".\opencode2-v1.18.4-zhcn.1"
-$exe = ".\opencode2-v1.18.4-zhcn.1\cli-windows-x64\bin\opencode2.exe"
+Expand-Archive $archive.FullName -DestinationPath ".\opencode2-v1.18.4-zhcn.2"
+$exe = ".\opencode2-v1.18.4-zhcn.2\cli-windows-x64\bin\opencode2.exe"
 & $exe --version
 & $exe
 ```
 
 Windows ARM64 用户把路径中的 `cli-windows-x64` 换成 `cli-windows-arm64`。版本必须精确输出
-`opencode2 v1.18.4-zhcn.1`。如果目标路径不存在，请停止并回到 Release 资产说明核对平台，不要搜索并随意执行其它 `.exe`。
+`opencode2 v1.18.4-zhcn.2`。如果目标路径不存在，请停止并回到 Release 资产说明核对平台，不要搜索并随意执行其它 `.exe`。
 
-Linux/macOS 用户同样应先以 `sha256sum -c SHA256SUMS` 或 `shasum -a 256` 核对所下载 archive，再检查 `--version`。
+Linux 使用 `sha256sum`；macOS 默认使用 `shasum -a 256`。在 archive 与同一 Release 的 `SHA256SUMS` 所在目录执行，逐字比较所下载 archive 的哈希与清单中该文件的准确对应行（ARM64 按上表替换文件名）：
+
+```bash
+# Linux x64
+sha256sum opencode2-linux-x64.tar.gz
+grep -F '  opencode2-linux-x64.tar.gz' SHA256SUMS
+
+# macOS Apple Silicon
+shasum -a 256 opencode2-darwin-arm64.tar.gz
+grep -F '  opencode2-darwin-arm64.tar.gz' SHA256SUMS
+```
+
+只有哈希完全一致才继续解压，再检查 `--version`；缺少对应行或哈希不一致时停止。
 
 例如 Linux x64：
 
@@ -319,16 +331,16 @@ Rules directory 只是运行时提供的优先位置提示：它不会自动创�
 ## 发布、校验与更新
 
 - **当前公开源码**：`main` 会继续接收清理后的 source snapshot 和公开文档提交，不能用 README 中写死的 SHA 代替实时分支状态。
-- **当前二进制**：`v1.18.4-zhcn.1` 是已发布并审计的 prerelease，包含六个原生 CLI archives；该 Release 精确绑定源码 commit `6718a6fef1e80d79e028d0d9fe95c28216418637`。
+- **当前二进制**：`v1.18.4-zhcn.2` 是已发布并完成下载核验的 prerelease，包含六个原生 CLI archives；该 Release 精确绑定源码 commit `946cf3501b8c8c545735ba98366b5bf863ffae30`，channel 为 `zh-cn`。
 - **当前源码运行时**：Bun **1.4.2**，CLI 默认启用 `bytecode: true`。Bytecode 通常以更大的 EXE 换取较少的启动解析成本，不代表固定的速度或内存收益。
-- **验证范围**：本次 Bun 1.4.2 源码更新已有 Windows 本地测试、构建、隔离服务检查及用户手动试用通过；这不是六平台 Bun 1.4.2 验证或广泛稳定性承诺。
-- **已发布资产运行时**：`v1.18.4-zhcn.1` 的六平台 archives 仍为 Bun **1.3.14**，不因源码更新而改变。
-- **资产证据**：Release 中的 `SHA256SUMS`、`release-manifest.json` 和平台 sidecar 绑定源码 commit、版本、channel、Bun revision、runner/target、archive/executable 大小和 SHA-256。
+- **验证范围**：[GitHub Actions 发布运行](https://github.com/521ox/opencode2-zh-CN/actions/runs/34554678273)的六个原生构建 job 与最终汇总发布 job 全部成功，覆盖版本、help、内嵌 Bun revision、完整产物及隔离服务生命周期检查。发布后的 14 个上传资产已实际下载，核对 GitHub digest、清单与哈希，并检查 archive 内可执行文件、包信息及 PE/ELF/Mach-O 平台架构；不构成广泛稳定性承诺。
+- **已发布资产运行时**：`.2` 的六平台 archives 均为 Bun **1.4.2**（revision `744846f844374847c902b5e7fd59b4342a51ef99`），`bytecode: true`，内嵌完整 WebUI。历史 `v1.18.4-zhcn.1` 仍绑定源码 `6718a6fef1e80d79e028d0d9fe95c28216418637` 和 Bun **1.3.14**，保留作回退选项，原资产未替换。
+- **资产证据**：六个 archive、六个 schema-v2 sidecar、`release-manifest.json` 和 `SHA256SUMS` 共 14 个上传资产（GitHub 自动提供的源码包另计），绑定源码 commit、版本、channel、Bun revision、bytecode、runner/target、archive/executable 大小和 SHA-256。
 - **签名与稳定性**：Windows/macOS 未签名；没有 installer、notarization、stable 或 reproducible-build 承诺。
 - **更新方式**：应用 updater 禁用。用户应返回本 fork Releases，重新下载并校验；上游 updater、installer 或 npm CLI 不是本 fork 更新来源。
 - **上游状态**：已选择性审查到上游 [`0808ebc3`](https://github.com/anomalyco/opencode/commit/0808ebc3c52286f5a3a602f82f069ae597f86469)。它不是本 fork 的直接祖先，“审查到”也不表示范围内全部改动已采用。
 
-周期性 source snapshot 与二进制 Release 是不同发布层：源码提交本身不证明所有构建检查通过；已发布 archive 的证据应以对应 Release 的清单和 sidecar 为准。第三方 rebuild 不在本仓库发布资产支持承诺内。
+周期性 source snapshot 与二进制 Release 是不同发布层：后续 `main` 文档提交不会改变版本化 Release 的 tag、产物源码 SHA 或已发布字节；源码提交本身不证明所有构建检查通过。已发布 archive 的证据应以对应 Release 的清单和 sidecar 为准，第三方 rebuild 不在本仓库发布资产支持承诺内。维护者流程见 [发布指南](docs/releasing.md)。
 
 ## 从源码运行与贡献
 
@@ -383,4 +395,4 @@ OpenCode2 可在用户授权下读写文件、执行进程并访问网络；它�
 
 ## English summary
 
-OpenCode2 zh-CN is an independent, community-maintained OpenCode V2 fork for Chinese and Windows users. It provides a Simplified Chinese-first interface, explicit provider/protocol capability boundaries, route-specific compaction behavior, long-Session and direct-child continuation, controlled local-tool execution, and optional local history analysis. Current source requires **Bun 1.4.2**, with CLI bytecode enabled by default; validation for this update is limited to Windows, not all six platforms. This is a source-only update, not a new binary Release. The current public prerelease remains **`v1.18.4-zhcn.1`**, with six native CLI archives built with Bun 1.3.14; Windows and macOS assets are unsigned, and the application updater is disabled. Updates come only from this fork's Releases page. The fork is selectively reviewed through upstream `0808ebc3`, which is not a direct ancestor and does not imply complete adoption. This project is not affiliated with or endorsed by anomalyco, upstream OpenCode, or OpenAI.
+OpenCode2 zh-CN is an independent, community-maintained OpenCode V2 fork for Chinese and Windows users. It provides a Simplified Chinese-first interface, explicit provider/protocol capability boundaries, route-specific compaction behavior, long-Session and direct-child continuation, controlled local-tool execution, and optional local history analysis. Current source requires **Bun 1.4.2**, with CLI bytecode enabled by default. The current public prerelease is **`v1.18.4-zhcn.2`**, with six native CLI archives built from `946cf3501b8c8c545735ba98366b5bf863ffae30` using Bun 1.4.2, bytecode, and the full embedded WebUI. All six native build/runtime/service gates and the publication job passed; all 14 uploaded assets passed post-download verification. This is not a broad stability guarantee. Windows and macOS assets are unsigned, and the application updater is disabled. Updates come only from this fork's Releases page; historical `.1` assets remain unchanged. The fork is selectively reviewed through upstream `0808ebc3`, which is not a direct ancestor and does not imply complete adoption. This project is not affiliated with or endorsed by anomalyco, upstream OpenCode, or OpenAI.

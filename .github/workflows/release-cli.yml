@@ -234,8 +234,10 @@ jobs:
           macOS x64/arm64. Windows SmartScreen and macOS Gatekeeper may warn because these binaries
           are not code-signed or notarized.
 
-          Verify a download against \`SHA256SUMS\` before running it. On Linux/macOS use
-          \`sha256sum -c SHA256SUMS --ignore-missing\`; on Windows compare
+          Verify a download against \`SHA256SUMS\` before running it. On Linux use
+          \`sha256sum -c SHA256SUMS --ignore-missing\`. On macOS use
+          \`shasum -a 256 <archive>\` and compare the digest with the matching line in
+          \`SHA256SUMS\`; on Windows compare
           \`Get-FileHash -Algorithm SHA256 <archive>\` with the matching line. The JSON manifest and
           per-platform schema-v2 sidecars bind each archive and executable to this source commit,
           Bun runtime, bytecode setting, native runner, target, byte length, and SHA-256 digest.

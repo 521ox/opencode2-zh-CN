@@ -80,19 +80,23 @@ bun --cwd packages/ai test test/<relevant-test>.test.ts
 Do not add a second runtime or canary lane to documentation or automation
 without an accepted product change. Public source updates are periodic
 sanitized snapshots. The repository also currently publishes the separately
-audited prerelease `v1.18.4-zhcn.1` with six native CLI archives built with
-Bun 1.3.14; these assets are unchanged by the Bun 1.4.2 source update. Windows
-and macOS assets are unsigned and the application updater is disabled.
-Validation for this source update covers local Windows tests, builds, isolated
-service checks, and user manual use, not six-platform Bun 1.4.2 validation.
-No new binary Release is part of this update.
+audited prerelease [v1.18.4-zhcn.2](https://github.com/521ox/opencode2-zh-CN/releases/tag/v1.18.4-zhcn.2)
+with six native CLI archives built with Bun 1.4.2, bytecode, and the full embedded
+WebUI from `946cf3501b8c8c545735ba98366b5bf863ffae30`. All six native build,
+runtime, and isolated service gates and the final publication job passed;
+all 14 uploaded assets passed post-download verification. This is not a broad
+stability guarantee. Windows and macOS assets are unsigned and the application
+updater is disabled. Historical `.1` assets remain built with Bun 1.3.14 and
+are preserved as a rollback option.
 
-The manually dispatched workflow and validator now target `v1.18.4-zhcn.2`
-with Bun 1.4.2 and bytecode enabled. This preparation does not change the
-already-published `.1` assets. The workflow builds the six native targets from
+The manually dispatched workflow and validator selected `v1.18.4-zhcn.2`
+with Bun 1.4.2 and bytecode enabled for the completed release. Later `main`
+documentation commits do not change that release's source SHA or assets.
+The workflow builds the six native targets from
 one source commit, checks embedded runtime identity and service lifecycle,
 then publishes only after all six archives and schema-v2 sidecars agree.
-An existing tag or Release is never overwritten. Future binary releases still
+An existing tag or Release is never overwritten; rerunning the published `.2`
+version is refused. Future binary releases still
 require an explicitly selected version, platform evidence, and owner approval.
 See [the release procedure](docs/releasing.md) for the manual dispatch, six-way
 gates, and post-publication checks.

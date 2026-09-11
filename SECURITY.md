@@ -53,8 +53,14 @@ review them before sharing, and never commit generated snapshots.
 
 Security reports may target the current public `main` branch or assets actually
 published by this repository in its current GitHub Release. The current
-published binary scope is the manually audited prerelease `v1.18.4-zhcn.1` and
-its six native CLI archives. Windows and macOS assets are unsigned, and the
+published binary scope is the manually audited prerelease
+[v1.18.4-zhcn.2](https://github.com/521ox/opencode2-zh-CN/releases/tag/v1.18.4-zhcn.2)
+and its six native CLI archives built from
+`946cf3501b8c8c545735ba98366b5bf863ffae30` using Bun 1.4.2 with bytecode and
+the full embedded WebUI. Native build/runtime/service gates passed on all six
+platforms, and all 14 uploaded assets passed post-download verification; those
+checks do not establish a general security or stability guarantee.
+Windows and macOS assets are unsigned, with no installer or notarization, and the
 application updater is disabled; these boundaries must not be interpreted as a
 signature, stable-release, or automatic-update guarantee.
 
